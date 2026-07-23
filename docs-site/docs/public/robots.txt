@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://xiaolong-taiwan.github.io/XPayincus/sitemap.xml

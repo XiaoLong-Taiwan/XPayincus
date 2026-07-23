@@ -1,0 +1,78 @@
+import { strict as assert } from 'assert'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+import { fileURLToPath } from 'url'
+
+const root = resolve(fileURLToPath(new URL('../..', import.meta.url)))
+const ordersRoute = readFileSync(resolve(root, 'server/src/routes/orders.ts'), 'utf8')
+const app = readFileSync(resolve(root, 'server/src/app.ts'), 'utf8')
+const userRouter = readFileSync(resolve(root, 'client/src/router/user.ts'), 'utf8')
+const adminRouter = readFileSync(resolve(root, 'client/src/router/admin.ts'), 'utf8')
+const userNav = readFileSync(resolve(root, 'client/src/config/side-nav-items-user.ts'), 'utf8')
+const adminNav = readFileSync(resolve(root, 'client/src/config/side-nav-items-admin.ts'), 'utf8')
+const userApi = readFileSync(resolve(root, 'client/src/api/index.ts'), 'utf8')
+const adminApi = readFileSync(resolve(root, 'client/src/api/admin.ts'), 'utf8')
+
+assert.ok(app.includes("import orderRoutes from './routes/orders.js'"), 'app must import order routes')
+assert.ok(app.includes('await fastify.register(orderRoutes)'), 'app must register order routes')
+
+assert.ok(ordersRoute.includes("'/api/orders'"), 'user order list API route missing')
+assert.ok(ordersRoute.includes("'/api/orders/:type/:id'"), 'user order detail API route missing')
+assert.ok(ordersRoute.includes("'/api/admin/orders'"), 'admin order list API route missing')
+assert.ok(ordersRoute.includes("'/api/admin/orders/:type/:id'"), 'admin order detail API route missing')
+assert.ok(ordersRoute.includes('preHandler: [fastify.authenticateUser]'), 'user order routes must require user auth')
+assert.ok(ordersRoute.includes('preHandler: [fastify.authenticateAdmin]'), 'admin order routes must require admin auth')
+
+assert.ok(ordersRoute.includes('prisma.rechargeRecord.findMany'), 'orders must aggregate recharge records')
+assert.ok(ordersRoute.includes('prisma.instanceBillingRecord.findMany'), 'orders must aggregate instance billing records')
+assert.ok(ordersRoute.includes('where: { id, userId: request.user.id }'), 'user detail routes must scope records by owner')
+assert.ok(ordersRoute.includes('parsePageSize') && ordersRoute.includes('MAX_PAGE_SIZE = 100'), 'order list must clamp page size')
+assert.ok(!ordersRoute.includes('callbackData'), 'order API must not expose raw payment callback payloads')
+assert.ok(!ordersRoute.includes('providerConfigSnapshot'), 'order API must not expose provider config snapshots')
+
+assert.ok(userRouter.includes("path: '/orders'"), 'user router must expose /orders')
+assert.ok(userRouter.includes("component: () => import('@/views/OrdersView.vue')"), 'user router must lazy-load order page')
+assert.ok(adminRouter.includes("path: '/admin/orders'"), 'admin router must expose /admin/orders')
+assert.ok(adminRouter.includes("component: () => import('@/views/admin/OrdersView.vue')"), 'admin router must lazy-load admin order page')
+
+assert.ok(userNav.includes("path: '/orders'"), 'user sidebar must link to orders')
+assert.ok(adminNav.includes("path: '/admin/orders'"), 'admin sidebar must link to orders')
+assert.ok(userApi.includes("http.get('/orders'"), 'user API wrapper must include order list')
+assert.ok(userApi.includes("http.get(`/orders/${sourceType}/${sourceId}`)"), 'user API wrapper must include order detail')
+assert.ok(adminApi.includes("http.get('/admin/orders'"), 'admin API wrapper must include order list')
+assert.ok(adminApi.includes("http.get(`/admin/orders/${sourceType}/${sourceId}`)"), 'admin API wrapper must include order detail')
+assert.ok(adminApi.includes("http.post(`/admin/recharge/orders/${orderNo}/complete`, { tradeNo, actualAmount })"), 'admin API wrapper must reuse recharge manual-complete route with actual amount')
+assert.ok(adminApi.includes("http.post(`/admin/recharge/orders/${orderNo}/fail`, { reason })"), 'admin API wrapper must reuse recharge manual-fail route')
+assert.ok(adminApi.includes("http.post(`/balance/admin/${userId}/adjustment-requests`, data)"), 'admin API wrapper must create balance adjustment approval requests')
+assert.ok(adminApi.includes("http.post(`/balance/admin/adjustment-requests/${requestId}/approve`, { remark })"), 'admin API wrapper must approve balance adjustment requests')
+assert.ok(adminApi.includes("http.post(`/balance/admin/adjustment-requests/${requestId}/reject`, { remark })"), 'admin API wrapper must reject balance adjustment requests')
+
+const adminOrderView = readFileSync(resolve(root, 'client/src/views/admin/OrdersView.vue'), 'utf8')
+assert.ok(adminOrderView.includes('function completeRecharge()'), 'admin order center must expose manual recharge completion action')
+assert.ok(adminOrderView.includes('function failRecharge()'), 'admin order center must expose manual recharge failure action')
+assert.ok(adminOrderView.includes('function adjustBalance()'), 'admin order center must expose manual adjustment action')
+assert.ok(adminOrderView.includes('调账原因') && adminOrderView.includes('失败原因'), 'manual order actions must require visible reasons')
+assert.ok(adminOrderView.includes('api.admin.completeRechargeOrder') && adminOrderView.includes('api.admin.failRechargeOrder'), 'recharge order actions must reuse existing audited APIs')
+assert.ok(adminOrderView.includes('api.admin.createBalanceAdjustmentRequest'), 'order balance adjustment must create approval request instead of direct mutation')
+assert.ok(adminOrderView.includes('api.admin.approveBalanceAdjustmentRequest') && adminOrderView.includes('api.admin.rejectBalanceAdjustmentRequest'), 'order center must expose approval and rejection actions')
+assert.ok(!adminOrderView.includes('api.admin.adjustUserBalance'), 'order center must not directly mutate user balance from order detail')
+assert.ok(adminOrderView.includes('提交调账审批') && adminOrderView.includes('通过并执行'), 'order center must use approval-oriented UI wording')
+assert.ok(
+  adminOrderView.match(/class="space-y-3 p-4 lg:hidden"/g)?.length === 2 &&
+    adminOrderView.match(/class="hidden overflow-hidden lg:block"/g)?.length === 2 &&
+    adminOrderView.includes('table class="w-full table-fixed divide-y divide-themed"') &&
+    adminOrderView.includes('table class="w-full table-fixed divide-y divide-themed"') &&
+    !adminOrderView.includes('v-else class="overflow-x-auto"') &&
+    !adminOrderView.includes('table class="min-w-full divide-y divide-themed"'),
+  'admin order center must render mobile cards and fixed desktop tables instead of horizontal table scrolling'
+)
+assert.ok(
+  adminOrderView.includes('@click="openDetail(order)"') &&
+    adminOrderView.includes('@click="rejectAdjustmentRequest(request)"') &&
+    adminOrderView.includes('@click="approveAdjustmentRequest(request)"') &&
+    adminOrderView.includes('@click="goPage(page - 1)"') &&
+    adminOrderView.includes('@click="goRequestPage(requestPage - 1)"'),
+  'responsive admin order center must preserve detail, approval, and pagination actions'
+)
+
+console.log('order center guards passed')

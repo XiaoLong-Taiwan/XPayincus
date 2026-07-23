@@ -1,0 +1,153 @@
+<script setup lang="ts">
+import { computed, onErrorCaptured, onMounted, onUnmounted, watchEffect } from 'vue'
+import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
+import AppLayout from '@/components/layout/AppLayout.vue'
+import RouteErrorBoundary from '@/components/RouteErrorBoundary.vue'
+import ToastContainer from '@/components/ToastContainer.vue'
+import { buildApiUrl } from '@/utils/api-url'
+import { isStaleAssetLoadError, scheduleStaleAssetReload } from '@/utils/staleAssetRecovery'
+
+const route = useRoute()
+const authStore = useAuthStore()
+const configStore = useConfigStore()
+const { t, locale } = useI18n()
+
+const adminLoginPath = '/admin/login'
+const noLayoutRoutes: string[] = ['login']
+const showLayout = computed<boolean>(() => {
+  return authStore.isAuthenticated && !noLayoutRoutes.includes(route.name as string)
+})
+
+watchEffect(() => {
+  locale.value
+  configStore.brandName
+  configStore.brandSubtitle
+
+  const titleKey = route.meta.titleKey
+  const fallbackTitle = route.meta.title
+  const translatedTitle = titleKey ? t(titleKey) : ''
+  const pageTitle = translatedTitle && translatedTitle !== titleKey ? translatedTitle : fallbackTitle
+
+  const brandName = configStore.brandName?.trim() || 'XPayincus'
+  document.title = pageTitle ? `${brandName} - ${pageTitle}` : `${brandName} - ${t('common.adminPanel')}`
+})
+
+let sessionCheckTimer: number | null = null
+let tokenRefreshTimer: number | null = null
+let lastVisibilityChange = Date.now()
+
+async function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    const now = Date.now()
+    if (now - lastVisibilityChange > 2 * 60 * 1000 && authStore.isAuthenticated) {
+      lastVisibilityChange = now
+      try {
+        const isValid = await authStore.checkSession()
+        if (!isValid && !window.location.pathname.startsWith(adminLoginPath)) {
+          window.location.href = adminLoginPath
+        }
+      } catch {
+        console.warn('会话检查失败，可能是网络问题')
+      }
+    }
+  } else {
+    lastVisibilityChange = Date.now()
+  }
+}
+
+onErrorCaptured((err, _instance, info) => {
+  console.error('组件错误捕获:', err, info)
+  if (isStaleAssetLoadError(err)) {
+    scheduleStaleAssetReload('admin-app-error-captured', err)
+    return false
+  }
+  return true
+})
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+
+  tokenRefreshTimer = window.setInterval(async () => {
+    if (authStore.isAuthenticated) {
+      try {
+        // 定时刷新加 15 秒超时兜底：/auth/refresh 挂起时不会长期占用连接或悬挂 Promise
+        const refreshController = new AbortController()
+        const refreshTimeoutId = setTimeout(() => refreshController.abort(), 15_000)
+        let response: Response
+        try {
+          response = await fetch(buildApiUrl('/auth/refresh'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            signal: refreshController.signal
+          })
+        } finally {
+          clearTimeout(refreshTimeoutId)
+        }
+        if (response.ok) {
+          const data = await response.json()
+          if (data.token) {
+            localStorage.setItem('token', data.token)
+            authStore.syncToken()
+          }
+        }
+      } catch {
+        console.warn('定时 token 刷新失败')
+      }
+    }
+  }, 6 * 24 * 60 * 60 * 1000)
+
+  sessionCheckTimer = window.setInterval(async () => {
+    if (authStore.isAuthenticated && document.visibilityState === 'visible') {
+      try {
+        const isValid = await authStore.checkSession()
+        if (!isValid && !window.location.pathname.startsWith(adminLoginPath)) {
+          window.location.href = adminLoginPath
+        }
+      } catch {
+        console.warn('定时会话检查失败，等待下次检查')
+      }
+    }
+  }, 60 * 60 * 1000)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  if (sessionCheckTimer !== null) {
+    clearInterval(sessionCheckTimer)
+  }
+  if (tokenRefreshTimer !== null) {
+    clearInterval(tokenRefreshTimer)
+  }
+})
+</script>
+
+<template>
+  <AppLayout v-if="showLayout">
+    <RouteErrorBoundary>
+      <RouterView v-slot="{ Component, route: currentRoute }">
+        <template v-if="Component">
+          <!-- 这里绝不能加 mode="out-in"：它与外层 KeepAlive 组合时，离场动画的 afterLeave 回调
+               不会触发，Transition 会永远停在离场占位符上 —— 新页面从不挂载，表现为整页白屏且无任何
+               报错（刷新才恢复）。用户端 App.vue 的同一处也是不带 mode 的，两端保持一致。 -->
+          <Transition name="kawaii-route">
+            <KeepAlive :exclude="['AdminInstanceCreateView', 'MyHostDetailView', 'PackageFormView']" :max="10">
+              <component :is="Component" :key="currentRoute.name" />
+            </KeepAlive>
+          </Transition>
+        </template>
+      </RouterView>
+    </RouteErrorBoundary>
+  </AppLayout>
+  <RouterView v-else v-slot="{ Component, route: currentRoute }">
+    <template v-if="Component">
+      <Transition name="kawaii-route" mode="out-in">
+        <component :is="Component" :key="currentRoute.name" />
+      </Transition>
+    </template>
+  </RouterView>
+  <ToastContainer />
+</template>

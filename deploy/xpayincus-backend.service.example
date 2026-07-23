@@ -1,0 +1,41 @@
+[Unit]
+Description=XPayincus backend API
+Documentation=https://github.com/XiaoLong-Taiwan/XPayincus
+After=network.target postgresql.service redis-server.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=xpayincus
+Group=xpayincus
+WorkingDirectory=/opt/xpayincus/current
+EnvironmentFile=/opt/xpayincus/.env
+Environment=HOME=/opt/xpayincus
+Environment=NPM_CONFIG_CACHE=/opt/xpayincus/.npm
+Environment=XDG_CACHE_HOME=/opt/xpayincus/.cache
+Environment=PATH=/usr/local/libexec/xpayincus:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ExecStartPre=/usr/bin/bash -lc 'cd /opt/xpayincus/current/server && pnpm exec prisma migrate deploy'
+ExecStart=/usr/bin/node /opt/xpayincus/current/server/dist/app.js
+
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Online updates start root-owned systemd oneshot units through a restricted
+# sudoers rule. Keep this false or sudo cannot elevate from the backend service.
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/xpayincus /opt/xpayincus/current /opt/xpayincus/releases /opt/xpayincus/server/certs /opt/xpayincus/.npm /opt/xpayincus/.cache /opt/xpayincus/.git /opt/xpayincus/update-logs
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xpayincus-backend
+
+[Install]
+WantedBy=multi-user.target

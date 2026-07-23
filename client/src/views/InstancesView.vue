@@ -1,0 +1,2918 @@
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, onActivated, onDeactivated, watch, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import api from '@/api'
+import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
+import { useThemeStore } from '@/stores/theme'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
+import { useToast } from '@/stores/toast'
+import { getLocalizedCountryName } from '@/utils/countryDisplay'
+import { formatMemory, formatDisk, formatBytes, getStatusInfo } from '@/utils/formatters'
+import { translateError } from '@/utils/errorHandler'
+import type { Instance, UserBalance } from '@/types/api'
+import FlagIcon from '@/components/FlagIcon.vue'
+import DistroIcon from '@/components/icons/DistroIcon.vue'
+import InstanceDisplayIcon from '@/components/InstanceDisplayIcon.vue'
+import InstanceOrderMenu from '@/components/instance/InstanceOrderMenu.vue'
+import { freeSiteCopy, getFreeSiteBillingCycleLabel } from '@/utils/freeSiteFun'
+import { instanceCreatePath, instanceDetailPath, isAdminEntry, transfersPath, walletPath } from '@/utils/app-paths'
+
+// 为 KeepAlive include 匹配定义组件名称（必须在所有 import 之后）
+defineOptions({ name: 'InstancesView' })
+
+type InstanceLayoutMode = 'list' | 'card'
+const INSTANCE_LAYOUT_STORAGE_KEY = 'xpayincus.instances.layout'
+
+interface CustomerBillingApi {
+  billing: {
+    setAutoRenewBatch: (instanceIds: number[], autoRenew: boolean) => Promise<{
+      message: string
+      successCount: number
+      skippedCount: number
+      failedCount: number
+    }>
+    previewBatchRenew: (instanceIds: number[]) => Promise<{ items: typeof batchRenewPreview.value }>
+    getUserBalance: () => Promise<{ balance: UserBalance }>
+    renewInstancesBatch: (instanceIds: number[], months: number) => Promise<{
+      message: string
+      successCount: number
+      skippedCount: number
+      failedCount: number
+    }>
+    getBatchDestroyInfo: (instanceIds: number[]) => Promise<{ items: typeof batchDestroyPreview.value }>
+    destroyInstancesBatch: (instanceIds: number[]) => Promise<{
+      message: string
+      successCount: number
+      skippedCount: number
+      failedCount: number
+    }>
+  }
+}
+
+const customerBillingApi = api as typeof api & CustomerBillingApi
+
+const route = useRoute()
+const router = useRouter()
+const { t, locale } = useI18n()
+const authStore = useAuthStore()
+const configStore = useConfigStore()
+const themeStore = useThemeStore()
+const toast = useToast()
+void configStore.loadPublicConfig()
+
+const instances = ref<Instance[]>([])
+const loading = ref<boolean>(true)
+const listError = ref<string>('')
+const actionLoading = ref<Record<number, string>>({})
+const orderLoading = ref<boolean>(false)
+const recentlyOrderedInstanceId = ref<number | null>(null)
+const batchActionLoading = ref<string>('')
+
+// 搜索和分页
+const search = ref<string>('')
+const page = ref<number>(1)
+const pageSize = ref<number>(30)
+const total = ref<number>(0)
+const totalPages = ref<number>(0)
+const pageSizeOptions = [10, 20, 30, 50, 100]
+const countryFilter = ref<string | null>(null)
+const availableCountries = ref<string[]>([])
+const userSelectedLayout = ref<InstanceLayoutMode | null>(null)
+const isDesktopViewport = ref<boolean>(true)
+
+// 批量选择
+const selectedIds = ref<Set<number>>(new Set())
+
+// 批量续费
+const showBatchRenewModal = ref(false)
+const batchRenewLoading = ref(false)
+const batchRenewSubmitting = ref(false)
+const batchRenewMonths = ref<number>(1)
+const batchRenewBalance = ref<UserBalance>({ balance: 0, frozen: 0, totalRecharge: 0, totalConsume: 0 })
+const batchRenewPreview = ref<Array<{
+  id: number
+  name: string
+  canRenew: boolean
+  autoRenew: boolean
+  reason?: string
+  isHostedInstance: boolean
+  daysUntilExpire: number | null
+  options: Array<{
+    months: number
+    price: number
+    discountedPrice: number
+    expiresAt: string
+  }>
+}>>([])
+
+// 批量销毁
+const showBatchDestroyModal = ref(false)
+const batchDestroyLoading = ref(false)
+const batchDestroySubmitting = ref(false)
+const batchDestroyConfirm = ref('')
+const batchDestroyPreview = ref<Array<{
+  id: number
+  name: string
+  canDestroy: boolean
+  cannotDestroyReason: string
+  isFreeInstance: boolean
+  isFirstTime: boolean
+  feeWaiverEligible: boolean
+  refund: {
+    remainingDays: number
+    remainingValue: number
+    feeRate: number
+    feeAmount: number
+    refundAmount: number
+    destroyCount: number
+    maxRefundable: number
+  }
+  instance: {
+    id: number
+    name: string
+    hostName: string
+    planName: string | null
+  }
+}>>([])
+
+const showResetTrafficModal = ref(false)
+const resetTrafficTarget = ref<Instance | null>(null)
+const resetTrafficSubmitting = ref(false)
+
+// 筛选条件（从 URL 获取）
+const filterUserId = ref<number | null>(null)
+const filterUserName = ref<string>('')
+
+const isAllSelected = computed(() => instances.value.length > 0 && selectedIds.value.size === instances.value.length)
+const isPartialSelected = computed(() => selectedIds.value.size > 0 && selectedIds.value.size < instances.value.length)
+const selectedCount = computed(() => selectedIds.value.size)
+const selectedInstances = computed(() => instances.value.filter(instance => selectedIds.value.has(instance.id)))
+const selectedRunningCount = computed(() => selectedInstances.value.filter(instance => instance.status?.toLowerCase() === 'running').length)
+const selectedStoppedCount = computed(() => selectedInstances.value.filter(instance => instance.status?.toLowerCase() === 'stopped').length)
+const selectedBillingActionIds = computed(() =>
+  selectedInstances.value
+    .filter(instance => !!instance.packagePlanId)
+    .map(instance => instance.id)
+)
+const hasSelectedInstances = computed(() => selectedCount.value > 0)
+const isViewingAnotherUsersInstances = computed(() => (
+  isAdmin.value &&
+  filterUserId.value !== null &&
+  filterUserId.value !== (authStore.user?.id || null)
+))
+const canUseCustomerBillingActions = computed<boolean>(() => !isAdminEntry && !isViewingAnotherUsersInstances.value)
+const countryFilterOptions = computed(() => availableCountries.value.map(code => code.toLowerCase()))
+const instanceLayoutMode = computed<InstanceLayoutMode>(() => (
+  isDesktopViewport.value
+    ? (userSelectedLayout.value || 'card')
+    : 'card'
+))
+const isCardLayout = computed<boolean>(() => instanceLayoutMode.value === 'card')
+
+const batchRenewMonthOptions = computed(() => {
+  const options = new Set<number>()
+  for (const item of batchRenewPreview.value) {
+    if (!item.canRenew) continue
+    for (const option of item.options) {
+      options.add(option.months)
+    }
+  }
+  return Array.from(options).sort((a, b) => a - b)
+})
+
+const batchRenewEligibleItems = computed(() => {
+  return batchRenewPreview.value
+    .map(item => ({
+      ...item,
+      selectedOption: item.options.find(option => option.months === batchRenewMonths.value) || null
+    }))
+    .filter(item => item.selectedOption !== null)
+})
+
+const batchRenewIneligibleItems = computed(() => {
+  return batchRenewPreview.value.filter(item => !item.canRenew || !item.options.some(option => option.months === batchRenewMonths.value))
+})
+
+const batchRenewTotal = computed(() => {
+  return batchRenewEligibleItems.value.reduce((sum, item) => sum + Number(item.selectedOption?.discountedPrice || 0), 0)
+})
+
+const batchRenewInsufficientBalance = computed(() => batchRenewBalance.value.balance < batchRenewTotal.value)
+const batchRenewBalanceAfter = computed(() => batchRenewBalance.value.balance - batchRenewTotal.value)
+const batchRenewCanSubmit = computed(() => (
+  batchRenewEligibleItems.value.length > 0 &&
+  batchRenewMonthOptions.value.length > 0 &&
+  !batchRenewInsufficientBalance.value &&
+  !batchRenewSubmitting.value
+))
+
+const batchDestroyEligibleItems = computed(() => batchDestroyPreview.value.filter(item => item.canDestroy))
+const batchDestroyIneligibleItems = computed(() => batchDestroyPreview.value.filter(item => !item.canDestroy))
+const batchDestroyTotalRefund = computed(() => batchDestroyEligibleItems.value.reduce((sum, item) => sum + item.refund.refundAmount, 0))
+const batchDestroyTotalFee = computed(() => batchDestroyEligibleItems.value.reduce((sum, item) => sum + item.refund.feeAmount, 0))
+const batchDestroyCanSubmit = computed(() => batchDestroyEligibleItems.value.length > 0 && batchDestroyConfirm.value === 'DESTROY' && !batchDestroySubmitting.value)
+const isInstanceOrderView = computed(() => search.value.trim() === '' && countryFilter.value === null)
+const canReorderInstances = computed(() => (
+  isInstanceOrderView.value &&
+  (
+    !isAdmin.value ||
+    filterUserId.value === (authStore.user?.id || null)
+  )
+))
+
+let refreshInterval: ReturnType<typeof setInterval> | null = null
+let orderFeedbackTimer: ReturnType<typeof setTimeout> | null = null
+
+// 监听搜索变化（防抖）
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+watch(search, () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    page.value = 1
+    loadInstances()
+  }, 300)
+})
+
+// 监听路由参数变化（管理员切换查看不同用户的实例）
+watch(
+  () => route.query.userId,
+  async (newUserId, oldUserId) => {
+    if (newUserId === oldUserId) return
+    
+    // 更新筛选条件
+    if (newUserId) {
+      filterUserId.value = parseInt(newUserId as string)
+      // 获取用户名
+      try {
+        const res = await api.users.get(filterUserId.value)
+        filterUserName.value = (res as { user?: { username?: string } }).user?.username || ''
+      } catch {
+        filterUserName.value = ''
+      }
+    } else {
+      filterUserId.value = null
+      filterUserName.value = ''
+    }
+    
+    // 重置分页并重新加载
+    page.value = 1
+    loading.value = true
+    await loadInstances()
+  },
+  { immediate: false }
+)
+
+// 判断是否为管理员
+const isAdmin = computed<boolean>(() => authStore.user?.role === 'admin')
+
+function updateViewportState(): void {
+  if (typeof window === 'undefined') return
+  isDesktopViewport.value = window.innerWidth >= 1024
+}
+
+function loadInstanceLayoutPreference(): void {
+  if (typeof window === 'undefined') return
+  try {
+    const stored = localStorage.getItem(INSTANCE_LAYOUT_STORAGE_KEY)
+    userSelectedLayout.value = stored === 'list' || stored === 'card' ? stored : null
+  } catch {
+    userSelectedLayout.value = null
+  }
+}
+
+function setInstanceLayoutMode(mode: InstanceLayoutMode): void {
+  userSelectedLayout.value = mode
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(INSTANCE_LAYOUT_STORAGE_KEY, mode)
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function prepareCreatedInstanceRefresh(): boolean {
+  if (!route.query.created) return false
+
+  search.value = ''
+  countryFilter.value = null
+  page.value = 1
+  selectedIds.value = new Set()
+  loading.value = true
+  return true
+}
+
+function clearCreatedInstanceRouteHint(): void {
+  if (!route.query.created) return
+
+  const nextQuery = { ...route.query }
+  delete nextQuery.created
+  void router.replace({ path: route.path, query: nextQuery })
+}
+
+onMounted(async (): Promise<void> => {
+  updateViewportState()
+  loadInstanceLayoutPreference()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', updateViewportState)
+  }
+
+  // 从 URL 获取 userId 参数（首次加载）
+  if (route.query.userId) {
+    filterUserId.value = parseInt(route.query.userId as string)
+    // 获取用户名
+    try {
+      const res = await api.users.get(filterUserId.value)
+      filterUserName.value = (res as { user?: { username?: string } }).user?.username || ''
+    } catch {
+      // 忽略错误
+    }
+  } else {
+    // 确保没有 userId 时清空筛选
+    filterUserId.value = null
+    filterUserName.value = ''
+  }
+
+  const forceReload = prepareCreatedInstanceRefresh()
+  await loadInstances(forceReload)
+  clearCreatedInstanceRouteHint()
+  // 每 15 秒自动刷新
+  refreshInterval = setInterval(loadInstances, 15000)
+})
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', updateViewportState)
+  }
+  if (refreshInterval) clearInterval(refreshInterval)
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
+  clearInstanceOrderFeedback()
+})
+
+// 当组件被 KeepAlive 停用时，暂停定时器
+onDeactivated(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
+  }
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
+  clearInstanceOrderFeedback()
+})
+
+// 当组件从 KeepAlive 缓存中激活时，重新加载数据
+onActivated(async () => {
+  updateViewportState()
+  // 恢复定时刷新
+  if (!refreshInterval) {
+    refreshInterval = setInterval(loadInstances, 15000)
+  }
+  
+  // 检查路由参数是否与当前筛选一致
+  const currentUserId = route.query.userId ? parseInt(route.query.userId as string) : null
+  
+  if (currentUserId !== filterUserId.value) {
+    // 路由参数已变化，更新筛选并重新加载
+    if (currentUserId) {
+      filterUserId.value = currentUserId
+      try {
+        const res = await api.users.get(filterUserId.value)
+        filterUserName.value = (res as { user?: { username?: string } }).user?.username || ''
+      } catch {
+        filterUserName.value = ''
+      }
+    } else {
+      filterUserId.value = null
+      filterUserName.value = ''
+    }
+    page.value = 1
+  }
+  
+  const forceReload = prepareCreatedInstanceRefresh()
+  // 总是重新加载数据以确保最新
+  await loadInstances(forceReload)
+  clearCreatedInstanceRouteHint()
+})
+
+async function loadInstances(force = false): Promise<void> {
+  // 如果有操作进行中，跳过刷新
+  if (
+    !force &&
+    loading.value === false &&
+    (
+      Object.keys(actionLoading.value).length > 0 ||
+      orderLoading.value ||
+      batchActionLoading.value ||
+      batchRenewSubmitting.value ||
+      batchDestroySubmitting.value
+    )
+  ) return
+  
+  try {
+    listError.value = ''
+    const params: { page: number; pageSize: number; search: string; userId?: number } = {
+      page: page.value,
+      pageSize: pageSize.value,
+      search: search.value
+    }
+    
+    if (filterUserId.value) {
+      params.userId = filterUserId.value
+    }
+
+    if (countryFilter.value) {
+      ;(params as typeof params & { countryCode?: string }).countryCode = countryFilter.value
+    }
+    
+    const response = await api.instances.list(params)
+    const data = response as { instances?: Instance[]; total?: number; totalPages?: number; availableCountries?: string[] }
+    const nextInstances = data.instances || []
+    instances.value = nextInstances
+    total.value = data.total || 0
+    totalPages.value = Math.max(1, data.totalPages || 1)
+    availableCountries.value = (data.availableCountries || []).map(code => code.toLowerCase())
+
+    if (page.value > totalPages.value) {
+      page.value = totalPages.value
+      return loadInstances(force)
+    }
+
+    const visibleIds = new Set(nextInstances.map(instance => instance.id))
+    selectedIds.value = new Set([...selectedIds.value].filter(id => visibleIds.has(id)))
+  } catch (error) {
+    console.error('Failed to load instances:', error)
+    listError.value = translateError(error) || t('common.loadFailed')
+  } finally {
+    loading.value = false
+  }
+}
+
+function toggleSelectAll(): void {
+  if (isAllSelected.value) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(instances.value.map(instance => instance.id))
+  }
+}
+
+function toggleSelect(id: number): void {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  selectedIds.value = next
+}
+
+function clearSelection(): void {
+  selectedIds.value = new Set()
+}
+
+function setCountryFilter(code: string | null): void {
+  if (countryFilter.value === code) return
+  countryFilter.value = code
+  page.value = 1
+  clearSelection()
+  void loadInstances()
+}
+
+function getCountryLabel(code: string): string {
+  return getLocalizedCountryName(code, locale.value, (key, fallback) => t(key, fallback))
+}
+
+function handleCountryStripWheel(event: WheelEvent): void {
+  const container = event.currentTarget as HTMLElement | null
+  if (!container) return
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  container.scrollLeft += event.deltaY
+  event.preventDefault()
+}
+
+function handlePageSizeChange(): void {
+  page.value = 1
+  clearSelection()
+  void loadInstances()
+}
+
+function goToPage(nextPage: number): void {
+  if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return
+  page.value = nextPage
+  clearSelection()
+  void loadInstances()
+}
+
+function formatCurrency(value: number | null | undefined): string {
+  if (configStore.freeSiteMode) return freeSiteCopy.moneyJustForShow
+  return `¥${Number(value || 0).toFixed(2)}`
+}
+
+function getBatchRenewMonthsLabel(months: number): string {
+  return configStore.freeSiteMode ? getFreeSiteBillingCycleLabel(months) : t('billing.renewMonths', { months })
+}
+
+function getInstanceLayoutButtonClass(mode: InstanceLayoutMode): string {
+  const active = instanceLayoutMode.value === mode
+  if (active) {
+    return themeStore.isDark
+      ? 'bg-white text-gray-900 shadow-sm'
+      : 'bg-gray-900 text-white shadow-sm'
+  }
+  return themeStore.isDark
+    ? 'text-gray-400 hover:text-gray-100'
+    : 'text-gray-500 hover:text-gray-900'
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return formatExpiryDate(date)
+}
+
+function clearUserFilter(): void {
+  clearSelection()
+  page.value = 1
+  filterUserId.value = null
+  filterUserName.value = ''
+  router.replace({ query: {} })
+  void loadInstances()
+}
+
+// 遮蔽 IPv4 地址后两位，例如：1.2.3.4 -> 1.2.*.*
+function maskIpv4(ip: string | null | undefined): string | null {
+  if (!ip) return null
+  const parts = ip.split('.')
+  if (parts.length === 4) {
+    return `${parts[0]}.${parts[1]}.*.*`
+  }
+  return ip
+}
+
+function isIpv4Address(ip: string | null | undefined): boolean {
+  if (!ip) return false
+  return /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ip)
+}
+
+function getHostIpv6(instance: Instance): string | null {
+  let hostIpv6 = instance.hostNatPublicIpv6 || null
+  if (!hostIpv6 && instance.hostIpAddress && instance.hostIpAddress.includes(':')) {
+    hostIpv6 = instance.hostIpAddress
+  }
+  if (!hostIpv6 && instance.hostIpv6Gateway) {
+    hostIpv6 = instance.hostIpv6Gateway
+  }
+  return hostIpv6
+}
+
+function getIps(instance: Instance): Array<{ip: string, type: 'ipv4' | 'ipv6'}> {
+  const mode = instance.networkMode || instance.network_mode
+  const ips: Array<{ip: string, type: 'ipv4' | 'ipv6'}> = []
+
+  const natPublicIp = instance.natPublicIp || instance.host?.nat_public_ip
+  const maskedNatIp = isIpv4Address(natPublicIp) ? maskIpv4(natPublicIp) : null
+  const maskedPrivateIp = maskIpv4(instance.ipv4)
+  const hostIpv6 = getHostIpv6(instance)
+
+  if (mode === 'nat') {
+    if (maskedNatIp) ips.push({ ip: maskedNatIp, type: 'ipv4' })
+    else if (maskedPrivateIp) ips.push({ ip: maskedPrivateIp, type: 'ipv4' })
+  } else if (mode === 'nat_ipv6') {
+    if (maskedNatIp) ips.push({ ip: maskedNatIp, type: 'ipv4' })
+    else if (maskedPrivateIp) ips.push({ ip: maskedPrivateIp, type: 'ipv4' })
+    if (instance.ipv6) ips.push({ ip: instance.ipv6, type: 'ipv6' })
+  } else if (mode === 'nat_ipv6_nat') {
+    if (maskedNatIp) ips.push({ ip: maskedNatIp, type: 'ipv4' })
+    else if (maskedPrivateIp) ips.push({ ip: maskedPrivateIp, type: 'ipv4' })
+    if (hostIpv6) ips.push({ ip: hostIpv6, type: 'ipv6' })
+  } else if (mode === 'ipv6_nat') {
+    if (hostIpv6) ips.push({ ip: hostIpv6, type: 'ipv6' })
+  } else if (mode === 'ipv6_only') {
+    if (instance.ipv6) ips.push({ ip: instance.ipv6, type: 'ipv6' })
+  } else {
+    if (maskedPrivateIp) ips.push({ ip: maskedPrivateIp, type: 'ipv4' })
+    if (instance.ipv6) ips.push({ ip: instance.ipv6, type: 'ipv6' })
+  }
+
+  return ips
+}
+
+function getInstanceHostName(instance: Instance): string {
+  return (instance as any).host?.name || (instance as any).host || '-'
+}
+
+function getInstanceHostIpv4Alias(instance: Instance): string | null {
+  const host = (instance as any).host
+  return host?.ipv4Alias || host?.ipv4_alias || (instance as any).hostIpv4Alias || (instance as any).host_ipv4_alias || null
+}
+
+function getInstancePackageName(instance: Instance): string | null {
+  return (instance as any).packageName || (instance as any).package?.name || null
+}
+
+function getInstancePlanName(instance: Instance): string {
+  return getInstancePackageName(instance) || instance.planName || t('instance.freeInstanceLabel')
+}
+
+function getInstanceRegionCode(instance: Instance): string {
+  return String((instance as any).host?.country_code || (instance as any).hostCountryCode || 'us').toLowerCase()
+}
+
+function getInstanceRegionLabel(instance: Instance): string {
+  return getCountryLabel(getInstanceRegionCode(instance))
+}
+
+function getPrimaryIp(instance: Instance): string {
+  return getIps(instance)[0]?.ip || '-'
+}
+
+function getInstanceConfigSummary(instance: Instance): string {
+  return `${instance.cpu}${t('instance.mobileCard.cpuCore')} ${formatMemory(instance.memory)} ${formatDisk(instance.disk)}`
+}
+
+function getInstanceNetworkMode(instance: Instance): string {
+  return String((instance as any).networkMode || instance.network_mode || 'nat')
+}
+
+function getInstanceTypeBadgeClass(instance: Instance): string {
+  if ((instance as any).instanceType === 'vm') {
+    return themeStore.isDark ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-700'
+  }
+  return themeStore.isDark ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-700'
+}
+
+function getInstanceNetworkBadgeClass(instance: Instance): string {
+  const neutralChip = themeStore.isDark ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-700'
+  switch (getInstanceNetworkMode(instance)) {
+    case 'nat_ipv6':
+      return neutralChip
+    case 'nat_ipv6_nat':
+      return neutralChip
+    case 'ipv6_only':
+      return neutralChip
+    case 'ipv6_nat':
+      return neutralChip
+    case 'public_ipv4':
+    case 'public_ipv4_ipv6':
+      return neutralChip
+    case 'nat':
+    default:
+      return neutralChip
+  }
+}
+
+function getInstanceQuotaSummary(instance: Instance): string {
+  return `${(instance as any).portLimit ?? '-'} ${t('instance.mobileCard.ports')} / ${(instance as any).snapshotLimit ?? '-'} ${t('instance.mobileCard.snapshots')} / ${(instance as any).siteLimit ?? '-'} ${t('instance.mobileCard.sites')}`
+}
+
+function formatNetworkRate(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+  const raw = String(value)
+  const unitMatch = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(m|g)?(?:bit|bps)?$/i)
+  if (unitMatch) {
+    const numeric = Number(unitMatch[1])
+    if (!Number.isFinite(numeric) || numeric <= 0) return null
+    const mbps = numeric * (unitMatch[2]?.toLowerCase() === 'g' ? 1024 : 1)
+    return `${Number.isInteger(mbps) ? mbps.toFixed(0) : mbps.toFixed(1)} Mbps`
+  }
+  return raw.replace(/Mbit/gi, 'Mbps').replace(/Gbit/gi, 'Gbps')
+}
+
+function getInstanceBandwidthSummary(instance: Instance): string {
+  const ingress = formatNetworkRate(instance.limitsIngress || (instance as any).limits_ingress)
+  const egress = formatNetworkRate(instance.limitsEgress || (instance as any).limits_egress)
+  if (ingress && egress && ingress === egress) return ingress
+  return [ingress, egress].filter(Boolean).join(' / ') || '-'
+}
+
+function getInstanceTrafficLimitLabel(instance: Instance): string {
+  const limit = (instance as any).monthlyTrafficLimit
+  return limit ? formatBytes(Number(limit)) : t('instance.mobileCard.unlimited')
+}
+
+function getInstanceNetworkSummary(instance: Instance): string {
+  return `${t('instance.card.bandwidth')} ${getInstanceBandwidthSummary(instance)} ${t('instance.card.traffic')} ${getInstanceTrafficLimitLabel(instance)}${t('instance.card.perMonth')}`
+}
+
+function getInstanceTrafficUsage(instance: Instance): string {
+  const used = formatBytes(Number((instance as any).monthlyTrafficUsed || 0))
+  return `${used} / ${getInstanceTrafficLimitLabel(instance)}`
+}
+
+function getInstanceResetTrafficPrice(instance: Instance): string {
+  const value = Number((instance as any).trafficResetPrice ?? (instance as any).resetTrafficPrice ?? 0)
+  return value > 0 ? formatCurrency(value) : '-'
+}
+
+function canResetInstanceTraffic(instance: Instance): boolean {
+  if (isAdminEntry) return false
+  if (instance.status?.toLowerCase() === 'deleted') return false
+  return Number((instance as any).monthlyTrafficUsed || 0) > 0
+}
+
+function openResetTrafficModal(instance: Instance): void {
+  resetTrafficTarget.value = instance
+  showResetTrafficModal.value = true
+}
+
+function closeResetTrafficModal(): void {
+  if (resetTrafficSubmitting.value) return
+  showResetTrafficModal.value = false
+  resetTrafficTarget.value = null
+}
+
+async function confirmResetTraffic(): Promise<void> {
+  const instance = resetTrafficTarget.value
+  if (!instance || resetTrafficSubmitting.value) return
+
+  resetTrafficSubmitting.value = true
+  actionLoading.value[instance.id] = 'resetTraffic'
+  try {
+    await api.traffic.resetInstanceTraffic(instance.id)
+    toast.success(t('admin.hosts.trafficResetSuccess'))
+    ;(instance as any).monthlyTrafficUsed = '0'
+    ;(instance as any).trafficStatus = 'NORMAL'
+    showResetTrafficModal.value = false
+    resetTrafficTarget.value = null
+    await loadInstances(true)
+  } catch (error: any) {
+    toast.error(t('admin.hosts.trafficResetFailed') + ': ' + translateError(error))
+  } finally {
+    resetTrafficSubmitting.value = false
+    delete actionLoading.value[instance.id]
+  }
+}
+
+function getInstanceMonthlyPrice(instance: Instance): string {
+  const price = Number(instance.billingPrice ?? instance.planPrice ?? 0)
+  if (price <= 0) return '-'
+  return `${formatCurrency(price)}${t('instance.card.perMonth')}`
+}
+
+function canUseInstanceBillingAction(instance: Instance): boolean {
+  return canUseCustomerBillingActions.value && !!instance.packagePlanId
+}
+
+function canStartInstance(instance: Instance): boolean {
+  return instance.status?.toLowerCase() === 'stopped'
+}
+
+function canDeleteInstance(instance: Instance): boolean {
+  return !instance.packagePlanId && (instance as any).allow_instance_deletion !== false
+}
+
+function getInstanceStatusTextClass(instance: Instance): string {
+  switch (instance.status?.toLowerCase()) {
+    case 'running':
+      return 'text-green-600'
+    case 'stopped':
+      return themeStore.isDark ? 'text-gray-400' : 'text-gray-600'
+    case 'suspended':
+    case 'error':
+      return 'text-red-600'
+    case 'creating':
+    case 'starting':
+    case 'stopping':
+    case 'restarting':
+      return 'text-yellow-600'
+    default:
+      return themeStore.isDark ? 'text-gray-400' : 'text-gray-600'
+  }
+}
+
+// 从镜像名称提取发行版标识（用于 DistroIcon 组件）
+function getDistroFromName(name: string): string {
+  const lowerName = (name || '').toLowerCase()
+  const distros = ['almalinux', 'alma', 'alpine', 'arch', 'centos', 'debian', 'fedora', 'gentoo', 'kali', 'mint', 'opensuse', 'suse', 'oracle', 'redhat', 'rhel', 'rockylinux', 'rocky', 'ubuntu', 'void']
+  for (const distro of distros) {
+    if (lowerName.includes(distro)) return distro
+  }
+  return 'linux'
+}
+
+// 获取付费实例的图标类型（根据节点名称判断）
+// 返回 'pro' | 'prime' | 'peer' | null
+function getPaidIconType(instance: Instance): 'pro' | 'prime' | 'peer' | null {
+  // 只有付费实例才显示付费图标
+  if (!instance.packagePlanId) return null
+  
+  // 如果节点名称以 PEER 开头（不区分大小写），则是托管实例，显示 peer 图标
+  const hostName = instance.host?.name || ''
+  if (/^PEER\d/i.test(hostName)) {
+    return 'peer'
+  }
+  
+  // 根据实例类型判断：虚拟机显示 prime，容器显示 pro
+  return instance.instanceType === 'vm' ? 'prime' : 'pro'
+}
+
+// 格式化镜像名称：优先使用 imageName，否则去掉 images: 前缀
+function formatImageName(image: string, imageName?: string | null): string {
+  if (imageName) return imageName
+  return image?.replace(/^images:/, '') || ''
+}
+
+interface InstanceExpiryInfo {
+  dateText: string | null
+  remainingText: string
+  className: string
+  title: string | null
+}
+
+function formatExpiryDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function getInstanceExpiryInfo(instance: Instance): InstanceExpiryInfo {
+  const expiresAt = instance.expires_at || (instance as any).expiresAt || null
+  if (!expiresAt) {
+    return {
+      dateText: null,
+      remainingText: t('instance.freeInstanceLabel'),
+      className: 'text-green-500 dark:text-green-400',
+      title: null
+    }
+  }
+
+  const expires = new Date(expiresAt)
+  if (Number.isNaN(expires.getTime())) {
+    return {
+      dateText: null,
+      remainingText: t('instance.freeInstanceLabel'),
+      className: 'text-green-500 dark:text-green-400',
+      title: null
+    }
+  }
+
+  const now = new Date()
+  const diff = expires.getTime() - now.getTime()
+  const remainingDays = Math.ceil(diff / (1000 * 60 * 60 * 24))
+  const dateText = formatExpiryDate(expires)
+  const autoRenew = (instance as any).autoRenew === true
+
+  if (autoRenew) {
+    return {
+      dateText,
+      remainingText: t('billing.autoRenewing'),
+      className: 'text-green-500 dark:text-green-400',
+      title: expires.toLocaleString()
+    }
+  }
+
+  if (remainingDays <= 0) {
+    return {
+      dateText,
+      remainingText: t('instance.expiredLabel'),
+      className: 'text-red-500 dark:text-red-400',
+      title: expires.toLocaleString()
+    }
+  }
+
+  if (remainingDays <= 3) {
+    return {
+      dateText,
+      remainingText: `${remainingDays} ${t('common.days')}`,
+      className: 'text-red-500 dark:text-red-400',
+      title: expires.toLocaleString()
+    }
+  }
+
+  if (remainingDays <= 7) {
+    return {
+      dateText,
+      remainingText: `${remainingDays} ${t('common.days')}`,
+      className: 'text-yellow-500 dark:text-yellow-400',
+      title: expires.toLocaleString()
+    }
+  }
+
+  return {
+    dateText,
+    remainingText: `${remainingDays} ${t('common.days')}`,
+    className: 'text-green-500 dark:text-green-400',
+    title: expires.toLocaleString()
+  }
+}
+
+type InstanceAction = 'start' | 'stop' | 'restart' | 'delete'
+type BatchSimpleAction = 'start' | 'stop' | 'restart' | 'sync'
+type InstanceOrderAction = 'top' | 'up' | 'down' | 'bottom'
+const SIMPLE_BATCH_CONCURRENCY = 5
+const INSTANCE_ORDER_ACTIONS: InstanceOrderAction[] = ['top', 'up', 'down', 'bottom']
+
+const instanceOrderLabels = computed<Record<InstanceOrderAction, string>>(() => ({
+  top: t('instance.order.top'),
+  up: t('instance.order.up'),
+  down: t('instance.order.down'),
+  bottom: t('instance.order.bottom')
+}))
+
+function getInstanceIndex(instanceId: number): number {
+  return instances.value.findIndex(instance => instance.id === instanceId)
+}
+
+function canMoveInstance(instanceId: number, action: InstanceOrderAction): boolean {
+  if (orderLoading.value || !canReorderInstances.value || total.value <= 1) return false
+  const index = getInstanceIndex(instanceId)
+  if (index < 0) return false
+  const globalIndex = (page.value - 1) * pageSize.value + index
+  if (action === 'top' || action === 'up') return globalIndex > 0
+  return globalIndex < total.value - 1
+}
+
+function getInstanceOrderDisabledActions(instanceId: number): Record<InstanceOrderAction, boolean> {
+  return {
+    top: !canMoveInstance(instanceId, 'top'),
+    up: !canMoveInstance(instanceId, 'up'),
+    down: !canMoveInstance(instanceId, 'down'),
+    bottom: !canMoveInstance(instanceId, 'bottom')
+  }
+}
+
+function clearInstanceOrderFeedback(): void {
+  if (orderFeedbackTimer) {
+    clearTimeout(orderFeedbackTimer)
+    orderFeedbackTimer = null
+  }
+  recentlyOrderedInstanceId.value = null
+}
+
+function markInstanceOrderFeedback(instanceId: number): void {
+  clearInstanceOrderFeedback()
+  recentlyOrderedInstanceId.value = instanceId
+  orderFeedbackTimer = setTimeout(() => {
+    recentlyOrderedInstanceId.value = null
+    orderFeedbackTimer = null
+  }, 1100)
+}
+
+function getVisibleReorderTargetIndex(currentIndex: number, action: InstanceOrderAction): number | null {
+  const pageStartIndex = (page.value - 1) * pageSize.value
+  const globalIndex = pageStartIndex + currentIndex
+  let targetGlobalIndex = globalIndex
+  if (action === 'top') targetGlobalIndex = 0
+  else if (action === 'up') targetGlobalIndex = globalIndex - 1
+  else if (action === 'down') targetGlobalIndex = globalIndex + 1
+  else targetGlobalIndex = total.value - 1
+
+  const targetIndex = targetGlobalIndex - pageStartIndex
+  if (targetIndex < 0 || targetIndex >= instances.value.length) {
+    return null
+  }
+  return targetIndex
+}
+
+async function reorderInstance(instance: Instance, action: InstanceOrderAction): Promise<void> {
+  if (!canMoveInstance(instance.id, action)) return
+
+  const currentIndex = getInstanceIndex(instance.id)
+  if (currentIndex < 0) return
+
+  const nextInstances = [...instances.value]
+  const targetIndex = getVisibleReorderTargetIndex(currentIndex, action)
+  if (targetIndex !== null) {
+    const [moved] = nextInstances.splice(currentIndex, 1)
+    if (!moved) return
+    nextInstances.splice(targetIndex, 0, moved)
+  }
+
+  try {
+    orderLoading.value = true
+    if (targetIndex !== null) {
+      instances.value = nextInstances
+      markInstanceOrderFeedback(instance.id)
+    }
+    await api.instances.updateOrder(instance.id, action)
+    await loadInstances(true)
+    toast.success(t('instance.order.updateSuccess'))
+  } catch (error: any) {
+    clearInstanceOrderFeedback()
+    toast.error(t('instance.order.updateFailed') + ': ' + translateError(error))
+    await loadInstances(true)
+  } finally {
+    orderLoading.value = false
+  }
+}
+
+async function handleAction(instance: Instance, action: InstanceAction): Promise<void> {
+  actionLoading.value[instance.id] = action
+  
+  try {
+    if (action === 'start') {
+      await api.instances.start(instance.id)
+      toast.success(t('instance.startingInstance', { name: instance.name }))
+      // 更新本地状态为启动中
+      const idx = instances.value.findIndex(i => i.id === instance.id)
+      if (idx !== -1) {
+        (instances.value[idx] as any).status = 'starting'
+      }
+    }
+    else if (action === 'stop') {
+      await api.instances.stop(instance.id)
+      toast.success(t('instance.stoppedInstance', { name: instance.name }))
+      // 更新本地状态为已停止
+      const idx = instances.value.findIndex(i => i.id === instance.id)
+      if (idx !== -1) {
+        instances.value[idx] = { ...instances.value[idx], status: 'stopped' }
+      }
+    }
+    else if (action === 'restart') {
+      await api.instances.restart(instance.id)
+      toast.success(t('instance.restartingInstance', { name: instance.name }))
+      // 更新本地状态为重启中
+      const idx = instances.value.findIndex(i => i.id === instance.id)
+      if (idx !== -1) {
+        (instances.value[idx] as any).status = 'restarting'
+      }
+    }
+    else if (action === 'delete') {
+      if (!confirm(t('instance.confirmDelete', { name: instance.name }))) {
+        delete actionLoading.value[instance.id]
+        return
+      }
+      await api.instances.delete(instance.id)
+      // 立即从本地列表移除，提供即时反馈
+      instances.value = instances.value.filter(i => i.id !== instance.id)
+      total.value = Math.max(0, total.value - 1)
+      toast.success(t('instance.deletedInstance', { name: instance.name }))
+    }
+  } catch (error: any) {
+    // 检查是否需要二次验证
+    if (error?.code === 'VERIFICATION_REQUIRED' || error?.message?.includes('Sensitive operation requires verification')) {
+      toast.error(t('instance.verificationRequiredHint'), 6000)
+    } else {
+      toast.error(`${t('instance.actionFailed')}: ${translateError(error)}`)
+    }
+    // 操作失败时重新加载以恢复正确状态
+    await loadInstances(true)
+  } finally {
+    delete actionLoading.value[instance.id]
+  }
+}
+
+function openInstanceDetail(instanceId: number): void {
+  router.push(instanceDetailPath(instanceId))
+}
+
+function getBatchTargets(action: BatchSimpleAction): Instance[] {
+  if (action === 'start') {
+    return selectedInstances.value.filter(instance => instance.status?.toLowerCase() === 'stopped')
+  }
+  if (action === 'stop' || action === 'restart') {
+    return selectedInstances.value.filter(instance => instance.status?.toLowerCase() === 'running')
+  }
+  return selectedInstances.value
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  handler: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length)
+  let currentIndex = 0
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const index = currentIndex
+      currentIndex += 1
+      if (index >= items.length) break
+      try {
+        const value = await handler(items[index])
+        results[index] = { status: 'fulfilled', value }
+      } catch (error) {
+        results[index] = { status: 'rejected', reason: error }
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()))
+  return results
+}
+
+function translateBatchReason(reason?: string): string {
+  if (!reason) return t('instance.batch.unknownReason')
+  if (reason === '实例不存在' || reason === '实例不存在或无权操作' || reason === '无权操作该实例') {
+    return t('instance.batchReason.notFoundOrForbidden')
+  }
+  if (reason === '免费实例无需续费') {
+    return t('instance.batchReason.freeNoRenew')
+  }
+  if (reason === '无法获取实例计费信息') {
+    return t('instance.batchReason.billingUnavailable')
+  }
+  if (reason === '暂无可用续费选项') {
+    return t('instance.batchReason.noRenewOptions')
+  }
+  if (reason === '该实例不支持当前续费时长') {
+    return t('instance.batch.unsupportedPeriod')
+  }
+  if (reason === '免费实例不支持自动续费') {
+    return t('instance.batchReason.freeNoAutoRenew')
+  }
+  if (reason === '已经开启自动续费') {
+    return t('instance.batchReason.autoRenewAlreadyOn')
+  }
+  if (reason === '已经关闭自动续费') {
+    return t('instance.batchReason.autoRenewAlreadyOff')
+  }
+  if (reason === '实例已删除') {
+    return t('instance.batchReason.deleted')
+  }
+  if (reason === '实例正在创建中，无法销毁') {
+    return t('instance.batchReason.creating')
+  }
+  if (reason === '实例已被封停，无法销毁，请先联系管理员解封') {
+    return t('instance.batchReason.suspended')
+  }
+  if (reason === '当前月流量周期无法销毁，已用流量达到或超过 5G') {
+    return t('instance.batchReason.destroyTrafficLimit')
+  }
+  if (reason === '续费失败') {
+    return t('instance.batchReason.renewFailed')
+  }
+  if (reason === '自动续费设置失败') {
+    return t('instance.batchReason.autoRenewFailed')
+  }
+  if (reason === '销毁实例失败') {
+    return t('instance.batchReason.destroyFailed')
+  }
+
+  const renewWindowMatch = reason.match(/^仅可在到期前\s*(\d+)\s*天内续费$/)
+  if (renewWindowMatch) {
+    return t('instance.batchReason.renewWindow', { days: renewWindowMatch[1] })
+  }
+
+  return reason
+}
+
+async function handleBatchSimpleAction(action: BatchSimpleAction): Promise<void> {
+  const targets = getBatchTargets(action)
+  if (targets.length === 0) {
+    toast.warning(t('instance.batch.noEligibleAction'))
+    return
+  }
+
+  batchActionLoading.value = action
+  try {
+    const settled = await runWithConcurrency(
+      targets,
+      SIMPLE_BATCH_CONCURRENCY,
+      async (instance) => {
+        if (action === 'start') return api.instances.start(instance.id)
+        if (action === 'stop') return api.instances.stop(instance.id)
+        if (action === 'restart') return api.instances.restart(instance.id)
+        return api.instances.syncStatus(instance.id)
+      }
+    )
+
+    const successCount = settled.filter(item => item.status === 'fulfilled').length
+    const failedCount = settled.length - successCount
+    const skippedCount = selectedCount.value - targets.length
+
+    if (failedCount > 0) {
+      toast.warning(t('instance.batch.partialResult', { success: successCount, failed: failedCount, skipped: skippedCount }))
+    } else {
+      toast.success(t('instance.batch.successResult', { count: successCount }))
+    }
+
+    clearSelection()
+    await loadInstances(true)
+  } catch (error: any) {
+    toast.error(t('instance.batch.actionFailed') + ': ' + translateError(error))
+  } finally {
+    batchActionLoading.value = ''
+  }
+}
+
+async function handleBatchAutoRenew(autoRenew: boolean): Promise<void> {
+  const instanceIds = selectedBillingActionIds.value
+  if (instanceIds.length === 0 || !canUseCustomerBillingActions.value) return
+
+  batchActionLoading.value = autoRenew ? 'autoRenewOn' : 'autoRenewOff'
+  try {
+    const result = await customerBillingApi.billing.setAutoRenewBatch(instanceIds, autoRenew)
+    if (result.failedCount > 0) {
+      toast.warning(t('instance.batch.partialResult', {
+        success: result.successCount,
+        failed: result.failedCount,
+        skipped: result.skippedCount
+      }))
+    } else {
+      toast.success(t(autoRenew ? 'billing.autoRenewEnabled' : 'billing.autoRenewDisabled'))
+    }
+    clearSelection()
+    await loadInstances(true)
+  } catch (error: any) {
+    toast.error(t('instance.batch.actionFailed') + ': ' + translateError(error))
+  } finally {
+    batchActionLoading.value = ''
+  }
+}
+
+async function handleSingleAutoRenew(instance: Instance, autoRenew: boolean): Promise<void> {
+  if (!canUseInstanceBillingAction(instance) || !!actionLoading.value[instance.id]) return
+
+  actionLoading.value = {
+    ...actionLoading.value,
+    [instance.id]: autoRenew ? 'autoRenewOn' : 'autoRenewOff'
+  }
+
+  try {
+    const result = await customerBillingApi.billing.setAutoRenewBatch([instance.id], autoRenew)
+    if (result.failedCount > 0) {
+      toast.warning(t('instance.batch.partialResult', {
+        success: result.successCount,
+        failed: result.failedCount,
+        skipped: result.skippedCount
+      }))
+    } else {
+      toast.success(t(autoRenew ? 'billing.autoRenewEnabled' : 'billing.autoRenewDisabled'))
+    }
+    await loadInstances(true)
+  } catch (error: any) {
+    toast.error(t('instance.batch.actionFailed') + ': ' + translateError(error))
+  } finally {
+    const next = { ...actionLoading.value }
+    delete next[instance.id]
+    actionLoading.value = next
+  }
+}
+
+async function openSingleRenewModal(instance: Instance): Promise<void> {
+  if (!canUseInstanceBillingAction(instance)) return
+  selectedIds.value = new Set([instance.id])
+  await openBatchRenewModal()
+}
+
+function openInstanceTransfer(instance: Instance): void {
+  void router.push({ path: transfersPath(), query: { instanceId: String(instance.id) } })
+}
+
+async function openBatchRenewModal(): Promise<void> {
+  const instanceIds = selectedBillingActionIds.value
+  if (instanceIds.length === 0 || !canUseCustomerBillingActions.value) return
+
+  showBatchRenewModal.value = true
+  batchRenewLoading.value = true
+  batchRenewPreview.value = []
+  batchRenewMonths.value = 1
+
+  try {
+    const [previewRes, balanceRes] = await Promise.all([
+      customerBillingApi.billing.previewBatchRenew(instanceIds),
+      customerBillingApi.billing.getUserBalance()
+    ])
+    batchRenewPreview.value = previewRes.items
+    batchRenewBalance.value = balanceRes.balance
+    batchRenewMonths.value = batchRenewMonthOptions.value.includes(1)
+      ? 1
+      : (batchRenewMonthOptions.value[0] || 1)
+  } catch (error: any) {
+    toast.error(t('instance.batch.previewFailed') + ': ' + translateError(error))
+    showBatchRenewModal.value = false
+  } finally {
+    batchRenewLoading.value = false
+  }
+}
+
+function closeBatchRenewModal(force = false): void {
+  if (batchRenewSubmitting.value && !force) return
+  showBatchRenewModal.value = false
+  batchRenewPreview.value = []
+  batchRenewMonths.value = 1
+}
+
+async function confirmBatchRenew(): Promise<void> {
+  if (!batchRenewCanSubmit.value || !canUseCustomerBillingActions.value) return
+  const instanceIds = selectedBillingActionIds.value
+  if (instanceIds.length === 0) return
+
+  batchRenewSubmitting.value = true
+  try {
+    const result = await customerBillingApi.billing.renewInstancesBatch(instanceIds, batchRenewMonths.value)
+    if (result.failedCount > 0) {
+      toast.warning(t('instance.batch.partialResult', {
+        success: result.successCount,
+        failed: result.failedCount,
+        skipped: result.skippedCount
+      }))
+    } else {
+      toast.success(t('instance.batch.successResult', { count: result.successCount }))
+    }
+    closeBatchRenewModal(true)
+    clearSelection()
+    await loadInstances(true)
+  } catch (error: any) {
+    toast.error(t('instance.batch.actionFailed') + ': ' + translateError(error))
+  } finally {
+    batchRenewSubmitting.value = false
+  }
+}
+
+async function openBatchDestroyModal(): Promise<void> {
+  if (selectedCount.value === 0 || !canUseCustomerBillingActions.value) return
+
+  showBatchDestroyModal.value = true
+  batchDestroyLoading.value = true
+  batchDestroyConfirm.value = ''
+  batchDestroyPreview.value = []
+
+  try {
+    const result = await customerBillingApi.billing.getBatchDestroyInfo(Array.from(selectedIds.value))
+    batchDestroyPreview.value = result.items
+  } catch (error: any) {
+    toast.error(t('instance.batch.previewFailed') + ': ' + translateError(error))
+    showBatchDestroyModal.value = false
+  } finally {
+    batchDestroyLoading.value = false
+  }
+}
+
+function closeBatchDestroyModal(force = false): void {
+  if (batchDestroySubmitting.value && !force) return
+  showBatchDestroyModal.value = false
+  batchDestroyConfirm.value = ''
+  batchDestroyPreview.value = []
+}
+
+async function confirmBatchDestroy(): Promise<void> {
+  if (!batchDestroyCanSubmit.value || !canUseCustomerBillingActions.value) return
+
+  batchDestroySubmitting.value = true
+  try {
+    const result = await customerBillingApi.billing.destroyInstancesBatch(Array.from(selectedIds.value))
+    if (result.failedCount > 0) {
+      toast.warning(t('instance.batch.partialResult', {
+        success: result.successCount,
+        failed: result.failedCount,
+        skipped: result.skippedCount
+      }))
+    } else {
+      toast.success(t('instance.batch.successResult', { count: result.successCount }))
+    }
+    closeBatchDestroyModal(true)
+    clearSelection()
+    await loadInstances(true)
+  } catch (error: any) {
+    toast.error(t('instance.batch.actionFailed') + ': ' + translateError(error))
+  } finally {
+    batchDestroySubmitting.value = false
+  }
+}
+
+</script>
+
+<template>
+  <div class="kawaii-page kawaii-instances-page space-y-6 animate-fade-in">
+    <!-- 页面头部 -->
+    <div class="kawaii-dashboard-hero kawaii-instances-command-center rounded-2xl p-5 page-header flex-col sm:flex-row gap-4 sm:gap-0">
+      <div>
+        <h1 class="page-title text-lg sm:text-xl">{{ $t('instance.title') }}</h1>
+        <p class="page-description">
+          <template v-if="filterUserId && filterUserName">
+            {{ $t('instance.userInstances', { name: filterUserName }) }}
+            <button class="text-primary-600 hover:text-primary-500 ml-2 text-sm font-medium transition-colors" @click="clearUserFilter">
+              {{ $t('instance.clearFilter') }}
+            </button>
+          </template>
+          <template v-else>
+            {{ $t('instance.manageDesc') }}
+          </template>
+        </p>
+      </div>
+      <RouterLink :to="instanceCreatePath()" class="btn-primary w-full sm:w-auto justify-center">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+        </svg>
+        {{ configStore.freeSiteMode ? freeSiteCopy.instanceCreate : $t('instance.create') }}
+      </RouterLink>
+    </div>
+
+    <!-- 搜索和筛选 -->
+    <div class="kawaii-instance-toolbar flex flex-col gap-3 rounded-2xl border p-3 xl:flex-row xl:items-center xl:justify-between">
+      <div class="flex flex-col gap-3 flex-1 min-w-0 xl:flex-row xl:items-center">
+        <div class="relative w-full xl:max-w-sm">
+          <input
+            v-model="search"
+            type="text"
+            :placeholder="$t('instance.searchPlaceholder')"
+            class="input pl-9 w-full"
+          />
+          <svg class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 icon-themed" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+
+        <div
+          v-if="countryFilterOptions.length > 0"
+          class="hidden sm:flex items-center min-w-0 flex-1"
+        >
+          <div
+            class="flex flex-wrap items-center gap-2 min-w-0"
+            @wheel="handleCountryStripWheel"
+          >
+            <button
+              type="button"
+              class="h-9 px-3.5 rounded-full border text-xs font-semibold shrink-0 transition-colors"
+              :class="countryFilter === null
+                ? 'border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-300'
+                : 'border-themed bg-themed-surface text-themed-muted hover:border-primary-500/40 hover:text-themed'"
+              @click="setCountryFilter(null)"
+            >
+              {{ $t('common.all') }}
+            </button>
+            <button
+              v-for="code in countryFilterOptions"
+              :key="`desktop-country-${code}`"
+              type="button"
+              class="h-9 max-w-[150px] rounded-full border flex items-center justify-center gap-2 px-3.5 text-xs font-semibold shrink-0 transition-all"
+              :class="countryFilter === code
+                ? 'border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-300 shadow-sm shadow-primary-500/10'
+                : 'border-themed bg-themed-surface text-themed-muted hover:border-primary-500/40 hover:text-themed'"
+              :title="getCountryLabel(code)"
+              :aria-label="getCountryLabel(code)"
+              @click="setCountryFilter(code)"
+            >
+              <FlagIcon :code="code" size="sm" class="shrink-0" />
+              <span class="truncate">{{ getCountryLabel(code) }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="hidden sm:flex flex-wrap items-center gap-3 xl:justify-end">
+        <div
+          class="inline-flex items-center rounded-xl border border-themed bg-themed-secondary p-0.5"
+        >
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+            :class="getInstanceLayoutButtonClass('list')"
+            :title="$t('instance.listLayout')"
+            @click="setInstanceLayoutMode('list')"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            <span class="hidden sm:inline">{{ $t('instance.listLayout') }}</span>
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+            :class="getInstanceLayoutButtonClass('card')"
+            :title="$t('instance.cardLayout')"
+            @click="setInstanceLayoutMode('card')"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5 5h6v6H5V5zm8 0h6v6h-6V5zM5 13h6v6H5v-6zm8 0h6v6h-6v-6z" />
+            </svg>
+            <span class="hidden sm:inline">{{ $t('instance.cardLayout') }}</span>
+          </button>
+        </div>
+        <span class="text-sm text-themed-muted whitespace-nowrap tabular-nums">{{ $t('instance.totalCount', { count: total }) }}</span>
+        <div class="inline-flex items-center gap-2 shrink-0">
+          <span class="text-sm text-themed-muted whitespace-nowrap">{{ $t('common.perPage') }}</span>
+          <div class="relative">
+            <select
+              v-model.number="pageSize"
+              class="input h-10 w-24 appearance-none rounded-xl py-2 pl-3 pr-9 text-sm leading-none"
+              @change="handlePageSizeChange"
+            >
+              <option v-for="size in pageSizeOptions" :key="size" :value="size">
+                {{ size }}
+              </option>
+            </select>
+            <svg
+              class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-themed-muted"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sm:hidden flex items-center justify-between gap-3">
+      <span class="text-sm text-themed-muted whitespace-nowrap tabular-nums">{{ $t('instance.totalCount', { count: total }) }}</span>
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="text-sm text-themed-muted whitespace-nowrap">{{ $t('common.perPage') }}</span>
+        <div class="relative">
+          <select
+            v-model.number="pageSize"
+            class="input h-10 w-24 appearance-none rounded-xl py-2 pl-3 pr-9 text-sm leading-none"
+            @change="handlePageSizeChange"
+          >
+            <option v-for="size in pageSizeOptions" :key="size" :value="size">
+              {{ size }}
+            </option>
+          </select>
+          <svg
+            class="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-themed-muted"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="countryFilterOptions.length > 0"
+      class="sm:hidden"
+    >
+      <div
+        class="card p-3"
+      >
+        <div
+          class="flex flex-wrap items-center gap-2 min-w-0"
+          @wheel="handleCountryStripWheel"
+        >
+          <button
+            type="button"
+            class="h-9 px-3.5 rounded-full border text-xs font-semibold shrink-0 transition-colors"
+            :class="countryFilter === null
+              ? 'border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-300'
+              : 'border-themed bg-themed-surface text-themed-muted hover:border-primary-500/40 hover:text-themed'"
+            @click="setCountryFilter(null)"
+          >
+            {{ $t('common.all') }}
+          </button>
+          <button
+            v-for="code in countryFilterOptions"
+            :key="`mobile-country-${code}`"
+            type="button"
+            class="h-9 max-w-[140px] rounded-full border flex items-center justify-center gap-2 px-3.5 text-xs font-semibold shrink-0 transition-all"
+            :class="countryFilter === code
+              ? 'border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-300 shadow-sm shadow-primary-500/10'
+              : 'border-themed bg-themed-surface text-themed-muted hover:border-primary-500/40 hover:text-themed'"
+            :title="getCountryLabel(code)"
+            :aria-label="getCountryLabel(code)"
+            @click="setCountryFilter(code)"
+          >
+            <FlagIcon :code="code" size="sm" class="shrink-0" />
+            <span class="truncate">{{ getCountryLabel(code) }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 批量操作条 -->
+    <div
+      v-if="hasSelectedInstances && !loading && instances.length > 0"
+      class="card p-4 space-y-4"
+    >
+      <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div class="flex flex-wrap items-center gap-3">
+          <div
+            class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium"
+            :class="'bg-primary-500/10 text-primary-600 dark:text-primary-300'"
+          >
+            <span class="inline-flex h-2 w-2 rounded-full bg-current"></span>
+            {{ $t('instance.batch.selectedCount', { count: selectedCount }) }}
+          </div>
+          <span class="text-sm text-themed-muted">{{ $t('instance.batch.currentPageOnly') }}</span>
+          <button class="btn-ghost btn-sm" @click="clearSelection">
+            {{ $t('instance.batch.clear') }}
+          </button>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            class="btn-ghost btn-sm"
+            :disabled="selectedStoppedCount === 0 || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="handleBatchSimpleAction('start')"
+          >
+            <svg v-if="batchActionLoading === 'start'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {{ $t('instance.batch.start') }}
+          </button>
+          <button
+            class="btn-ghost btn-sm"
+            :disabled="selectedRunningCount === 0 || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="handleBatchSimpleAction('stop')"
+          >
+            <svg v-if="batchActionLoading === 'stop'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {{ $t('instance.batch.stop') }}
+          </button>
+          <button
+            class="btn-ghost btn-sm"
+            :disabled="selectedRunningCount === 0 || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="handleBatchSimpleAction('restart')"
+          >
+            <svg v-if="batchActionLoading === 'restart'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {{ $t('instance.batch.restart') }}
+          </button>
+          <button
+            class="btn-ghost btn-sm"
+            :disabled="!hasSelectedInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="handleBatchSimpleAction('sync')"
+          >
+            <svg v-if="batchActionLoading === 'sync'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {{ $t('instance.batch.sync') }}
+          </button>
+          <button
+            v-if="!isAdminEntry"
+            class="btn-ghost btn-sm"
+            :disabled="selectedBillingActionIds.length === 0 || isViewingAnotherUsersInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="handleBatchAutoRenew(true)"
+          >
+            <svg v-if="batchActionLoading === 'autoRenewOn'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {{ $t('instance.batch.autoRenewOn') }}
+          </button>
+          <button
+            v-if="!isAdminEntry"
+            class="btn-ghost btn-sm"
+            :disabled="selectedBillingActionIds.length === 0 || isViewingAnotherUsersInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="handleBatchAutoRenew(false)"
+          >
+            <svg v-if="batchActionLoading === 'autoRenewOff'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            {{ $t('instance.batch.autoRenewOff') }}
+          </button>
+          <button
+            v-if="!isAdminEntry"
+            class="btn-secondary btn-sm"
+            :disabled="selectedBillingActionIds.length === 0 || isViewingAnotherUsersInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="openBatchRenewModal"
+          >
+            {{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchRenewAction : $t('instance.batch.renew') }}
+          </button>
+          <button
+            v-if="!isAdminEntry"
+            class="btn-danger btn-sm"
+            :disabled="!hasSelectedInstances || isViewingAnotherUsersInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
+            @click="openBatchDestroyModal"
+          >
+            {{ $t('instance.batch.destroy') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 加载骨架屏 -->
+    <SkeletonLoader
+      v-if="loading"
+      :type="isCardLayout ? 'grid' : 'table'"
+      :rows="isCardLayout ? 3 : 8"
+      :cols="isDesktopViewport ? 3 : 1"
+    />
+
+    <!-- 加载失败 -->
+    <div v-else-if="listError" class="card p-12 text-center">
+      <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10">
+        <svg
+          class="h-8 w-8"
+          :class="themeStore.isDark ? 'text-red-400' : 'text-red-500'"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        </svg>
+      </div>
+      <h3
+        class="text-lg font-medium mb-2"
+        :class="'text-themed'"
+      >
+        {{ $t('common.loadFailed') }}
+      </h3>
+      <p class="text-themed-muted mb-4">{{ listError }}</p>
+      <button class="btn-primary" @click="loadInstances(true)">{{ $t('common.retry') }}</button>
+    </div>
+
+    <!-- 空状态 -->
+    <div v-else-if="instances.length === 0" class="card p-12 text-center">
+      <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-themed bg-themed-secondary text-themed-faint">
+        <svg
+          class="h-8 w-8"
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+        </svg>
+      </div>
+      <h3 
+        class="text-lg font-medium mb-2"
+        :class="'text-themed'"
+      >
+        {{ search ? $t('instance.noMatchingInstances') : $t('instance.noInstances') }}
+      </h3>
+      <p class="text-themed-muted mb-4">{{ search ? $t('instance.tryOtherKeywords') : $t('instance.createFirstInstance') }}</p>
+      <RouterLink v-if="!search" :to="instanceCreatePath()" class="btn-primary">{{ configStore.freeSiteMode ? freeSiteCopy.instanceCreateFirst : $t('instance.create') }}</RouterLink>
+    </div>
+
+    <!-- 实例列表 -->
+    <template v-else>
+      <!-- 列表布局 -->
+      <div v-if="instanceLayoutMode === 'list'" class="hidden overflow-hidden sm:block card">
+        <table class="w-full table-fixed">
+          <thead class="border-b border-themed bg-themed-secondary">
+            <tr>
+              <th class="px-4 py-3 w-12">
+                <div class="flex items-center justify-center">
+                  <button
+                    type="button"
+                    class="relative flex h-4 w-4 items-center justify-center rounded border border-themed bg-themed-surface text-primary-600 transition-colors dark:text-primary-400"
+                    @click="toggleSelectAll"
+                  >
+                    <span v-if="isAllSelected" class="h-2 w-2 rounded-sm bg-current"></span>
+                    <span v-else-if="isPartialSelected" class="h-0.5 w-2 rounded-full bg-current"></span>
+                  </button>
+                </div>
+              </th>
+              <th class="w-[22%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-4 py-3">{{ $t('instance.name') }}</th>
+              <th class="w-[10%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-3 py-3">{{ $t('instance.statusLabel') }}</th>
+              <th class="w-[15%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-3 py-3">{{ $t('instance.ip') }}</th>
+              <th class="w-[12%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-3 py-3">{{ $t('instance.modeLabel') }}</th>
+              <th class="w-[16%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-3 py-3">{{ $t('instance.config') }}</th>
+              <th class="w-[16%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-3 py-3">{{ $t('instance.quotaLabel') }}</th>
+              <th v-if="isAdmin" class="w-[10%] text-left text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-3 py-3">{{ $t('instance.user') }}</th>
+              <th class="w-[9%] text-right text-[11px] font-semibold text-themed-faint uppercase tracking-wider px-4 py-3">{{ $t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <TransitionGroup
+            tag="tbody"
+            name="instance-table-order"
+            class="divide-y divide-themed"
+          >
+            <tr
+              v-for="instance in instances"
+              :key="instance.id"
+              class="cursor-pointer transition-colors"
+              :class="[
+                'hover:bg-black/[0.03] dark:hover:bg-white/[0.05]',
+                selectedIds.has(instance.id) ? 'bg-primary-500/10' : '',
+                recentlyOrderedInstanceId === instance.id ? (themeStore.isDark ? 'is-order-feedback-dark' : 'is-order-feedback-light') : '',
+                instance.status?.toLowerCase() === 'creating' ? 'creating-row' : ''
+              ]"
+              @click="openInstanceDetail(instance.id)"
+            >
+              <td class="px-4 py-3" @click.stop>
+                <div class="flex items-center justify-center">
+                  <input
+                    type="checkbox"
+                    class="w-4 h-4 rounded border-gray-300 accent-primary-600 cursor-pointer"
+                    :checked="selectedIds.has(instance.id)"
+                    @change="toggleSelect(instance.id)"
+                  />
+                </div>
+              </td>
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-2.5">
+                  <div
+                    class="w-9 h-9 rounded flex items-center justify-center transition-colors flex-shrink-0 overflow-hidden"
+                    :class="'bg-themed-secondary'"
+                  >
+                    <InstanceDisplayIcon
+                      v-if="instance.iconBadgeId || getPaidIconType(instance)"
+                      :badge-id="instance.iconBadgeId"
+                      :fallback-icon="getPaidIconType(instance)"
+                      :alt="instance.name"
+                      :size="36"
+                    />
+                    <DistroIcon
+                      v-else
+                      :distro="getDistroFromName(instance.image)"
+                      :size="32"
+                    />
+                  </div>
+                  <div class="min-w-0">
+                    <div
+                      class="font-medium text-sm truncate"
+                      :class="'text-themed'"
+                    >
+                      {{ instance.name }}
+                    </div>
+                    <div
+                      class="text-xs truncate"
+                      :class="'text-themed-faint'"
+                    >
+                      {{ formatImageName(instance.image, (instance as any).imageName) }}
+                    </div>
+	                  </div>
+	                </div>
+	              </td>
+              <td class="px-3 py-3">
+                <span :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono text-[11px] tabular-nums', getStatusInfo(instance.status, t).class]">
+                  <span :class="['w-1.5 h-1.5 rounded-full', getStatusInfo(instance.status, t).dot]"></span>
+                  {{ getStatusInfo(instance.status, t).label }}
+                </span>
+              </td>
+              <td class="pl-4 pr-3 py-3">
+                <div class="flex items-center gap-2">
+                  <FlagIcon :code="(instance as any).host?.country_code || (instance as any).hostCountryCode || 'us'" size="xs" class="flex-shrink-0" />
+                  <div class="space-y-0.5 min-w-0">
+                    <div class="text-xs truncate text-themed-muted">{{ getInstanceHostName(instance) }}</div>
+                    <div v-if="getInstanceHostIpv4Alias(instance)" class="text-xs font-mono truncate text-themed-faint">{{ $t('admin.hosts.ipv4Alias') }}: {{ getInstanceHostIpv4Alias(instance) }}</div>
+                    <template v-if="getIps(instance).length > 0">
+                      <div
+                        v-for="(ipObj, idx) in getIps(instance)"
+                        :key="idx"
+                        class="text-xs font-mono break-all"
+                        :class="'text-themed-muted'"
+                        :title="ipObj.ip"
+                      >
+                        {{ ipObj.ip }}
+                      </div>
+                    </template>
+                    <span v-else class="text-themed-muted text-xs">-</span>
+                  </div>
+                </div>
+              </td>
+              <td class="px-3 py-3">
+                <div class="flex items-center gap-1.5">
+                  <span
+                    class="text-xs px-1.5 py-0.5 rounded"
+                    :class="getInstanceTypeBadgeClass(instance)"
+                  >
+                    {{ (instance as any).instanceType === 'vm' ? $t('common.instanceType.vm') : $t('common.instanceType.container') }}
+                  </span>
+                  <span
+                    class="text-xs px-1.5 py-0.5 rounded"
+                    :class="getInstanceNetworkBadgeClass(instance)"
+                  >
+                    {{ $t('common.networkMode.' + getInstanceNetworkMode(instance)) }}
+                  </span>
+                </div>
+              </td>
+              <td class="px-3 py-3">
+                <div class="space-y-0.5">
+                  <div class="text-sm font-mono tabular-nums text-themed">
+                    {{ instance.cpu }}% / {{ formatMemory(instance.memory) }} / {{ formatDisk(instance.disk) }}
+                  </div>
+                  <div class="text-xs font-mono tabular-nums text-themed-faint">
+                    {{ formatBytes(Number((instance as any).monthlyTrafficUsed || 0)) }}
+                    <span> / </span>
+                    <template v-if="(instance as any).monthlyTrafficLimit">
+                      {{ formatBytes(Number((instance as any).monthlyTrafficLimit)) }}
+                    </template>
+                    <template v-else>
+                      {{ $t('instance.mobileCard.unlimited') }}
+                    </template>
+                  </div>
+                </div>
+              </td>
+              <td class="px-3 py-3">
+                <div class="space-y-0.5">
+                  <div class="text-sm text-themed-muted">
+                    {{ getInstanceQuotaSummary(instance) }}
+                  </div>
+                  <div class="text-xs">
+                    <span class="text-themed-muted">{{ $t('instance.expireAt') }}:</span>
+                    <span class="ml-1 text-themed-muted" :title="getInstanceExpiryInfo(instance).title || ''">
+                      <template v-if="getInstanceExpiryInfo(instance).dateText">
+                        {{ getInstanceExpiryInfo(instance).dateText }}
+                        <span class="mx-1">|</span>
+                      </template>
+                      <span class="font-medium" :class="getInstanceExpiryInfo(instance).className">
+                        {{ getInstanceExpiryInfo(instance).remainingText }}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </td>
+              <td v-if="isAdmin" class="px-3 py-3">
+                <span
+                  class="text-xs truncate"
+                  :class="'text-themed-muted'"
+                >{{ (instance as any).username || '-' }}</span>
+              </td>
+              <td class="px-4 py-3 text-right">
+                <div class="flex items-center justify-end gap-1">
+                  <InstanceOrderMenu
+                    v-if="canReorderInstances"
+                    class="mr-1"
+                    :actions="INSTANCE_ORDER_ACTIONS"
+                    :labels="instanceOrderLabels"
+                    :label="$t('instance.order.label')"
+                    :disabled-actions="getInstanceOrderDisabledActions(instance.id)"
+                    :loading="orderLoading"
+                    :dark="themeStore.isDark"
+                    align="right"
+                    @reorder="reorderInstance(instance, $event)"
+                  />
+                  <button
+                    v-if="canStartInstance(instance)"
+                    :disabled="!!actionLoading[instance.id]"
+                    class="p-1.5 rounded hover:bg-green-50 dark:hover:bg-green-900/20 text-green-500 transition-colors disabled:opacity-50"
+                    :title="$t('instance.actions.start')"
+                    @click.stop="handleAction(instance, 'start')"
+                  >
+                    <svg v-if="actionLoading[instance.id] === 'start'" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <svg v-else class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </button>
+                  <button
+                    v-if="instance.status?.toLowerCase() === 'running'"
+                    :disabled="!!actionLoading[instance.id]"
+                    class="p-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-900/20 text-amber-500 transition-colors disabled:opacity-50"
+                    :title="$t('instance.actions.stop')"
+                    @click.stop="handleAction(instance, 'stop')"
+                  >
+                    <svg v-if="actionLoading[instance.id] === 'stop'" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <svg v-else class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M6 6h12v12H6z" />
+                    </svg>
+                  </button>
+                  <button
+                    v-if="instance.status?.toLowerCase() === 'running'"
+                    :disabled="!!actionLoading[instance.id]"
+                    class="p-1.5 rounded hover:bg-primary-500/10 text-primary-600 transition-colors disabled:opacity-50 dark:text-primary-400"
+                    :title="$t('instance.actions.restart')"
+                    @click.stop="handleAction(instance, 'restart')"
+                  >
+                    <svg v-if="actionLoading[instance.id] === 'restart'" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                  <span
+                    class="p-1.5 rounded hover:bg-black/[0.04] dark:hover:bg-white/[0.06] text-themed-muted transition-colors"
+                    :title="$t('instance.details')"
+                  >
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </span>
+                </div>
+              </td>
+            </tr>
+          </TransitionGroup>
+        </table>
+      </div>
+
+      <!-- 卡片布局 -->
+      <div v-else>
+        <TransitionGroup name="instance-stack-order" tag="div" class="space-y-3 sm:hidden">
+          <div
+            v-for="instance in instances"
+            :key="instance.id"
+            class="nimbus-card-lift card overflow-hidden transition-all"
+            :class="[
+              instance.status?.toLowerCase() === 'creating' ? 'creating-card' : '',
+              recentlyOrderedInstanceId === instance.id ? (themeStore.isDark ? 'is-order-feedback-dark' : 'is-order-feedback-light') : '',
+              selectedIds.has(instance.id) ? ('ring-1 ring-primary-500/40') : ''
+            ]"
+          >
+            <div class="block p-4">
+              <div class="flex items-start gap-3 mb-3">
+                <div class="pt-1 shrink-0" @click.stop>
+                  <input
+                    type="checkbox"
+                    class="w-5 h-5 rounded border-gray-300 accent-primary-600 cursor-pointer touch-manipulation"
+                    :checked="selectedIds.has(instance.id)"
+                    @click.stop
+                    @change.stop="toggleSelect(instance.id)"
+                  />
+                </div>
+                <div
+                  class="w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden"
+                  :class="'bg-themed-secondary'"
+                >
+                  <InstanceDisplayIcon
+                    v-if="instance.iconBadgeId || getPaidIconType(instance)"
+                    :badge-id="instance.iconBadgeId"
+                    :fallback-icon="getPaidIconType(instance)"
+                    :alt="instance.name"
+                    :size="44"
+                  />
+                  <DistroIcon
+                    v-else
+                    :distro="getDistroFromName(instance.image)"
+                    :size="40"
+                  />
+                </div>
+                <div class="flex-1 min-w-0 cursor-pointer" @click="openInstanceDetail(instance.id)">
+                  <div class="flex items-center gap-2 mb-1">
+                    <div
+                      class="font-semibold truncate"
+                      :class="'text-themed'"
+                    >
+                      {{ instance.name }}
+                    </div>
+                    <span :class="['inline-flex items-center gap-1 flex-shrink-0 rounded-full px-2 py-0.5 font-mono', getStatusInfo(instance.status, t).class]">
+                      <span :class="['w-1 h-1 rounded-full', getStatusInfo(instance.status, t).dot]"></span>
+                      <span class="text-[10px]">{{ getStatusInfo(instance.status, t).label }}</span>
+                    </span>
+                  </div>
+                  <div
+                    class="text-xs truncate"
+                    :class="'text-themed-muted'"
+                  >
+                    {{ formatImageName(instance.image, (instance as any).imageName) }}
+                  </div>
+                  <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span
+                      class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+                      :class="getInstanceTypeBadgeClass(instance)"
+                    >
+                      {{ (instance as any).instanceType === 'vm' ? $t('common.instanceType.vm') : $t('common.instanceType.container') }}
+                    </span>
+                    <span
+                      class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+                      :class="getInstanceNetworkBadgeClass(instance)"
+                    >
+                      {{ $t('common.networkMode.' + getInstanceNetworkMode(instance)) }}
+                    </span>
+                  </div>
+                </div>
+                <div
+                  v-if="(instance as any).packageName"
+                  class="text-xs px-2 py-1 rounded truncate max-w-[180px]"
+                  :class="'bg-themed-secondary text-themed-muted'"
+                  :title="(instance as any).packageName"
+                  @click="openInstanceDetail(instance.id)"
+                >
+                  {{ (instance as any).packageName }}
+                </div>
+              </div>
+
+              <div class="space-y-2 text-sm cursor-pointer" @click="openInstanceDetail(instance.id)">
+                <div class="flex items-start justify-between">
+                  <span class="text-themed-muted text-xs mt-0.5">{{ $t('instance.mobileCard.ipAddress') }}</span>
+                  <div class="flex flex-col items-end gap-1">
+                    <template v-if="getIps(instance).length > 0">
+                      <span
+                        v-for="(ipObj, idx) in getIps(instance)"
+                        :key="idx"
+                        class="font-mono text-xs max-w-[220px] break-all text-right"
+                        :class="['text-themed', ipObj.type === 'ipv6' ? 'opacity-75' : '']"
+                        :title="ipObj.ip"
+                      >
+                        {{ ipObj.ip }}
+                      </span>
+                    </template>
+                    <span v-else class="text-themed-muted text-xs">-</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('instance.mobileCard.config') }}</span>
+                  <span
+                    class="text-xs font-mono tabular-nums"
+                    :class="'text-themed'"
+                  >
+                    {{ instance.cpu }}{{ $t('instance.mobileCard.cpuCore') }} / {{ formatMemory(instance.memory) }} / {{ formatDisk(instance.disk) }}
+                  </span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('instance.mobileCard.quota') }}</span>
+                  <span
+                    class="text-xs"
+                    :class="'text-themed'"
+                  >
+                    {{ getInstanceQuotaSummary(instance) }}
+                  </span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('instance.mobileCard.traffic') }}</span>
+                  <span
+                    class="text-xs font-mono tabular-nums"
+                    :class="'text-themed'"
+                  >
+                    <template v-if="(instance as any).monthlyTrafficLimit">
+                      {{ formatBytes(Number((instance as any).monthlyTrafficUsed || 0)) }} / {{ formatBytes(Number((instance as any).monthlyTrafficLimit)) }}
+                    </template>
+                    <template v-else>
+                      {{ formatBytes(Number((instance as any).monthlyTrafficUsed || 0)) }} / {{ $t('instance.mobileCard.unlimited') }}
+                    </template>
+                  </span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('instance.mobileCard.host') }}</span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <FlagIcon :code="(instance as any).host?.country_code || (instance as any).hostCountryCode || 'us'" size="xs" />
+                    <span
+                      class="uppercase text-xs font-medium"
+                      :class="'text-themed'"
+                    >{{ getInstanceHostName(instance) }}</span>
+                  </span>
+                </div>
+                <div v-if="getInstanceHostIpv4Alias(instance)" class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('admin.hosts.ipv4Alias') }}</span>
+                  <span class="max-w-[220px] truncate font-mono text-xs text-themed">{{ getInstanceHostIpv4Alias(instance) }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('instance.expireAt') }}</span>
+                  <span class="text-xs text-right" :title="getInstanceExpiryInfo(instance).title || ''">
+                    <template v-if="getInstanceExpiryInfo(instance).dateText">
+                      <span class="font-mono tabular-nums text-themed-muted">{{ getInstanceExpiryInfo(instance).dateText }}</span>
+                      <span class="mx-1 text-themed-muted">|</span>
+                    </template>
+                    <span class="font-medium" :class="getInstanceExpiryInfo(instance).className">
+                      {{ getInstanceExpiryInfo(instance).remainingText }}
+                    </span>
+                  </span>
+                </div>
+                <div v-if="isAdmin" class="flex items-center justify-between">
+                  <span class="text-themed-muted text-xs">{{ $t('instance.mobileCard.user') }}</span>
+                  <span
+                    class="text-xs"
+                    :class="'text-themed'"
+                  >
+                    {{ (instance as any).username || '-' }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="flex items-center justify-center gap-2 px-4 py-3 border-t"
+              :class="'border-themed bg-themed-secondary'"
+            >
+              <InstanceOrderMenu
+                v-if="canReorderInstances"
+                :actions="INSTANCE_ORDER_ACTIONS"
+                :labels="instanceOrderLabels"
+                :label="$t('instance.order.label')"
+                :disabled-actions="getInstanceOrderDisabledActions(instance.id)"
+                :loading="orderLoading"
+                :dark="themeStore.isDark"
+                align="left"
+                @reorder="reorderInstance(instance, $event)"
+              />
+              <button
+                v-if="canStartInstance(instance)"
+                :disabled="!!actionLoading[instance.id]"
+                class="btn-ghost btn-sm flex-1"
+                @click.stop="handleAction(instance, 'start')"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span class="text-xs">{{ actionLoading[instance.id] === 'start' ? '...' : $t('instance.actions.start') }}</span>
+              </button>
+              <button
+                v-if="instance.status?.toLowerCase() === 'running'"
+                :disabled="!!actionLoading[instance.id]"
+                class="btn-ghost btn-sm flex-1"
+                @click.stop="handleAction(instance, 'stop')"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                </svg>
+                <span class="text-xs">{{ actionLoading[instance.id] === 'stop' ? '...' : $t('instance.actions.stop') }}</span>
+              </button>
+              <button
+                v-if="instance.status?.toLowerCase() === 'running'"
+                :disabled="!!actionLoading[instance.id]"
+                class="btn-ghost btn-sm flex-1"
+                @click.stop="handleAction(instance, 'restart')"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span class="text-xs">{{ actionLoading[instance.id] === 'restart' ? '...' : $t('instance.actions.restart') }}</span>
+              </button>
+              <button
+                v-if="canResetInstanceTraffic(instance)"
+                :disabled="!!actionLoading[instance.id]"
+                class="btn-ghost btn-sm flex-1"
+                @click.stop="openResetTrafficModal(instance)"
+              >
+                <span class="text-xs">{{ actionLoading[instance.id] === 'resetTraffic' ? '...' : $t('admin.hosts.resetTraffic') }}</span>
+              </button>
+              <button
+                v-if="canDeleteInstance(instance)"
+                :disabled="!!actionLoading[instance.id]"
+                class="btn-ghost btn-sm flex-1 text-red-500 hover:text-red-400"
+                @click.stop="handleAction(instance, 'delete')"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span class="text-xs">{{ actionLoading[instance.id] === 'delete' ? '...' : $t('instance.actions.delete') }}</span>
+              </button>
+            </div>
+          </div>
+        </TransitionGroup>
+
+        <TransitionGroup
+          name="instance-card-order"
+          tag="div"
+          class="hidden sm:grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3"
+        >
+          <article
+            v-for="instance in instances"
+            :key="instance.id"
+            class="kawaii-instance-card kawaii-instance-cloud-card group relative min-w-0 rounded-2xl border p-4 shadow-sm transition-[border-color,box-shadow,transform] duration-200"
+            :class="[
+              instance.status?.toLowerCase() === 'creating' ? 'creating-card' : '',
+              recentlyOrderedInstanceId === instance.id ? (themeStore.isDark ? 'is-order-feedback-dark' : 'is-order-feedback-light') : '',
+              selectedIds.has(instance.id) ? ('ring-1 ring-primary-500/40') : '',
+              'border-themed bg-themed-surface hover:border-primary-500/40'
+            ]"
+          >
+            <div class="flex items-start justify-between gap-4">
+              <button type="button" class="min-w-0 flex-1 text-left" @click="openInstanceDetail(instance.id)">
+                <h2
+                  class="truncate text-xl font-semibold leading-7 text-themed"
+                  :title="instance.name"
+                >
+                  {{ instance.name }}
+                </h2>
+                <div class="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+                  <span :class="['inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[11px]', getStatusInfo(instance.status, t).class]">
+                    {{ getStatusInfo(instance.status, t).label }}
+                  </span>
+                  <span class="inline-flex min-w-0 items-center gap-1.5 text-sm" :class="'text-themed-muted'">
+                    <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M2.25 12s3.75-6.75 9.75-6.75S21.75 12 21.75 12 18 18.75 12 18.75 2.25 12 2.25 12z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span class="truncate font-mono">{{ getPrimaryIp(instance) }}</span>
+                  </span>
+                  <span
+                    class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+                    :class="getInstanceTypeBadgeClass(instance)"
+                  >
+                    {{ (instance as any).instanceType === 'vm' ? $t('common.instanceType.vm') : $t('common.instanceType.container') }}
+                  </span>
+                  <span
+                    class="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium"
+                    :class="getInstanceNetworkBadgeClass(instance)"
+                  >
+                    {{ $t('common.networkMode.' + getInstanceNetworkMode(instance)) }}
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors"
+                :class="selectedIds.has(instance.id)
+                  ? 'border-accent bg-accent text-white dark:text-black'
+                  : 'border-themed bg-themed-surface text-transparent hover:border-primary-500/50'"
+                :aria-pressed="selectedIds.has(instance.id)"
+                @click.stop="toggleSelect(instance.id)"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+            </div>
+
+            <dl class="mt-3 grid grid-cols-[86px_minmax(0,1fr)] gap-y-1.5 text-[14px] leading-6">
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.card.region') }}</dt>
+              <dd class="min-w-0 truncate" :class="'text-themed-muted'">
+                <FlagIcon :code="getInstanceRegionCode(instance)" size="xs" class="mr-1 inline-flex align-[-1px]" />
+                {{ getInstanceRegionLabel(instance) }}
+              </dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.host') }}</dt>
+              <dd class="min-w-0" :class="'text-themed-muted'">
+                <div class="truncate">{{ getInstanceHostName(instance) }}</div>
+                <div v-if="getInstanceHostIpv4Alias(instance)" class="truncate font-mono text-xs text-themed-faint">{{ $t('admin.hosts.ipv4Alias') }}: {{ getInstanceHostIpv4Alias(instance) }}</div>
+              </dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.package') }}</dt>
+              <dd class="min-w-0 truncate" :class="'text-themed-muted'" :title="getInstancePlanName(instance)">
+                {{ getInstancePlanName(instance) }}
+              </dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.config') }}</dt>
+              <dd class="min-w-0 truncate font-mono tabular-nums" :class="'text-themed-muted'">{{ getInstanceConfigSummary(instance) }}</dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.quotaLabel') }}</dt>
+              <dd class="min-w-0 truncate font-mono tabular-nums" :class="'text-themed-muted'">{{ getInstanceQuotaSummary(instance) }}</dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.card.network') }}</dt>
+              <dd class="min-w-0 truncate" :class="'text-themed-muted'" :title="getInstanceNetworkSummary(instance)">
+                {{ getInstanceNetworkSummary(instance) }}
+              </dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.trafficLabel') }}</dt>
+              <dd class="min-w-0 truncate font-mono tabular-nums" :class="'text-themed-muted'">{{ getInstanceTrafficUsage(instance) }}</dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.card.trafficReset') }}</dt>
+              <dd class="min-w-0 truncate font-mono tabular-nums text-themed">{{ getInstanceResetTrafficPrice(instance) }}</dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.card.price') }}</dt>
+              <dd class="min-w-0 truncate font-mono tabular-nums text-themed">{{ getInstanceMonthlyPrice(instance) }}</dd>
+
+              <dt class="font-semibold" :class="'text-themed'">{{ $t('instance.expireAt') }}</dt>
+              <dd class="min-w-0 truncate font-mono tabular-nums" :class="'text-themed-muted'">
+                {{ getInstanceExpiryInfo(instance).dateText || '-' }}
+              </dd>
+
+              <dt class="font-semibold" :class="'text-themed'">
+                <span class="inline-flex items-center gap-1">
+                  {{ $t('instance.card.autoRenew') }}
+                  <svg class="h-3.5 w-3.5 text-themed-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                </span>
+              </dt>
+              <dd>
+                <button
+                  type="button"
+                  class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="(instance as any).autoRenew
+                    ? 'bg-primary-600'
+                    : (themeStore.isDark ? 'bg-gray-700' : 'bg-gray-300')"
+                  :disabled="!canUseInstanceBillingAction(instance) || !!actionLoading[instance.id]"
+                  :aria-pressed="!!(instance as any).autoRenew"
+                  @click.stop="handleSingleAutoRenew(instance, !(instance as any).autoRenew)"
+                >
+                  <span
+                    class="inline-block h-5 w-5 rounded-full bg-white shadow transition-transform"
+                    :class="(instance as any).autoRenew ? 'translate-x-5' : 'translate-x-0.5'"
+                  ></span>
+                </button>
+              </dd>
+            </dl>
+
+            <div class="mt-4 flex items-center justify-between gap-3">
+              <div class="inline-flex min-w-0 items-center gap-2">
+                <span :class="['h-5 w-5 rounded-full border-4 border-themed', getStatusInfo(instance.status, t).dot]"></span>
+                <span class="truncate text-sm font-semibold" :class="getInstanceStatusTextClass(instance)">{{ getStatusInfo(instance.status, t).label }}</span>
+              </div>
+
+              <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <InstanceOrderMenu
+                  v-if="canReorderInstances"
+                  :actions="INSTANCE_ORDER_ACTIONS"
+                  :labels="instanceOrderLabels"
+                  :label="$t('instance.order.label')"
+                  :disabled-actions="getInstanceOrderDisabledActions(instance.id)"
+                  :loading="orderLoading"
+                  :dark="themeStore.isDark"
+                  align="right"
+                  @reorder="reorderInstance(instance, $event)"
+                />
+                <button
+                  type="button"
+                  class="kawaii-action-button inline-flex h-8 items-center justify-center rounded-md px-4 text-sm font-medium transition-colors"
+                  :class="'bg-themed-secondary text-themed'"
+                  @click.stop="openInstanceDetail(instance.id)"
+                >
+                  {{ $t('instance.card.manage') }}
+                </button>
+                <button
+                  type="button"
+                  class="kawaii-action-button inline-flex h-8 items-center justify-center rounded-md px-4 text-sm font-medium transition-colors"
+                  :class="'bg-themed-secondary text-themed'"
+                  @click.stop="openInstanceTransfer(instance)"
+                >
+                  {{ $t('instance.card.push') }}
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex h-8 items-center justify-center rounded-md bg-accent px-4 text-sm font-medium text-white dark:text-black transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:bg-gray-400"
+                  :disabled="!canUseInstanceBillingAction(instance) || !!actionLoading[instance.id]"
+                  @click.stop="openSingleRenewModal(instance)"
+                >
+                  {{ $t('instance.card.renew') }}
+                </button>
+                <button
+                  v-if="canResetInstanceTraffic(instance)"
+                  type="button"
+                  class="kawaii-action-button inline-flex h-8 items-center justify-center rounded-md px-4 text-sm font-medium transition-colors"
+                  :class="'bg-themed-secondary text-themed'"
+                  :disabled="!!actionLoading[instance.id]"
+                  @click.stop="openResetTrafficModal(instance)"
+                >
+                  {{ actionLoading[instance.id] === 'resetTraffic' ? '...' : $t('admin.hosts.resetTraffic') }}
+                </button>
+              </div>
+            </div>
+          </article>
+        </TransitionGroup>
+      </div>
+    </template>
+
+    <div v-if="!loading && instances.length > 0" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm text-themed-muted">
+      <span class="tabular-nums">{{ $t('instance.totalRecords', { count: total }) }} · {{ page }} / {{ totalPages }}</span>
+      <div class="flex items-center gap-2">
+        <button
+          :disabled="page <= 1"
+          class="btn-ghost btn-sm"
+          @click="goToPage(page - 1)"
+        >
+          {{ $t('common.prevPage') }}
+        </button>
+        <span class="w-20 text-center font-mono tabular-nums">{{ page }} / {{ totalPages }}</span>
+        <button
+          :disabled="page >= totalPages"
+          class="btn-ghost btn-sm"
+          @click="goToPage(page + 1)"
+        >
+          {{ $t('common.nextPage') }}
+        </button>
+      </div>
+    </div>
+
+    <Teleport to="body">
+      <div
+        v-if="showResetTrafficModal && resetTrafficTarget"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        @click.self="closeResetTrafficModal()"
+      >
+        <div class="absolute inset-0 bg-black/60" @click="closeResetTrafficModal()"></div>
+        <div
+          class="relative w-full max-w-md rounded-2xl p-5 shadow-2xl"
+          :class="'bg-themed-surface border border-themed'"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h3 class="text-lg font-semibold" :class="'text-themed'">
+                {{ $t('admin.hosts.resetTrafficTitle') }}
+              </h3>
+              <p class="mt-1 text-sm text-themed-muted">
+                {{ $t('admin.hosts.resetTrafficDesc', { instance: resetTrafficTarget.name }) }}
+              </p>
+            </div>
+            <button class="p-1 rounded hover:bg-gray-500/20" :disabled="resetTrafficSubmitting" @click="closeResetTrafficModal()">
+              <svg class="w-5 h-5" :class="'text-themed-muted'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="mt-4 space-y-2 rounded-xl border p-4 text-sm" :class="'border-themed bg-themed-secondary'">
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-themed-muted">{{ $t('instance.trafficLabel') }}</span>
+              <span :class="'text-themed'">{{ getInstanceTrafficUsage(resetTrafficTarget) }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-themed-muted">{{ $t('instance.card.trafficReset') }}</span>
+              <span class="text-themed">{{ getInstanceResetTrafficPrice(resetTrafficTarget) }}</span>
+            </div>
+          </div>
+
+          <p class="mt-4 text-sm text-yellow-600 dark:text-yellow-400">
+            {{ $t('admin.hosts.resetTrafficWarning') }}
+          </p>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              class="btn-ghost btn-sm"
+              :disabled="resetTrafficSubmitting"
+              @click="closeResetTrafficModal()"
+            >
+              {{ $t('common.cancel') }}
+            </button>
+            <button
+              type="button"
+              class="btn-primary btn-sm"
+              :disabled="resetTrafficSubmitting"
+              @click="confirmResetTraffic()"
+            >
+              {{ resetTrafficSubmitting ? '...' : $t('admin.hosts.resetTraffic') }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="!isAdminEntry && showBatchRenewModal"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        @click.self="closeBatchRenewModal()"
+      >
+        <div class="absolute inset-0 bg-black/60" @click="closeBatchRenewModal()"></div>
+        <div
+          class="relative w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl shadow-2xl flex flex-col"
+          :class="'bg-themed-surface border border-themed'"
+        >
+          <div class="flex items-center justify-between px-5 py-4 border-b" :class="'border-themed'">
+            <div>
+              <h3 class="text-lg font-semibold" :class="'text-themed'">
+                {{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchRenewTitle : $t('instance.batch.renewTitle') }}
+              </h3>
+              <p class="text-sm text-themed-muted mt-1">{{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchRenewDescription : $t('instance.batch.renewDescription') }}</p>
+            </div>
+            <button class="p-1 rounded hover:bg-gray-500/20" @click="closeBatchRenewModal()">
+              <svg class="w-5 h-5" :class="'text-themed-muted'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-5 space-y-4">
+            <div v-if="batchRenewLoading" class="flex items-center justify-center py-12">
+              <svg class="w-8 h-8 animate-spin text-primary-500" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+            </div>
+
+            <template v-else>
+              <div class="grid gap-3 md:grid-cols-4">
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ $t('instance.batch.selectedCount', { count: selectedCount }) }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums" :class="'text-themed'">{{ selectedCount }}</div>
+                </div>
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ $t('instance.batch.eligibleCount') }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums text-emerald-500">{{ batchRenewEligibleItems.length }}</div>
+                </div>
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchTotalAmount : $t('instance.batch.totalAmount') }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums" :class="'text-themed'">{{ formatCurrency(batchRenewTotal) }}</div>
+                </div>
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchBalanceAfter : $t('billing.balanceAfterRenew') }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums" :class="batchRenewInsufficientBalance ? 'text-red-500' : 'text-primary-600 dark:text-primary-400'">{{ formatCurrency(batchRenewBalanceAfter) }}</div>
+                </div>
+              </div>
+
+              <div v-if="batchRenewMonthOptions.length > 0" class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                <div class="text-sm font-medium" :class="'text-themed'">{{ $t('instance.batch.selectedMonths') }}</div>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button
+                    v-for="months in batchRenewMonthOptions"
+                    :key="months"
+                    class="px-3 py-2 rounded-lg border text-sm transition-colors"
+                    :class="months === batchRenewMonths
+                      ? 'border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-300'
+                      : 'border-themed text-themed-muted hover:border-primary-500/40 hover:text-themed'"
+                    @click="batchRenewMonths = months"
+                  >
+                    {{ getBatchRenewMonthsLabel(months) }}
+                  </button>
+                </div>
+              </div>
+
+              <div
+                v-else
+                class="rounded-xl border p-4 text-sm"
+                :class="themeStore.isDark ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300' : 'border-yellow-200 bg-yellow-50 text-yellow-700'"
+              >
+                {{ $t('instance.batch.renewEmpty') }}
+              </div>
+
+              <div
+                v-if="batchRenewInsufficientBalance"
+                class="rounded-xl border p-4 text-sm"
+                :class="themeStore.isDark ? 'border-red-500/20 bg-red-500/10 text-red-300' : 'border-red-200 bg-red-50 text-red-700'"
+              >
+                {{ $t('billing.insufficientBalance') }}
+                <RouterLink :to="walletPath()" class="underline ml-1">{{ $t('billing.goRecharge') }}</RouterLink>
+              </div>
+
+              <div class="rounded-xl border p-4" :class="'border-themed bg-themed-surface'">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                  <h4 class="text-sm font-medium" :class="'text-themed'">
+                    {{ $t('instance.batch.eligibleList', { count: batchRenewEligibleItems.length }) }}
+                  </h4>
+                  <span class="text-xs text-themed-muted">{{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchCurrentBalance : $t('billing.currentBalance') }}: {{ formatCurrency(batchRenewBalance.balance) }}</span>
+                </div>
+                <div v-if="batchRenewEligibleItems.length > 0" class="space-y-3 max-h-64 overflow-y-auto pr-1">
+                  <div
+                    v-for="item in batchRenewEligibleItems"
+                    :key="item.id"
+                    class="rounded-xl border px-3 py-3"
+                    :class="'border-themed bg-themed-secondary'"
+                  >
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <div class="text-sm font-medium truncate" :class="'text-themed'">{{ item.name }}</div>
+                        <div class="mt-1 flex flex-wrap gap-2 text-xs">
+                          <span class="inline-flex items-center rounded-full px-2 py-0.5" :class="'bg-themed-secondary text-themed'">
+                            {{ item.autoRenew ? $t('billing.autoRenewEnabled') : $t('billing.autoRenewDisabled') }}
+                          </span>
+                          <span
+                            v-if="item.isHostedInstance"
+                            class="inline-flex items-center rounded-full px-2 py-0.5"
+                            :class="'bg-primary-500/10 text-primary-600 dark:text-primary-300'"
+                          >
+                            {{ $t('instance.batch.hosted') }}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="text-right shrink-0">
+                        <div class="text-sm font-semibold font-mono tabular-nums text-emerald-500">{{ formatCurrency(item.selectedOption?.discountedPrice) }}</div>
+                        <div class="text-xs text-themed-muted">{{ formatDate(item.selectedOption?.expiresAt) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="text-sm text-themed-muted">{{ $t('instance.batch.renewEmpty') }}</div>
+              </div>
+
+              <div
+                v-if="batchRenewIneligibleItems.length > 0"
+                class="rounded-xl border p-4"
+                :class="'border-themed bg-themed-surface'"
+              >
+                <h4 class="text-sm font-medium mb-3" :class="'text-themed'">
+                  {{ $t('instance.batch.skippedList', { count: batchRenewIneligibleItems.length }) }}
+                </h4>
+                <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  <div
+                    v-for="item in batchRenewIneligibleItems"
+                    :key="`renew-skip-${item.id}`"
+                    class="rounded-lg border px-3 py-2"
+                    :class="'border-themed bg-themed-secondary'"
+                  >
+                    <div class="text-sm font-medium" :class="'text-themed'">{{ item.name }}</div>
+                    <div class="mt-1 text-xs" :class="themeStore.isDark ? 'text-red-300' : 'text-red-600'">
+                      {{ translateBatchReason(item.reason || (item.canRenew ? '该实例不支持当前续费时长' : undefined)) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="flex items-center justify-between gap-3 px-5 py-4 border-t" :class="'border-themed'">
+            <span class="text-xs text-themed-muted">{{ $t('instance.batch.currentPageOnly') }}</span>
+            <div class="flex items-center gap-2">
+              <button class="btn-ghost btn-sm" :disabled="batchRenewSubmitting" @click="closeBatchRenewModal()">
+                {{ $t('common.cancel') }}
+              </button>
+              <button class="btn-primary btn-sm" :disabled="!batchRenewCanSubmit" @click="confirmBatchRenew">
+                <svg v-if="batchRenewSubmitting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                {{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchRenewAction : $t('instance.batch.renew') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="!isAdminEntry && showBatchDestroyModal"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        @click.self="closeBatchDestroyModal()"
+      >
+        <div class="absolute inset-0 bg-black/60" @click="closeBatchDestroyModal()"></div>
+        <div
+          class="relative w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl shadow-2xl flex flex-col"
+          :class="'bg-themed-surface border border-themed'"
+        >
+          <div class="flex items-center justify-between px-5 py-4 border-b" :class="'border-themed'">
+            <div>
+              <h3 class="text-lg font-semibold" :class="'text-themed'">
+                {{ $t('instance.batch.destroyTitle') }}
+              </h3>
+              <p class="text-sm text-themed-muted mt-1">{{ $t('instance.batch.destroyDescription') }}</p>
+            </div>
+            <button class="p-1 rounded hover:bg-gray-500/20" @click="closeBatchDestroyModal()">
+              <svg class="w-5 h-5" :class="'text-themed-muted'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-5 space-y-4">
+            <div v-if="batchDestroyLoading" class="flex items-center justify-center py-12">
+              <svg class="w-8 h-8 animate-spin text-red-500" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+            </div>
+
+            <template v-else>
+              <div class="rounded-xl border p-4" :class="themeStore.isDark ? 'border-red-500/20 bg-red-500/10' : 'border-red-200 bg-red-50'">
+                <div class="flex items-start gap-3">
+                  <svg class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <p class="text-sm font-medium" :class="themeStore.isDark ? 'text-red-200' : 'text-red-700'">
+                    {{ $t('instance.destroy.warning') }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid gap-3 md:grid-cols-4">
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ $t('instance.batch.selectedCount', { count: selectedCount }) }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums" :class="'text-themed'">{{ selectedCount }}</div>
+                </div>
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ $t('instance.batch.eligibleCount') }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums text-emerald-500">{{ batchDestroyEligibleItems.length }}</div>
+                </div>
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ $t('instance.batch.refundTotal') }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums text-emerald-500">{{ formatCurrency(batchDestroyTotalRefund) }}</div>
+                </div>
+                <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                  <div class="text-xs uppercase tracking-wide text-themed-muted">{{ $t('instance.batch.feeTotal') }}</div>
+                  <div class="mt-2 text-2xl font-semibold font-mono tabular-nums" :class="'text-themed'">{{ formatCurrency(batchDestroyTotalFee) }}</div>
+                </div>
+              </div>
+
+              <div
+                v-if="batchDestroyEligibleItems.length === 0"
+                class="rounded-xl border p-4 text-sm"
+                :class="themeStore.isDark ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300' : 'border-yellow-200 bg-yellow-50 text-yellow-700'"
+              >
+                {{ $t('instance.batch.destroyEmpty') }}
+              </div>
+
+              <div class="rounded-xl border p-4" :class="'border-themed bg-themed-surface'">
+                <h4 class="text-sm font-medium mb-3" :class="'text-themed'">
+                  {{ $t('instance.batch.eligibleList', { count: batchDestroyEligibleItems.length }) }}
+                </h4>
+                <div v-if="batchDestroyEligibleItems.length > 0" class="space-y-3 max-h-64 overflow-y-auto pr-1">
+                  <div
+                    v-for="item in batchDestroyEligibleItems"
+                    :key="item.id"
+                    class="rounded-xl border px-3 py-3"
+                    :class="'border-themed bg-themed-secondary'"
+                  >
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <div class="text-sm font-medium truncate" :class="'text-themed'">{{ item.name }}</div>
+                        <div class="mt-1 text-xs text-themed-muted">
+                          {{ item.instance.hostName }} · {{ item.instance.planName || $t('billing.freeInstance') }}
+                        </div>
+                        <div class="mt-2 flex flex-wrap gap-2 text-xs">
+                          <span class="inline-flex items-center rounded-full px-2 py-0.5" :class="'bg-themed-secondary text-themed'">
+                            {{ item.isFreeInstance ? $t('billing.freeInstance') : $t('billing.paidInstance') }}
+                          </span>
+                          <span
+                            v-if="!item.isFreeInstance && item.isFirstTime"
+                            class="inline-flex items-center rounded-full px-2 py-0.5"
+                            :class="themeStore.isDark ? 'bg-emerald-500/10 text-emerald-300' : 'bg-emerald-50 text-emerald-700'"
+                          >
+                            {{ $t('instance.destroy.firstTimeFree') }}
+                          </span>
+                          <span
+                            v-else-if="!item.isFreeInstance && item.feeWaiverEligible"
+                            class="inline-flex items-center rounded-full px-2 py-0.5"
+                            :class="themeStore.isDark ? 'bg-emerald-500/10 text-emerald-300' : 'bg-emerald-50 text-emerald-700'"
+                          >
+                            {{ $t('instance.batch.feeWaived') }}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="text-right shrink-0">
+                        <div class="text-sm font-semibold font-mono tabular-nums text-emerald-500">{{ formatCurrency(item.refund.refundAmount) }}</div>
+                        <div class="text-xs text-themed-muted">{{ $t('instance.destroy.feeAmount') }} {{ formatCurrency(item.refund.feeAmount) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="text-sm text-themed-muted">{{ $t('instance.batch.destroyEmpty') }}</div>
+              </div>
+
+              <div
+                v-if="batchDestroyIneligibleItems.length > 0"
+                class="rounded-xl border p-4"
+                :class="'border-themed bg-themed-surface'"
+              >
+                <h4 class="text-sm font-medium mb-3" :class="'text-themed'">
+                  {{ $t('instance.batch.skippedList', { count: batchDestroyIneligibleItems.length }) }}
+                </h4>
+                <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  <div
+                    v-for="item in batchDestroyIneligibleItems"
+                    :key="`destroy-skip-${item.id}`"
+                    class="rounded-lg border px-3 py-2"
+                    :class="'border-themed bg-themed-secondary'"
+                  >
+                    <div class="text-sm font-medium" :class="'text-themed'">{{ item.name }}</div>
+                    <div class="mt-1 text-xs" :class="themeStore.isDark ? 'text-red-300' : 'text-red-600'">
+                      {{ item.cannotDestroyReason ? translateBatchReason(item.cannotDestroyReason) : $t('instance.destroy.cannotDestroy') }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-xl border p-4" :class="'border-themed bg-themed-secondary'">
+                <label class="block text-sm font-medium mb-2" :class="'text-themed'">
+                  {{ $t('instance.batch.confirmHint') }}
+                </label>
+                <input
+                  v-model="batchDestroyConfirm"
+                  type="text"
+                  class="input w-full"
+                  :placeholder="$t('instance.batch.confirmPlaceholder')"
+                />
+              </div>
+            </template>
+          </div>
+
+          <div class="flex items-center justify-between gap-3 px-5 py-4 border-t" :class="'border-themed'">
+            <span class="text-xs text-themed-muted">{{ $t('instance.batch.currentPageOnly') }}</span>
+            <div class="flex items-center gap-2">
+              <button class="btn-ghost btn-sm" :disabled="batchDestroySubmitting" @click="closeBatchDestroyModal()">
+                {{ $t('common.cancel') }}
+              </button>
+              <button
+                class="btn-sm text-white"
+                :class="themeStore.isDark ? 'bg-red-500/80 hover:bg-red-500 disabled:bg-red-500/40' : 'bg-red-500 hover:bg-red-600 disabled:bg-red-300'"
+                :disabled="!batchDestroyCanSubmit"
+                @click="confirmBatchDestroy"
+              >
+                <svg v-if="batchDestroySubmitting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                {{ $t('instance.batch.destroy') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+  </div>
+</template>
+
+<style scoped>
+.instance-table-order-move,
+.instance-stack-order-move,
+.instance-card-order-move {
+  transition:
+    transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 520ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 520ms ease,
+    border-color 520ms ease;
+}
+
+.is-order-feedback-light {
+  background-color: rgb(249 250 251);
+  box-shadow: 0 10px 28px rgb(15 23 42 / 0.08);
+}
+
+.is-order-feedback-dark {
+  background-color: rgb(17 24 39 / 0.82);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instance-table-order-move,
+  .instance-stack-order-move,
+  .instance-card-order-move {
+    transition-duration: 1ms;
+  }
+}
+
+/* Nimbus: interactive card hover-lift (mobile instance stack) */
+.nimbus-card-lift {
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+  will-change: transform;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nimbus-card-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 32px rgb(15 23 42 / 0.12);
+  }
+
+  :global(.dark) .nimbus-card-lift:hover {
+    box-shadow: 0 16px 34px rgb(0 0 0 / 0.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nimbus-card-lift {
+    transition-duration: 1ms;
+  }
+
+  .nimbus-card-lift:hover {
+    transform: none;
+  }
+}
+</style>

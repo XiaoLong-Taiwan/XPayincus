@@ -1,0 +1,705 @@
+/**
+ * 用户余额相关数据库操作
+ * 使用 Prisma ORM
+ */
+
+import { prisma } from './prisma.js'
+import {
+  Prisma,
+  type BalanceAdjustmentRequest,
+  type BalanceAdjustmentRequestStatus,
+  type BalanceAdjustmentRequestType,
+  type BalanceLog,
+  type BalanceLogType
+} from '@prisma/client'
+import { USER_BALANCE_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from './advisory-locks.js'
+
+type BalanceQueryClient = typeof prisma | Prisma.TransactionClient
+const BALANCE_LOG_TYPES = new Set<BalanceLogType>([
+  'recharge',
+  'consume',
+  'refund',
+  'admin_adjust',
+  'gift',
+  'transfer_fee',
+  'transfer_refund',
+  'hosting_withdraw',
+  'hosting_deduction',
+  'invite_generate'
+])
+const MAX_BALANCE_AMOUNT = 99999999.99
+
+function toNumber(value: unknown): number {
+  if (value === null || value === undefined) return 0
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : 0
+}
+
+function normalizeBalanceAmount(value: number): number {
+  if (!Number.isFinite(value)) {
+    throw new Error('余额变动金额无效')
+  }
+
+  const normalized = Number(value.toFixed(2))
+  if (normalized === 0 || Math.abs(normalized) > MAX_BALANCE_AMOUNT) {
+    throw new Error('余额变动金额无效')
+  }
+
+  return normalized
+}
+
+function clampPagination(
+  page: number | undefined,
+  pageSize: number | undefined,
+  fallbackPageSize: number = 20,
+  maxPageSize: number = 100
+): { page: number; pageSize: number } {
+  return {
+    page: Number.isInteger(page) && page !== undefined && page > 0 ? page : 1,
+    pageSize: Number.isInteger(pageSize) && pageSize !== undefined
+      ? Math.min(Math.max(pageSize, 1), maxPageSize)
+      : fallbackPageSize
+  }
+}
+
+function normalizeBalanceLogType(type: BalanceLogType | undefined): BalanceLogType | undefined {
+  return type && BALANCE_LOG_TYPES.has(type) ? type : undefined
+}
+
+// ==================== 余额查询 ====================
+
+/**
+ * 获取用户余额
+ */
+export async function getUserBalance(userId: number): Promise<number> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { balance: true }
+  })
+  return user ? Number(user.balance) : 0
+}
+
+// 余额日志带实例信息的类型
+export type BalanceLogWithInstance = BalanceLog & {
+  instance?: { id: number; name: string } | null
+}
+
+/**
+ * 获取用户余额变动日志（分页）
+ * 包含关联的实例名称
+ * @param lotteryGift - 'exclude' 排除抽奖赠送记录（默认）, 'only' 仅显示抽奖赠送记录, undefined 显示全部
+ */
+export async function getBalanceLogs(
+  userId: number,
+  options: {
+    page?: number
+    pageSize?: number
+    type?: BalanceLogType
+    lotteryGift?: 'exclude' | 'only'
+  } = {}
+): Promise<{
+  logs: BalanceLogWithInstance[]
+  total: number
+  page: number
+  pageSize: number
+}> {
+  const { page, pageSize } = clampPagination(options.page, options.pageSize)
+  const type = normalizeBalanceLogType(options.type)
+  const { lotteryGift } = options
+  const skip = (page - 1) * pageSize
+
+  // 构建查询条件
+  const where: Prisma.BalanceLogWhereInput = {
+    userId,
+    ...(type ? { type } : {})
+  }
+
+  // 处理抽奖赠送筛选（抽奖赠送特征：type='gift' AND remark 包含 '抽奖中奖'）
+  if (lotteryGift === 'exclude') {
+    // 排除抽奖赠送：NOT (type='gift' AND remark contains '抽奖中奖')
+    where.NOT = {
+      type: 'gift',
+      remark: { contains: '抽奖中奖' }
+    }
+  } else if (lotteryGift === 'only') {
+    // 仅抽奖赠送
+    where.type = 'gift'
+    where.remark = { contains: '抽奖中奖' }
+  }
+
+  const [logs, total] = await Promise.all([
+    prisma.balanceLog.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: pageSize
+    }),
+    prisma.balanceLog.count({ where })
+  ])
+
+  // 查询关联的实例信息
+  const instanceIds = logs.filter(l => l.instanceId).map(l => l.instanceId!) as number[]
+  const instances = instanceIds.length > 0
+    ? await prisma.instance.findMany({
+        where: { id: { in: instanceIds } },
+        select: { id: true, name: true }
+      })
+    : []
+  const instanceMap = new Map(instances.map(i => [i.id, i]))
+
+  // 合并实例信息
+  const logsWithInstance: BalanceLogWithInstance[] = logs.map(log => ({
+    ...log,
+    instance: log.instanceId ? instanceMap.get(log.instanceId) || null : null
+  }))
+
+  return { logs: logsWithInstance, total, page, pageSize }
+}
+
+// ==================== 余额变动操作（事务安全） ====================
+
+export interface BalanceChangeInput {
+  userId: number
+  type: BalanceLogType
+  amount: number // 正数=增加，负数=减少
+  orderId?: string
+  instanceId?: number
+  remark?: string
+}
+
+export interface BalanceChangeResult {
+  success: boolean
+  balanceLog?: BalanceLog
+  newBalance?: number
+  error?: string
+}
+
+export type BalanceAdjustmentRequestWithRelations = BalanceAdjustmentRequest & {
+  user: { id: number; username: string; email: string | null }
+  requestedBy: { id: number; username: string }
+  reviewedBy?: { id: number; username: string } | null
+  balanceLog?: BalanceLog | null
+}
+
+export interface BalanceAdjustmentRequestInput {
+  userId: number
+  requestedByUserId: number
+  amount: number
+  requestType: BalanceAdjustmentRequestType
+  reason: string
+  sourceType?: string
+  sourceId?: number
+  orderNo?: string
+}
+
+export interface BalanceAdjustmentRequestListOptions {
+  page?: number
+  pageSize?: number
+  status?: BalanceAdjustmentRequestStatus
+  userId?: number
+}
+
+async function changeBalanceInTransaction(
+  tx: Prisma.TransactionClient,
+  input: BalanceChangeInput
+): Promise<{ balanceLog: BalanceLog; newBalance: number }> {
+  const { userId, type, amount, orderId, instanceId, remark } = input
+  const normalizedAmount = normalizeBalanceAmount(amount)
+
+  const locked = await tryAdvisoryTransactionLock(tx, USER_BALANCE_LOCK_NAMESPACE, userId)
+  if (!locked) {
+    throw new Error('余额正在处理，请稍后重试')
+  }
+
+  const user = await tx.user.findUnique({
+    where: { id: userId },
+    select: { balance: true }
+  })
+
+  if (!user) {
+    throw new Error('用户不存在')
+  }
+
+  const balanceBefore = Number(user.balance)
+  const balanceAfter = Number((balanceBefore + normalizedAmount).toFixed(2))
+
+  if (normalizedAmount < 0 && balanceAfter < 0) {
+    throw new Error('余额不足')
+  }
+
+  if (Math.abs(balanceAfter) > MAX_BALANCE_AMOUNT) {
+    throw new Error('余额超出系统允许范围')
+  }
+
+  const updateResult = await tx.user.updateMany({
+    where: {
+      id: userId,
+      ...(normalizedAmount < 0 ? { balance: { gte: Math.abs(normalizedAmount) } } : {})
+    },
+    data: { balance: { increment: normalizedAmount } }
+  })
+
+  if (updateResult.count === 0) {
+    throw new Error('余额不足或并发冲突')
+  }
+
+  const updatedUser = await tx.user.findUnique({
+    where: { id: userId },
+    select: { balance: true }
+  })
+
+  if (!updatedUser) {
+    throw new Error('用户不存在')
+  }
+
+  const persistedBalanceAfter = Number(updatedUser.balance)
+
+  const balanceLog = await tx.balanceLog.create({
+    data: {
+      userId,
+      type,
+      amount: normalizedAmount,
+      balanceBefore,
+      balanceAfter: persistedBalanceAfter,
+      orderId,
+      instanceId,
+      remark
+    }
+  })
+
+  return { balanceLog, newBalance: persistedBalanceAfter }
+}
+
+/**
+ * 变更用户余额（事务安全）
+ * 所有余额变动都应该通过这个函数进行，确保日志记录和数据一致性
+ */
+export async function changeBalance(
+  input: BalanceChangeInput
+): Promise<BalanceChangeResult> {
+  try {
+    const result = await prisma.$transaction((tx) => changeBalanceInTransaction(tx, input))
+
+    return {
+      success: true,
+      balanceLog: result.balanceLog,
+      newBalance: result.newBalance
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '余额变动失败'
+    }
+  }
+}
+
+function includeBalanceAdjustmentRequestRelations() {
+  return {
+    user: { select: { id: true, username: true, email: true } },
+    requestedBy: { select: { id: true, username: true } },
+    reviewedBy: { select: { id: true, username: true } },
+    balanceLog: true
+  } satisfies Prisma.BalanceAdjustmentRequestInclude
+}
+
+export async function createBalanceAdjustmentRequest(
+  input: BalanceAdjustmentRequestInput
+): Promise<BalanceAdjustmentRequestWithRelations> {
+  const amount = normalizeBalanceAmount(input.amount)
+
+  return prisma.balanceAdjustmentRequest.create({
+    data: {
+      userId: input.userId,
+      requestedByUserId: input.requestedByUserId,
+      amount,
+      requestType: input.requestType,
+      reason: input.reason,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      orderNo: input.orderNo
+    },
+    include: includeBalanceAdjustmentRequestRelations()
+  }) as Promise<BalanceAdjustmentRequestWithRelations>
+}
+
+export async function getBalanceAdjustmentRequests(
+  options: BalanceAdjustmentRequestListOptions = {}
+): Promise<{
+  requests: BalanceAdjustmentRequestWithRelations[]
+  total: number
+  page: number
+  pageSize: number
+}> {
+  const { page, pageSize } = clampPagination(options.page, options.pageSize)
+  const skip = (page - 1) * pageSize
+  const where: Prisma.BalanceAdjustmentRequestWhereInput = {
+    ...(options.status ? { status: options.status } : {}),
+    ...(options.userId ? { userId: options.userId } : {})
+  }
+
+  const [requests, total] = await Promise.all([
+    prisma.balanceAdjustmentRequest.findMany({
+      where,
+      include: includeBalanceAdjustmentRequestRelations(),
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: pageSize
+    }),
+    prisma.balanceAdjustmentRequest.count({ where })
+  ])
+
+  return { requests: requests as BalanceAdjustmentRequestWithRelations[], total, page, pageSize }
+}
+
+export async function approveBalanceAdjustmentRequest(
+  requestId: number,
+  reviewerUserId: number,
+  reviewRemark?: string
+): Promise<{ request: BalanceAdjustmentRequestWithRelations; newBalance: number }> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.balanceAdjustmentRequest.findUnique({
+      where: { id: requestId },
+      include: includeBalanceAdjustmentRequestRelations()
+    })
+
+    if (!request) {
+      throw new Error('调账申请不存在')
+    }
+    if (request.status !== 'pending') {
+      throw new Error('调账申请已处理')
+    }
+
+    const claimed = await tx.balanceAdjustmentRequest.updateMany({
+      where: { id: requestId, status: 'pending' },
+      data: {
+        status: 'approved',
+        reviewedByUserId: reviewerUserId,
+        reviewedAt: new Date(),
+        reviewRemark
+      }
+    })
+
+    if (claimed.count !== 1) {
+      throw new Error('调账申请已处理')
+    }
+
+    const isRechargeBalanceReclaim = request.requestType === 'refund' && request.sourceType === 'recharge'
+    const logType: BalanceLogType = request.requestType === 'refund' && Number(request.amount) > 0 && !isRechargeBalanceReclaim
+      ? 'refund'
+      : 'admin_adjust'
+    const balanceChangeAmount = isRechargeBalanceReclaim
+      ? -Math.abs(Number(request.amount))
+      : Number(request.amount)
+    const remark = [
+      `[审批通过] ${request.reason}`,
+      request.orderNo ? `订单 ${request.orderNo}` : '',
+      isRechargeBalanceReclaim ? '充值退款收回余额' : '',
+      reviewRemark ? `审核备注: ${reviewRemark}` : ''
+    ].filter(Boolean).join('；')
+
+    const balanceResult = await changeBalanceInTransaction(tx, {
+      userId: request.userId,
+      type: logType,
+      amount: balanceChangeAmount,
+      orderId: request.orderNo || undefined,
+      remark
+    })
+
+    const updatedRequest = await tx.balanceAdjustmentRequest.update({
+      where: { id: requestId },
+      data: { balanceLogId: balanceResult.balanceLog.id },
+      include: includeBalanceAdjustmentRequestRelations()
+    })
+
+    return {
+      request: updatedRequest as BalanceAdjustmentRequestWithRelations,
+      newBalance: balanceResult.newBalance
+    }
+  })
+}
+
+export async function rejectBalanceAdjustmentRequest(
+  requestId: number,
+  reviewerUserId: number,
+  reviewRemark: string
+): Promise<BalanceAdjustmentRequestWithRelations> {
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.balanceAdjustmentRequest.updateMany({
+      where: { id: requestId, status: 'pending' },
+      data: {
+        status: 'rejected',
+        reviewedByUserId: reviewerUserId,
+        reviewedAt: new Date(),
+        reviewRemark
+      }
+    })
+
+    if (claimed.count !== 1) {
+      throw new Error('调账申请不存在或已处理')
+    }
+
+    const request = await tx.balanceAdjustmentRequest.findUnique({
+      where: { id: requestId },
+      include: includeBalanceAdjustmentRequestRelations()
+    })
+
+    if (!request) {
+      throw new Error('调账申请不存在')
+    }
+
+    return request as BalanceAdjustmentRequestWithRelations
+  })
+}
+
+/**
+ * 充值到账（从充值订单完成）
+ */
+export async function rechargeToBalance(
+  userId: number,
+  amount: number,
+  orderId: string,
+  remark?: string
+): Promise<BalanceChangeResult> {
+  return changeBalance({
+    userId,
+    type: 'recharge',
+    amount,
+    orderId,
+    remark: remark || `充值订单 ${orderId}`
+  })
+}
+
+/**
+ * 消费扣款（开通/续费实例）
+ */
+export async function consumeBalance(
+  userId: number,
+  amount: number,
+  instanceId: number,
+  remark?: string
+): Promise<BalanceChangeResult> {
+  return changeBalance({
+    userId,
+    type: 'consume',
+    amount: -Math.abs(amount), // 确保是负数
+    instanceId,
+    remark
+  })
+}
+
+/**
+ * 退款到余额
+ */
+export async function refundToBalance(
+  userId: number,
+  amount: number,
+  instanceId: number,
+  remark?: string
+): Promise<BalanceChangeResult> {
+  return changeBalance({
+    userId,
+    type: 'refund',
+    amount: Math.abs(amount), // 确保是正数
+    instanceId,
+    remark
+  })
+}
+
+/**
+ * 管理员调整余额
+ */
+export async function adminAdjustBalance(
+  userId: number,
+  amount: number,
+  remark: string
+): Promise<BalanceChangeResult> {
+  return changeBalance({
+    userId,
+    type: 'admin_adjust',
+    amount,
+    remark
+  })
+}
+
+/**
+ * 赠送余额
+ */
+export async function giftBalance(
+  userId: number,
+  amount: number,
+  remark?: string
+): Promise<BalanceChangeResult> {
+  return changeBalance({
+    userId,
+    type: 'gift',
+    amount: Math.abs(amount), // 确保是正数
+    remark
+  })
+}
+
+/**
+ * 获取用户实际消费额（净消费 = 实例消费 − 实例相关退款）。
+ * 历史上部分业务把 consume.amount 写成正数，不能直接 SUM(amount) 再取绝对值，
+ * 因此优先使用余额前后差额，兼容正负号不一致的历史日志。
+ *
+ * 退款按同样口径扣减，但**仅扣减挂了实例的退款**（type='refund' 且 instance_id 非空，
+ * 即实例创建失败自动退款、销毁退款、降级退款等消费冲正）。充值退款、管理员调账退款
+ * （走 type='refund' 但无 instance_id）不计入，避免把与消费无关的退款错误地从消费额中扣掉。
+ * 与实例级的 getInstanceRefundableAmount（消费 − 退款）口径保持一致，
+ * 修复「消费→退款→再消费」时累计消费被重复计数、进而虚高可兑换积分/VIP 等级的问题。
+ */
+export async function getUsersTotalConsumeMap(
+  userIds: number[],
+  client: BalanceQueryClient = prisma
+): Promise<Map<number, number>> {
+  const validUserIds = Array.from(new Set(
+    userIds.filter(id => Number.isInteger(id) && id > 0)
+  ))
+
+  if (validUserIds.length === 0) {
+    return new Map()
+  }
+
+  const rows = await client.$queryRaw<Array<{ userId: number; totalConsume: unknown }>>(Prisma.sql`
+    SELECT
+      user_id AS "userId",
+      GREATEST(COALESCE(SUM(
+        CASE
+          WHEN type = 'consume' THEN
+            CASE WHEN balance_before > balance_after THEN balance_before - balance_after ELSE ABS(amount) END
+          WHEN type = 'refund' THEN
+            -1 * (CASE WHEN balance_after > balance_before THEN balance_after - balance_before ELSE ABS(amount) END)
+          ELSE 0
+        END
+      ), 0), 0)::numeric AS "totalConsume"
+    FROM balance_logs
+    WHERE user_id IN (${Prisma.join(validUserIds)})
+      AND (
+        type = 'consume'
+        OR (type = 'refund' AND instance_id IS NOT NULL)
+      )
+    GROUP BY user_id
+  `)
+
+  return new Map(rows.map(row => [row.userId, toNumber(row.totalConsume)]))
+}
+
+export async function getUserTotalConsume(
+  userId: number,
+  client: BalanceQueryClient = prisma
+): Promise<number> {
+  const consumeMap = await getUsersTotalConsumeMap([userId], client)
+  return consumeMap.get(userId) || 0
+}
+
+// ==================== 检查操作 ====================
+
+/**
+ * 检查用户余额是否足够
+ */
+export async function hasEnoughBalance(
+  userId: number,
+  amount: number
+): Promise<boolean> {
+  const balance = await getUserBalance(userId)
+  return balance >= amount
+}
+
+/**
+ * 获取用户消费统计
+ */
+export async function getUserConsumeStats(userId: number): Promise<{
+  totalRecharge: number
+  totalConsume: number
+  totalRefund: number
+  totalDestroyedValue: number
+}> {
+  const [logs, destroyedRefund, totalConsume] = await Promise.all([
+    prisma.balanceLog.groupBy({
+      by: ['type'],
+      where: { userId },
+      _sum: { amount: true }
+    }),
+    prisma.balanceLog.aggregate({
+      where: {
+        userId,
+        type: 'refund',
+        amount: { gt: 0 },
+        remark: { contains: '用户销毁实例退款' }
+      },
+      _sum: { amount: true }
+    }),
+    getUserTotalConsume(userId)
+  ])
+
+  const stats = {
+    totalRecharge: 0,
+    totalConsume,
+    totalRefund: 0,
+    totalDestroyedValue: destroyedRefund._sum.amount !== null && destroyedRefund._sum.amount !== undefined
+      ? parseFloat(String(destroyedRefund._sum.amount))
+      : 0
+  }
+
+  for (const log of logs) {
+    // 注意：Prisma aggregate 返回的 Decimal 类型需要先转为字符串再转数字
+    const amount = log._sum.amount !== null
+      ? parseFloat(String(log._sum.amount))
+      : 0
+    switch (log.type) {
+      case 'recharge':
+        stats.totalRecharge = amount
+        break
+      case 'refund':
+        stats.totalRefund = amount
+        break
+    }
+  }
+
+  return stats
+}
+
+/**
+ * 获取实例的历史消费总额（用于退款上限计算）
+ */
+export async function getInstanceTotalConsume(instanceId: number): Promise<number> {
+  const result = await prisma.balanceLog.aggregate({
+    where: {
+      instanceId,
+      type: 'consume'
+    },
+    _sum: { amount: true }
+  })
+  // 注意：Prisma aggregate 返回的 Decimal 类型需要先转为字符串再转数字
+  return result._sum.amount !== null
+    ? Math.abs(parseFloat(String(result._sum.amount)))
+    : 0
+}
+
+/**
+ * 获取实例的历史退款总额
+ */
+export async function getInstanceTotalRefund(instanceId: number): Promise<number> {
+  const result = await prisma.balanceLog.aggregate({
+    where: {
+      instanceId,
+      type: 'refund'
+    },
+    _sum: { amount: true }
+  })
+  // 注意：Prisma aggregate 返回的 Decimal 类型需要先转为字符串再转数字
+  return result._sum.amount !== null
+    ? parseFloat(String(result._sum.amount))
+    : 0
+}
+
+/**
+ * 计算实例可退款金额（历史消费 - 已退款）
+ */
+export async function getInstanceRefundableAmount(instanceId: number): Promise<number> {
+  const [totalConsume, totalRefund] = await Promise.all([
+    getInstanceTotalConsume(instanceId),
+    getInstanceTotalRefund(instanceId)
+  ])
+  return Math.max(0, totalConsume - totalRefund)
+}

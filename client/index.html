@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="精选全球多节点 LXC / KVM 套餐，配置丰富、方案齐全，持续提供高性价比 NAT VPS 选择。">
+  <meta name="keywords" content="Incus, NAT VPS, LXC, KVM, VPS 面板, 云服务器, NAT云主机">
+  <meta name="robots" content="index,follow">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta property="og:site_name" content="Incus">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="基于 Incus 的低价 NAT VPS 平台">
+  <meta property="og:description" content="精选全球多节点 LXC / KVM 套餐，配置丰富、方案齐全，持续提供高性价比 NAT VPS 选择。">
+  <meta property="og:image" content="/xpayincus_logo.webp">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="基于 Incus 的低价 NAT VPS 平台">
+  <meta name="twitter:description" content="精选全球多节点 LXC / KVM 套餐，配置丰富、方案齐全，持续提供高性价比 NAT VPS 选择。">
+  <meta name="twitter:image" content="/xpayincus_logo.webp">
+  <link rel="icon" type="image/webp" href="/xpayincus_logo.webp">
+  <link rel="apple-touch-icon" href="/xpayincus_logo.webp">
+  <title>基于 Incus 的低价 NAT VPS 平台</title>
+  <script>
+    (function () {
+      const theme = localStorage.getItem('theme') || 'system';
+      let resolved = theme;
+      if (theme === 'system') {
+        resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      document.documentElement.classList.add(resolved);
+      document.querySelector('meta[name="theme-color"]').setAttribute('content', resolved === 'dark' ? '#000000' : '#f5f5f7');
+    })();
+  </script>
+  <style>
+    html.dark body {
+      background: #000000;
+    }
+
+    html.light body {
+      background: #f5f5f7;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app"></div>
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search)
+      const figmaToken = params.get('figma_token')
+      if (figmaToken) {
+        localStorage.setItem('token', figmaToken)
+      }
+    })()
+  </script>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

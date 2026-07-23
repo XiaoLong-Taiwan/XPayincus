@@ -1,0 +1,19 @@
+[Unit]
+Description=XPayincus online update rollback task %i
+Documentation=https://github.com/XiaoLong-Taiwan/XPayincus
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/xpayincus
+EnvironmentFile=/opt/xpayincus/.env
+Environment=HOME=/var/cache/xpayincus-ota
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/libexec/xpayincus/xpayincus-online-task rollback %i
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xpayincus-online-rollback

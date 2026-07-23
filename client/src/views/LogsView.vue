@@ -1,0 +1,611 @@
+<script setup lang="ts">
+import { computed, ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useThemeStore } from '@/stores/theme'
+import { useAuthStore } from '@/stores/auth'
+import api, { type RiskOperationDefinition } from '@/api'
+import { useToast } from '@/stores/toast'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
+import type { Log } from '@/types/api'
+import {
+  formatLogAction,
+  formatLogContent,
+  formatLogModule,
+  formatLogResult
+} from '@/utils/log-format'
+
+// 为 KeepAlive include 匹配定义组件名称（必须在所有 import 之后）
+defineOptions({ name: 'LogsView' })
+
+const { t, locale, tm } = useI18n()
+const toast = useToast()
+const themeStore = useThemeStore()
+const authStore = useAuthStore()
+
+// 数据
+const logs = ref<Log[]>([])
+const loading = ref<boolean>(true)   // 首次加载
+const refreshing = ref<boolean>(false)  // 后台刷新
+const modules = ref<string[]>([])
+const riskDefinitions = ref<RiskOperationDefinition[]>([])
+
+// 分页
+const page = ref<number>(1)
+const pageSize = ref<number>(100)
+const total = ref<number>(0)
+const totalPages = ref<number>(0)
+
+// 筛选
+const selectedModule = ref<string>('')
+const searchQuery = ref<string>('')
+
+// 展开的内容行
+const expandedRows = ref<Set<number>>(new Set())
+
+const highRiskLogs = computed(() => logs.value.filter(log => log.risk_level === 'high' || log.risk_level === 'critical'))
+const approvalRequiredCount = computed(() => logs.value.filter(log => log.approval_required).length)
+const verificationRequiredCount = computed(() => logs.value.filter(log => log.verification_required).length)
+const canAccessAudit = computed(() => authStore.isAdmin)
+
+// 加载日志
+async function loadLogs(silent = false): Promise<void> {
+  if (!silent) loading.value = true
+  else refreshing.value = true
+  try {
+    const params: { page: number; pageSize: number; module?: string; search?: string } = {
+      page: page.value,
+      pageSize: pageSize.value
+    }
+    if (selectedModule.value) {
+      params.module = selectedModule.value
+    }
+    if (searchQuery.value) {
+      params.search = searchQuery.value
+    }
+
+    const response = await api.logs.list(params)
+    const data = response as { logs?: Log[]; total?: number; totalPages?: number }
+    logs.value = data.logs || []
+    total.value = data.total || 0
+    totalPages.value = data.totalPages || 0
+  } catch (err: any) {
+    toast.error(t('logs.loadFailed') + ': ' + (err?.message || String(err)))
+  } finally {
+    loading.value = false
+    refreshing.value = false
+  }
+}
+
+// 加载模块
+async function loadModules(): Promise<void> {
+  try {
+    const response = await api.logs.getModules()
+    modules.value = (response as { modules?: string[] }).modules || []
+  } catch {
+    // 静默失败
+  }
+}
+
+async function loadRiskDefinitions(): Promise<void> {
+  if (!canAccessAudit.value) return
+  try {
+    const response = await api.logs.getRiskDefinitions()
+    riskDefinitions.value = response.definitions || []
+  } catch {
+    riskDefinitions.value = []
+  }
+}
+
+// 搜索
+function handleSearch(): void {
+  page.value = 1
+  loadLogs(true)  // 静默刷新
+}
+
+// 重置筛选
+function resetFilters(): void {
+  selectedModule.value = ''
+  searchQuery.value = ''
+  page.value = 1
+  loadLogs(true)  // 静默刷新
+}
+
+// 修改每页数量
+function handlePageSizeChange(): void {
+  page.value = 1
+  loadLogs(true)
+}
+
+// 格式化日期
+function formatDate(dateString: string | null | undefined): string {
+  if (!dateString) return '-'
+  const date = new Date(dateString)
+  // 支援 zh-CN, zh-TW, en 三種語言
+  const localeMap: Record<string, string> = {
+    'zh-CN': 'zh-CN',
+    'zh-TW': 'zh-TW',
+    'en': 'en-US'
+  }
+  const localeCode = localeMap[locale.value] || 'en-US'
+  return date.toLocaleString(localeCode, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
+// 获取结果徽章类名
+function getResultClass(result: string): string {
+  if (result === 'success') {
+    return 'badge-success'
+  } else if (result === 'failed') {
+    return 'badge-error'
+  } else {
+    return 'badge-warning'
+  }
+}
+
+function getRiskClass(level: string | undefined): string {
+  if (level === 'critical') return 'badge-error'
+  if (level === 'high') return 'badge-warning'
+  if (level === 'medium') return 'badge-default'
+  return 'badge-success'
+}
+
+function formatRiskLevel(level: string | undefined): string {
+  const map: Record<string, string> = {
+    low: t('logs.risk.low'),
+    medium: t('logs.risk.medium'),
+    high: t('logs.risk.high'),
+    critical: t('logs.risk.critical')
+  }
+  return map[level || 'low'] || map.low
+}
+
+async function exportAuditCsv(): Promise<void> {
+  if (!canAccessAudit.value) return
+  try {
+    const params: Record<string, unknown> = {
+      limit: 1000
+    }
+    if (selectedModule.value) params.module = selectedModule.value
+    if (searchQuery.value) params.search = searchQuery.value
+
+    const blob = await api.logs.exportAuditCsv(params)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `payincus-audit-logs-${Date.now()}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+    toast.success(t('logs.auditExportSuccess'))
+  } catch (err: any) {
+    toast.error(t('logs.auditExportFailed') + ': ' + (err?.message || String(err)))
+  }
+}
+
+function formatResult(result: string): string {
+  return formatLogResult(result, tm('logResults') as Record<string, unknown>)
+}
+
+function formatModule(module: string): string {
+  return formatLogModule(module, tm('logModules') as Record<string, unknown>)
+}
+
+function formatAction(action: string): string {
+  return formatLogAction(action, tm('logActions') as Record<string, unknown>)
+}
+
+function formatContent(content: string): string {
+  return formatLogContent(content)
+}
+
+// 切换内容展开/收起
+function toggleContent(logId: number): void {
+  if (expandedRows.value.has(logId)) {
+    expandedRows.value.delete(logId)
+  } else {
+    expandedRows.value.add(logId)
+  }
+}
+
+// 检查内容是否需要截断
+function isContentLong(content: string): boolean {
+  return !!content && content.length > 60
+}
+
+onMounted(async () => {
+  await Promise.all([loadModules(), loadRiskDefinitions(), loadLogs()])
+})
+</script>
+
+<template>
+  <div class="kawaii-page space-y-6 animate-fade-in">
+    <div class="page-header">
+      <h1 class="page-title">{{ $t('logs.title') }}</h1>
+      <button v-if="canAccessAudit" class="btn btn-primary" @click="exportAuditCsv">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-5l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        {{ $t('logs.exportAudit') }}
+      </button>
+    </div>
+
+    <div class="grid gap-3" :class="canAccessAudit ? 'md:grid-cols-4' : 'md:grid-cols-3'">
+      <div v-if="canAccessAudit" class="card p-4">
+        <div class="text-xs font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.auditSummary.riskDefinitions') }}</div>
+        <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-themed">{{ riskDefinitions.length }}</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.auditSummary.highRiskCurrentPage') }}</div>
+        <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-themed">{{ highRiskLogs.length }}</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.auditSummary.approvalRequired') }}</div>
+        <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-themed">{{ approvalRequiredCount }}</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-xs font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.auditSummary.verificationRequired') }}</div>
+        <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-themed">{{ verificationRequiredCount }}</div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card p-4">
+      <div class="flex flex-wrap items-end gap-4">
+        <!-- Module filter -->
+        <div class="flex-1 min-w-[200px]">
+          <label class="block text-xs text-themed-muted mb-1.5">{{ $t('logs.module') }}</label>
+          <select
+            v-model="selectedModule"
+            class="input"
+            @change="handleSearch"
+          >
+            <option value="">{{ $t('logs.allModules') }}</option>
+            <option v-for="m in modules" :key="m" :value="m">{{ formatModule(m) }}</option>
+          </select>
+        </div>
+
+        <!-- Search -->
+        <div class="flex-1 min-w-[200px]">
+          <label class="block text-xs text-themed-muted mb-1.5">{{ $t('logs.search') }}</label>
+          <div class="flex gap-2">
+            <input
+              v-model="searchQuery"
+              type="text"
+              class="input flex-1"
+              :placeholder="$t('logs.searchPlaceholder')"
+              @keyup.enter="handleSearch"
+            />
+            <button class="btn-secondary h-[38px]" @click="handleSearch">{{ $t('logs.search') }}</button>
+            <button class="btn-secondary h-[38px]" @click="resetFilters">{{ $t('logs.reset') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs Table -->
+    <SkeletonLoader v-if="loading" type="table" />
+
+    <template v-else>
+      <div v-if="logs.length === 0" class="card p-12 text-center">
+        <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-themed-secondary">
+          <svg class="h-7 w-7 text-themed-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        </div>
+        <p class="text-themed-secondary">{{ $t('logs.noLogs') }}</p>
+      </div>
+
+      <div v-else class="space-y-3 lg:hidden">
+        <div
+          v-for="log in logs"
+          :key="log.id"
+          class="rounded-lg border border-themed bg-themed-surface p-4 shadow-sm"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="truncate text-sm font-semibold text-themed">{{ formatAction(log.action) }}</div>
+              <div class="mt-1 font-mono text-xs text-themed-muted">{{ formatDate(log.created_at) }}</div>
+            </div>
+            <span :class="['badge shrink-0 whitespace-nowrap', getResultClass(log.result)]">
+              {{ formatResult(log.result) }}
+            </span>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-2 text-sm">
+            <div class="rounded-lg bg-themed-secondary px-3 py-2">
+              <div class="text-[11px] font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.user') }}</div>
+              <div class="mt-1 truncate text-themed">{{ log.username || $t('logs.system') }}</div>
+            </div>
+            <div class="rounded-lg bg-themed-secondary px-3 py-2">
+              <div class="text-[11px] font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.module') }}</div>
+              <div class="mt-1 truncate text-themed">{{ formatModule(log.module) }}</div>
+            </div>
+          </div>
+
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <span :class="['badge whitespace-nowrap', getRiskClass(log.risk_level)]">
+              {{ formatRiskLevel(log.risk_level) }}
+            </span>
+            <span v-if="log.risk_title" class="min-w-0 truncate text-xs text-themed-muted">
+              {{ log.risk_title }}
+            </span>
+          </div>
+
+          <div class="mt-3 rounded-lg bg-themed-secondary px-3 py-2 text-sm">
+            <div class="mb-1 text-[11px] font-medium uppercase tracking-wide text-themed-muted">{{ $t('logs.content') }}</div>
+            <span v-if="!isContentLong(formatContent(log.content))" class="text-themed-secondary">
+              {{ formatContent(log.content) }}
+            </span>
+            <template v-else>
+              <div v-if="!expandedRows.has(log.id)" class="flex min-w-0 items-center gap-2">
+                <span class="min-w-0 flex-1 truncate text-themed-secondary">{{ formatContent(log.content).slice(0, 72) }}...</span>
+                <button
+                  type="button"
+                  class="shrink-0 text-xs text-themed-secondary hover:underline"
+                  @click="toggleContent(log.id)"
+                >
+                  {{ $t('logs.expand') }}
+                </button>
+              </div>
+              <div v-else class="space-y-2">
+                <p class="whitespace-pre-wrap break-words text-themed-secondary">{{ formatContent(log.content) }}</p>
+                <button
+                  type="button"
+                  class="text-xs text-themed-secondary hover:underline"
+                  @click="toggleContent(log.id)"
+                >
+                  {{ $t('logs.collapse') }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div
+          v-if="total > 0"
+          class="flex flex-col gap-3 rounded-lg border border-themed bg-themed-surface px-4 py-3"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-sm text-themed-secondary">
+              {{ $t('logs.totalRecords', { total, page, totalPages }) }}
+            </span>
+            <select
+              v-model="pageSize"
+              class="text-sm rounded-md border-0 py-1 pl-2 pr-7 ring-1 ring-inset focus:ring-2 focus:ring-primary cursor-pointer"
+              :class="themeStore.isDark
+                ? 'bg-gray-800 text-gray-300 ring-gray-700'
+                : 'bg-gray-50 text-gray-700 ring-gray-200'"
+              @change="handlePageSizeChange"
+            >
+              <option :value="10">10 / {{ $t('common.page') }}</option>
+              <option :value="30">30 / {{ $t('common.page') }}</option>
+              <option :value="50">50 / {{ $t('common.page') }}</option>
+              <option :value="100">100 / {{ $t('common.page') }}</option>
+            </select>
+          </div>
+          <div v-if="totalPages > 1" class="flex items-center justify-center gap-1">
+            <button
+              :disabled="page === 1 || refreshing"
+              class="inline-flex items-center justify-center w-8 h-8 rounded-md text-sm transition-colors"
+              :class="[
+                page === 1
+                  ? 'opacity-40 cursor-not-allowed'
+                  : themeStore.isDark
+                    ? 'hover:bg-gray-800 text-gray-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+              ]"
+              @click="page = Math.max(1, page - 1); loadLogs(true)"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div
+              class="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium"
+              :class="themeStore.isDark ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-700'"
+            >
+              <span>{{ page }}</span>
+              <span :class="themeStore.isDark ? 'text-gray-600' : 'text-gray-400'">/</span>
+              <span :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">{{ totalPages }}</span>
+            </div>
+            <button
+              :disabled="page === totalPages || refreshing"
+              class="inline-flex items-center justify-center w-8 h-8 rounded-md text-sm transition-colors"
+              :class="[
+                page === totalPages
+                  ? 'opacity-40 cursor-not-allowed'
+                  : themeStore.isDark
+                    ? 'hover:bg-gray-800 text-gray-400'
+                    : 'hover:bg-gray-100 text-gray-600'
+              ]"
+              @click="page = Math.min(totalPages, page + 1); loadLogs(true)"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="logs.length > 0" class="card hidden overflow-hidden lg:block">
+        <table class="w-full table-fixed">
+          <thead>
+            <tr class="border-b border-themed">
+              <th class="w-[16%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.time') }}</th>
+              <th class="w-[12%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.user') }}</th>
+              <th class="w-[13%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.module') }}</th>
+              <th class="w-[14%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.action') }}</th>
+              <th class="w-[12%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.riskLevel') }}</th>
+              <th class="w-[25%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.content') }}</th>
+              <th class="w-[8%] text-left py-3 px-4 text-xs font-medium text-themed-muted whitespace-nowrap">{{ $t('logs.result') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="log in logs"
+              :key="log.id"
+              class="border-b border-themed hover:bg-themed/5 transition-colors"
+            >
+              <td class="py-3 px-4 font-mono text-sm text-themed-secondary whitespace-nowrap">
+                {{ formatDate(log.created_at) }}
+              </td>
+              <td class="py-3 px-4 text-sm text-themed">
+                <div class="truncate" :title="log.username || $t('logs.system')">
+                  {{ log.username || $t('logs.system') }}
+                </div>
+              </td>
+              <td class="py-3 px-4 text-sm text-themed">
+                <span class="badge badge-default max-w-full truncate whitespace-nowrap">{{ formatModule(log.module) }}</span>
+              </td>
+              <td class="py-3 px-4 text-sm text-themed">
+                <div class="truncate" :title="formatAction(log.action)">
+                  {{ formatAction(log.action) }}
+                </div>
+              </td>
+              <td class="py-3 px-4 text-sm text-themed whitespace-nowrap">
+                <span :class="['badge whitespace-nowrap', getRiskClass(log.risk_level)]">
+                  {{ formatRiskLevel(log.risk_level) }}
+                </span>
+                <div v-if="log.risk_title" class="mt-1 max-w-[120px] truncate text-xs text-themed-muted">
+                  {{ log.risk_title }}
+                </div>
+              </td>
+              <td class="py-3 px-4 text-sm">
+                <div class="max-w-full">
+                  <!-- 短内容直接显示 -->
+                  <span v-if="!isContentLong(formatContent(log.content))" class="text-themed-secondary">
+                    {{ formatContent(log.content) }}
+                  </span>
+                  <!-- 长内容可展开 -->
+                  <template v-else>
+                    <div v-if="!expandedRows.has(log.id)" class="flex items-center gap-1.5">
+                      <span class="text-themed-secondary truncate flex-1">{{ formatContent(log.content).slice(0, 50) }}...</span>
+                      <button
+                        class="flex-shrink-0 p-1 rounded transition-colors"
+                        :class="themeStore.isDark ? 'hover:bg-gray-700 text-themed-secondary' : 'hover:bg-gray-100 text-themed-secondary'"
+                        :title="$t('logs.expand')"
+                        @click="toggleContent(log.id)"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div v-else class="space-y-2">
+                      <p class="text-themed-secondary whitespace-pre-wrap break-words">{{ formatContent(log.content) }}</p>
+                      <button
+                        class="text-xs flex items-center gap-1 transition-colors"
+                        :class="themeStore.isDark ? 'text-themed-secondary hover:text-themed' : 'text-themed-secondary hover:text-themed'"
+                        @click="toggleContent(log.id)"
+                      >
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                        </svg>
+                        {{ $t('logs.collapse') }}
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </td>
+              <td class="py-3 px-4 whitespace-nowrap">
+                <span :class="['badge whitespace-nowrap', getResultClass(log.result)]">
+                  {{ formatResult(log.result) }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+      <!-- Pagination -->
+      <div
+        v-if="total > 0"
+        class="flex flex-col sm:flex-row items-center justify-between gap-2 px-4 py-3 border-t border-themed"
+      >
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-themed-secondary">
+            {{ $t('logs.totalRecords', { total, page, totalPages }) }}
+          </span>
+          <select
+            v-model="pageSize"
+            class="text-sm rounded-md border-0 py-1 pl-2 pr-7 ring-1 ring-inset focus:ring-2 focus:ring-primary cursor-pointer"
+            :class="themeStore.isDark
+              ? 'bg-gray-800 text-gray-300 ring-gray-700'
+              : 'bg-gray-50 text-gray-700 ring-gray-200'"
+            @change="handlePageSizeChange"
+          >
+            <option :value="10">10 / {{ $t('common.page') }}</option>
+            <option :value="30">30 / {{ $t('common.page') }}</option>
+            <option :value="50">50 / {{ $t('common.page') }}</option>
+            <option :value="100">100 / {{ $t('common.page') }}</option>
+          </select>
+        </div>
+        <div v-if="totalPages > 1" class="flex items-center gap-1">
+          <button
+            :disabled="page === 1 || refreshing"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-md text-sm transition-colors"
+            :class="[
+              page === 1
+                ? 'opacity-40 cursor-not-allowed'
+                : themeStore.isDark
+                  ? 'hover:bg-gray-800 text-gray-400'
+                  : 'hover:bg-gray-100 text-gray-600'
+            ]"
+            @click="page = Math.max(1, page - 1); loadLogs(true)"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <div
+            class="flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium"
+            :class="themeStore.isDark ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-700'"
+          >
+            <span>{{ page }}</span>
+            <span :class="themeStore.isDark ? 'text-gray-600' : 'text-gray-400'">/</span>
+            <span :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">{{ totalPages }}</span>
+          </div>
+          <button
+            :disabled="page === totalPages || refreshing"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-md text-sm transition-colors"
+            :class="[
+              page === totalPages
+                ? 'opacity-40 cursor-not-allowed'
+                : themeStore.isDark
+                  ? 'hover:bg-gray-800 text-gray-400'
+                  : 'hover:bg-gray-100 text-gray-600'
+            ]"
+            @click="page = Math.min(totalPages, page + 1); loadLogs(true)"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+/* Linear finish: uppercase micro-label audit-table headers (consistent with MyHostsView) */
+thead th {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+</style>

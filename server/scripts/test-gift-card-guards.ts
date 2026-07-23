@@ -1,0 +1,265 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const root = resolve(__dirname, '../..')
+const read = (path: string) => readFileSync(resolve(root, path), 'utf8')
+
+const schema = read('server/prisma/schema.prisma')
+const migration = read('server/prisma/migrations/20260625210000_add_gift_cards/migration.sql')
+const locks = read('server/src/db/advisory-locks.ts')
+const db = read('server/src/db/gift-cards.ts')
+const route = read('server/src/routes/gift-cards.ts')
+const app = read('server/src/app.ts')
+const clientApi = read('client/src/api/index.ts')
+const adminApi = read('client/src/api/admin.ts')
+const clientTypes = read('client/src/types/api.ts')
+const userRouter = read('client/src/router/user.ts')
+const adminRouter = read('client/src/router/admin.ts')
+const userView = read('client/src/views/GiftCardsView.vue')
+const adminView = read('client/src/views/admin/GiftCardsView.vue')
+const turnstileWidget = read('client/src/components/TurnstileWidget.vue')
+const userNav = read('client/src/config/side-nav-items-user.ts')
+const adminNav = read('client/src/config/side-nav-items-admin.ts')
+const zhLocale = read('client/src/locales/zh-CN.ts')
+const enLocale = read('client/src/locales/en.ts')
+const twLocale = read('client/src/locales/zh-TW.ts')
+const serverPackage = read('server/package.json')
+const rootPackage = read('package.json')
+const giftCardIssueEnumMigration = read('server/prisma/migrations/20260709000000_add_gift_card_issue_balance_log_type/migration.sql')
+const giftCardIssueReclassifyMigration = read('server/prisma/migrations/20260709000100_reclassify_gift_card_issue_history/migration.sql')
+
+assert(
+  schema.includes('model GiftCard') &&
+    schema.includes('enum GiftCardStatus') &&
+    schema.includes('giftCardsCreated') &&
+    schema.includes('giftCardsOwned') &&
+    schema.includes('giftCardsUsed') &&
+    migration.includes('CREATE TYPE "GiftCardStatus"') &&
+    migration.includes('CREATE TABLE "gift_cards"') &&
+    migration.includes('CREATE UNIQUE INDEX "gift_cards_code_key"'),
+  'gift card schema and migration must persist code status, ownership, usage, batch, and user relations'
+)
+
+// 礼品卡发行必须使用独立的 gift_card_issue 账本类型（避免被计入可兑换消费额而被刷积分）
+assert(
+  schema.includes('gift_card_issue') &&
+    giftCardIssueEnumMigration.includes("ALTER TYPE \"BalanceLogType\" ADD VALUE IF NOT EXISTS 'gift_card_issue'"),
+  'BalanceLogType must define a dedicated gift_card_issue enum value via migration'
+)
+
+// 历史重分类迁移必须使用收紧后的结构化关联（created_by_id AND owner_id AND face_value AND 紧时间窗），
+// 避免把同期同金额的正常消费误判为“用余额生成礼品卡”，并在迁移时打印受影响行数便于核对。
+assert(
+  giftCardIssueReclassifyMigration.includes(`SET "type" = 'gift_card_issue'`) &&
+    giftCardIssueReclassifyMigration.includes(`bl."type" = 'consume'`) &&
+    giftCardIssueReclassifyMigration.includes(`gc."created_by_id" = bl."user_id"`) &&
+    giftCardIssueReclassifyMigration.includes(`gc."owner_id" = bl."user_id"`) &&
+    giftCardIssueReclassifyMigration.includes(`gc."face_value" = (-bl."amount")`) &&
+    giftCardIssueReclassifyMigration.includes(`INTERVAL '10 seconds'`) &&
+    giftCardIssueReclassifyMigration.includes('RAISE NOTICE'),
+  'gift_card_issue history reclassification must correlate on created_by_id AND owner_id AND face_value AND a tight time window, and log an affected-row count'
+)
+
+assert(
+  locks.includes('export const GIFT_CARD_LOCK_NAMESPACE') &&
+    db.includes('await advisoryTransactionLock(tx, GIFT_CARD_LOCK_NAMESPACE, initialGiftCard.id)') &&
+    db.includes('await advisoryTransactionLock(tx, USER_BALANCE_LOCK_NAMESPACE, userId)') &&
+    db.includes('await advisoryTransactionLock(tx, USER_BALANCE_LOCK_NAMESPACE, input.userId)'),
+  'gift card balance and redeem flows must use advisory locks for card state and user balance'
+)
+
+const userGenerateSection = db.slice(
+  db.indexOf('export async function generateGiftCardFromBalance'),
+  db.indexOf('export async function findGiftCardByCode')
+)
+
+assert(
+  userGenerateSection.includes('where: { id: input.userId, balance: { gte: amount } }') &&
+    userGenerateSection.includes("type: 'gift_card_issue'") &&
+    userGenerateSection.includes('amount: toDecimal(-amount)') &&
+    userGenerateSection.includes('createGiftCardInTransaction(tx') &&
+    !route.includes('const result = await prisma.$transaction') &&
+    !route.includes('data: { balance: { decrement: faceValue } }'),
+  'user-generated gift cards must deduct balance atomically in the DB layer and create a balance log in the same transaction'
+)
+
+const redeemSection = db.slice(
+  db.indexOf('export async function redeemGiftCard'),
+  db.indexOf('export async function disableGiftCard')
+)
+
+assert(
+  redeemSection.includes("if (giftCard.ownerId === userId)") &&
+    redeemSection.includes("throw new Error('GIFT_CARD_SELF_REDEEM')") &&
+    redeemSection.includes("where: { id: giftCard.id, status: 'active' }") &&
+    redeemSection.includes("return { error: 'GIFT_CARD_EXPIRED' }") &&
+    db.includes("if ('error' in result)") &&
+    redeemSection.includes("type: 'gift'") &&
+    redeemSection.includes('maskGiftCardCode(giftCard.code)'),
+  'gift card redemption must reject self redemption, persist expired status, claim active codes atomically, credit balance, and avoid logging full codes'
+)
+
+const statsSection = db.slice(db.indexOf('export async function getGiftCardStats'))
+
+assert(
+  statsSection.includes('const now = new Date()') &&
+    statsSection.includes("status: 'active'") &&
+    statsSection.includes('OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]') &&
+    statsSection.includes('prisma.giftCard.count({ where: liveActiveWhere })') &&
+    statsSection.includes('where: liveActiveWhere') &&
+    !statsSection.includes("status: { in: ['active', 'disabled'] }"),
+  'admin gift card active count and outstanding balance must exclude expired cards in real time'
+)
+
+assert(
+  route.includes('function requireGiftCardManager') &&
+    route.includes('XPAYINCUS_GIFT_CARD_ADMIN_IDS') &&
+    route.includes('requireGiftCardManager]') &&
+    route.includes('normalizeIdList') &&
+    db.includes('maskGiftCardCode(code)') &&
+    db.includes('revealCode: options.revealCode === true'),
+  'admin gift card routes must require an explicit production allowlist, normalize batch IDs, and mask list codes by default'
+)
+
+const adminGenerateSection = route.slice(
+  route.indexOf("fastify.post('/admin/generate'"),
+  route.indexOf('// 批量生成兑换码')
+)
+const adminBatchSection = route.slice(
+  route.indexOf("fastify.post('/admin/batch'"),
+  route.indexOf('// 管理员列表')
+)
+const userRedeemSection = route.slice(
+  route.indexOf("fastify.post('/user/redeem'"),
+  route.indexOf('// 用户用余额生成兑换码')
+)
+const userGenerateRouteSection = route.slice(
+  route.indexOf("fastify.post('/user/generate'"),
+  route.indexOf('// 用户查看自己的兑换码')
+)
+
+assert(
+  adminGenerateSection.includes('requireGiftCardManager') &&
+    adminBatchSection.includes('requireGiftCardManager') &&
+    !adminGenerateSection.includes('turnstileRequired') &&
+    !adminBatchSection.includes('turnstileRequired') &&
+    !adminView.includes('useTurnstile') &&
+    !adminView.includes('turnstileToken'),
+  'admin gift card generation must rely on admin auth, explicit allowlist, and rate limits, not frontend Turnstile tokens'
+)
+
+assert(
+  adminGenerateSection.includes('if (balanceValue > faceValue)') &&
+    adminBatchSection.includes('if (balanceValue > faceValue)') &&
+    route.includes("GIFT_CARD_BALANCE_EXCEEDS_FACE_VALUE") &&
+    db.includes('balanceValue > faceValue') &&
+    db.includes('MAX_GIFT_CARD_BATCH_FACE_VALUE') &&
+    adminBatchSection.includes('MAX_BATCH_FACE_VALUE'),
+  'gift card credited value must not exceed face value, and unfunded admin batches must have a total face-value cap'
+)
+
+const revokeSection = db.slice(
+  db.indexOf('export async function revokeGiftCard'),
+  db.indexOf('export async function disableGiftCard')
+)
+const refundSection = db.slice(
+  db.indexOf('async function refundUserFundedGiftCard'),
+  db.indexOf('async function disableGiftCardWithRefund')
+)
+
+assert(
+  route.includes("fastify.post('/user/:id/revoke'") &&
+    revokeSection.includes('giftCard.createdById !== issuerId') &&
+    revokeSection.includes('giftCard.ownerId !== issuerId') &&
+    revokeSection.includes("giftCard.status === 'used'") &&
+    revokeSection.includes('refundUserFundedGiftCard(tx, giftCard)') &&
+    revokeSection.includes("data: { status: 'disabled' }") &&
+    refundSection.includes('await advisoryTransactionLock(tx, USER_BALANCE_LOCK_NAMESPACE, issuerId)') &&
+    refundSection.includes("type: 'refund'") &&
+    refundSection.includes('increment: toDecimal(amount)') &&
+    db.includes('gift-card-refund:${id}') &&
+    refundSection.includes('existingRefund'),
+  'an issuer must be able to revoke an unredeemed balance-funded card and receive the original amount exactly once'
+)
+
+assert(
+  db.includes('async function disableGiftCardWithRefund') &&
+    db.includes('async function deleteGiftCardWithRefund') &&
+    db.includes('await refundUserFundedGiftCard(tx, giftCard)') &&
+    db.includes('return disableGiftCardWithRefund(id)') &&
+    db.includes('return deleteGiftCardWithRefund(id)') &&
+    db.includes('await disableGiftCardWithRefund(id)') &&
+    db.includes('await deleteGiftCardWithRefund(id)') &&
+    db.includes('ownerId: null'),
+  'admin disable/delete, including batch operations, must refund unredeemed user-funded cards and refunded cards must not be re-enabled'
+)
+
+assert(
+  userRedeemSection.includes('onRequest: [fastify.authenticate]') &&
+    userRedeemSection.includes('preHandler: [turnstileRequired]') &&
+    userGenerateRouteSection.includes('onRequest: [fastify.authenticate]') &&
+    userGenerateRouteSection.includes('preHandler: [turnstileRequired]') &&
+    !userRedeemSection.includes('onRequest: [fastify.authenticate, turnstileRequired]') &&
+    !userGenerateRouteSection.includes('onRequest: [fastify.authenticate, turnstileRequired]') &&
+    userView.includes("import TurnstileWidget from '@/components/TurnstileWidget.vue'") &&
+    userView.includes('api.systemConfig.getPublic()') &&
+    userView.includes('const isTurnstileChallengeAvailable = computed<boolean>(() => turnstileEnabled.value && Boolean(turnstileSiteKey.value))') &&
+    userView.includes('if (!isTurnstileChallengeAvailable.value) return undefined') &&
+    userView.includes('if (isTurnstileChallengeAvailable.value && !token)') &&
+    userView.includes('v-if="isTurnstileChallengeAvailable"') &&
+    userView.includes('v-model="turnstileToken"') &&
+    userView.includes('turnstileRef.value?.getToken?.()') &&
+    userView.includes('input[name="cf-turnstile-response"]') &&
+    userView.includes('@verify="onTurnstileVerify"') &&
+    turnstileWidget.includes("@update:model-value=\"onVerify\"") &&
+    turnstileWidget.includes('@expired="onExpire"') &&
+    userView.includes("t('giftCards.toast.turnstileRequired')") &&
+    zhLocale.includes("turnstileRequired: '请先完成人机验证'") &&
+    enLocale.includes("turnstileRequired: 'Complete verification first'") &&
+    twLocale.includes("turnstileRequired: '請先完成人機驗證'"),
+  'user gift card redemption and balance-funded generation must keep visible Turnstile protection after body parsing and reliably submit the widget token'
+)
+
+assert(
+  app.includes("await fastify.register(giftCardsRoutes, { prefix: '/api/gift-cards' })") &&
+    clientTypes.includes('export interface GiftCardRecord') &&
+    clientApi.includes('giftCards:') &&
+    clientApi.includes("http.post('/gift-cards/user/redeem'") &&
+    clientApi.includes("http.post('/gift-cards/user/generate'") &&
+    clientApi.includes("http.get('/gift-cards/user/mine'") &&
+    adminApi.includes('giftCards:') &&
+    adminApi.includes("http.post('/gift-cards/admin/generate'") &&
+    adminApi.includes("http.post('/gift-cards/admin/batch'") &&
+    userRouter.includes("path: '/gift-cards'") &&
+	    adminRouter.includes("path: '/admin/gift-cards'") &&
+	    userNav.includes("path: '/gift-cards'") &&
+	    adminNav.includes("path: '/admin/gift-cards'") &&
+	    userView.includes('TurnstileWidget') &&
+	    userView.includes("t('giftCards.redeemTitle')") &&
+	    userView.includes('class="mt-5 space-y-3 lg:hidden"') &&
+	    userView.includes('class="mt-5 hidden overflow-hidden lg:block"') &&
+	    userView.includes('class="w-full table-fixed text-sm"') &&
+	    userView.includes('class="block truncate"') &&
+	    userView.includes('@click="toggleCodeReveal(card)"') &&
+	    userView.includes('@click="copyCode(card.code)"') &&
+	    !userView.includes('class="w-full min-w-[860px] table-fixed text-sm"') &&
+	    zhLocale.includes("redeemTitle: '兑换礼品卡'") &&
+	    adminView.includes("t('giftCardsAdmin.description')") &&
+	    adminView.includes('class="space-y-3 p-4 lg:hidden"') &&
+	    adminView.includes('class="hidden overflow-hidden lg:block"') &&
+	    adminView.includes('class="w-full table-fixed text-sm"') &&
+	    adminView.includes('@change="toggleSelected(card.id, ($event.target as HTMLInputElement).checked)"') &&
+	    adminView.includes('@click="updateCardStatus(card)"') &&
+	    adminView.includes('@click="deleteCard(card)"') &&
+	    zhLocale.includes('XPAYINCUS_GIFT_CARD_ADMIN_IDS') &&
+	    adminView.includes("t('giftCardsAdmin.revealCode')") &&
+	    zhLocale.includes("revealCode: '显示完整兑换码'") &&
+	    serverPackage.includes('"test:gift-card-guards"') &&
+	    rootPackage.includes('pnpm --filter server test:gift-card-guards'),
+  'gift card routes, client pages, API wrappers, nav entries, and guard script must be wired into the platform'
+)
+
+console.log('gift card guard checks passed')

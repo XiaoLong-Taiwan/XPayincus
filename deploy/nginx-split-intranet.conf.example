@@ -1,0 +1,141 @@
+# XPayincus host-process split deployment example.
+# Replace:
+#   panel.example.com       -> your customer panel domain
+#   admin.example.com       -> your admin backend domain
+#   /opt/xpayincus/current/client/dist/user  -> customer frontend build output
+#   /opt/xpayincus/current/client/dist/admin -> admin frontend build output
+#   10.0.0.12:3001          -> backend private IP and port
+
+map $http_x_forwarded_proto $xpayincus_forwarded_proto {
+  default $http_x_forwarded_proto;
+  "" $scheme;
+}
+
+map $http_x_forwarded_host $xpayincus_forwarded_host {
+  default $http_x_forwarded_host;
+  "" $host;
+}
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name panel.example.com;
+
+  root /opt/xpayincus/current/client/dist/user;
+  index index.html;
+
+  client_max_body_size 100m;
+
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: http: https: https://kkksr.com https://api.dicebear.com https://dicebear.xpayincus.com https://*.githubusercontent.com https://avatars.githubusercontent.com https://lh3.googleusercontent.com; connect-src 'self' ws: wss: https://challenges.cloudflare.com https://cloudflareinsights.com https://api.dicebear.com https://dicebear.xpayincus.com; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy strict-origin-when-cross-origin always;
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+  location = /healthz {
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
+  location = /index.html {
+    expires epoch;
+  }
+
+  location /assets/ {
+    try_files $uri =404;
+    expires 1y;
+  }
+
+  location /api/ws/ {
+    proxy_pass http://10.0.0.12:3001/api/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $xpayincus_forwarded_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $xpayincus_forwarded_proto;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+  }
+
+  location /api/ {
+    proxy_pass http://10.0.0.12:3001/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $xpayincus_forwarded_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $xpayincus_forwarded_proto;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name admin.example.com;
+
+  root /opt/xpayincus/current/client/dist/admin;
+  index index.html;
+
+  client_max_body_size 100m;
+
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: http: https: https://kkksr.com https://api.dicebear.com https://dicebear.xpayincus.com https://*.githubusercontent.com https://avatars.githubusercontent.com https://lh3.googleusercontent.com; connect-src 'self' ws: wss: https://challenges.cloudflare.com https://cloudflareinsights.com https://api.dicebear.com https://dicebear.xpayincus.com; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy strict-origin-when-cross-origin always;
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+  location = /healthz {
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
+  location = /index.html {
+    expires epoch;
+  }
+
+  location /assets/ {
+    try_files $uri =404;
+    expires 1y;
+  }
+
+  location /api/ws/ {
+    proxy_pass http://10.0.0.12:3001/api/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $xpayincus_forwarded_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $xpayincus_forwarded_proto;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+  }
+
+  location /api/ {
+    proxy_pass http://10.0.0.12:3001/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $xpayincus_forwarded_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $xpayincus_forwarded_proto;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}
