@@ -1,0 +1,89 @@
+import { readFileSync } from 'node:fs'
+
+const instanceRoutesSource = readFileSync(new URL('../src/routes/instances.ts', import.meta.url), 'utf8')
+const instanceCreateViewSource = readFileSync(new URL('../../client/src/views/InstanceCreateView.vue', import.meta.url), 'utf8')
+const zhLocaleSource = readFileSync(new URL('../../client/src/locales/zh-CN.ts', import.meta.url), 'utf8')
+const enLocaleSource = readFileSync(new URL('../../client/src/locales/en.ts', import.meta.url), 'utf8')
+const twLocaleSource = readFileSync(new URL('../../client/src/locales/zh-TW.ts', import.meta.url), 'utf8')
+const errorHandlerSource = readFileSync(new URL('../../client/src/utils/errorHandler.ts', import.meta.url), 'utf8')
+const schemaSource = readFileSync(new URL('../prisma/schema.prisma', import.meta.url), 'utf8')
+
+function assert(condition: unknown, message: string): void {
+  if (!condition) {
+    console.error(message)
+    process.exit(1)
+  }
+}
+
+assert(
+  instanceRoutesSource.includes("import { turnstileVerifier } from '../lib/turnstile.js'"),
+  'instances route must import the shared Turnstile verifier'
+)
+
+assert(
+  instanceRoutesSource.includes('await turnstileVerifier(request, reply)') &&
+    instanceRoutesSource.includes('if (reply.sent) return'),
+  'instance creation must run global Turnstile verification before order/resource work'
+)
+
+assert(
+  instanceCreateViewSource.includes("import TurnstileWidget from '@/components/TurnstileWidget.vue'") &&
+    !instanceCreateViewSource.includes("import { useTurnstile } from '@/composables/useTurnstile'") &&
+    instanceCreateViewSource.includes('<TurnstileWidget') &&
+    instanceCreateViewSource.includes('v-model="turnstileToken"') &&
+    instanceCreateViewSource.includes('const isCreateTurnstileRequired = computed') &&
+    instanceCreateViewSource.includes('getCreateTurnstileToken()') &&
+    instanceCreateViewSource.includes('if (verificationToken === null) return') &&
+    instanceCreateViewSource.includes('focusCreateTurnstile()') &&
+    instanceCreateViewSource.includes('resetCreateTurnstile()'),
+  'instance create page must render a visible Turnstile widget, read its token at submit time, stop before API submit when missing, and reset it after submit'
+)
+
+assert(
+  !instanceCreateViewSource.includes('if (isCreateTurnstileRequired.value && !turnstileToken.value) {\n    return false\n  }'),
+  'instance create button must not be disabled solely because Turnstile token is not ready; submit must handle focus and localized warning'
+)
+
+assert(
+  instanceCreateViewSource.includes('v-if="isCreateTurnstileRequired"') &&
+    instanceCreateViewSource.includes("instance.createPage.turnstileRequiredTitle") &&
+    instanceCreateViewSource.includes("instance.createPage.turnstileRequiredDesc") &&
+    instanceCreateViewSource.includes("instance.createPage.turnstileRequired") &&
+    instanceCreateViewSource.includes("instance.createPage.turnstileFailed"),
+  'instance create page must show a visible Turnstile requirement hint when enabled'
+)
+
+assert(
+  errorHandlerSource.includes('getTurnstileErrorKey') &&
+    errorHandlerSource.includes('turnstile verification required') &&
+    errorHandlerSource.includes('turnstile verification failed') &&
+    errorHandlerSource.includes('missing-input-response') &&
+    errorHandlerSource.includes('invalid-input-response'),
+  'frontend error translator must localize raw Turnstile backend messages and Cloudflare error codes'
+)
+
+assert(
+  schemaSource.includes('idempotencyKey   String?        @unique @map("idempotency_key")'),
+  'Instance must persist a nullable unique idempotency key for normal paid creation'
+)
+
+assert(
+  instanceCreateViewSource.includes('const createIntentIdempotencyKey = ref<string | null>(null)') &&
+    instanceCreateViewSource.includes('if (isPaidPackage.value && !createIntentIdempotencyKey.value)') &&
+    instanceCreateViewSource.includes('idempotencyKey: isPaidPackage.value ? createIntentIdempotencyKey.value || undefined : undefined') &&
+    instanceCreateViewSource.includes('createIntentIdempotencyKey.value = null'),
+  'normal paid create retries must reuse one client idempotency key until the intent succeeds or changes'
+)
+
+for (const [name, source] of [
+  ['zh-CN', zhLocaleSource],
+  ['zh-TW', twLocaleSource],
+  ['en', enLocaleSource]
+] as const) {
+  assert(source.includes('turnstileRequiredTitle'), `${name} locale must include turnstileRequiredTitle`)
+  assert(source.includes('turnstileRequiredDesc'), `${name} locale must include turnstileRequiredDesc`)
+  assert(source.includes('turnstileRequired'), `${name} locale must include turnstileRequired`)
+  assert(source.includes('turnstileFailed'), `${name} locale must include turnstileFailed`)
+}
+
+console.log('instance create Turnstile guards passed')

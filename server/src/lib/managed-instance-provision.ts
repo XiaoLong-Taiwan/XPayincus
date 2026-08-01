@@ -1,0 +1,321 @@
+import { prisma } from '../db/prisma.js'
+import * as db from '../db/index.js'
+import { buildInstanceConfig, createInstance, deleteInstance, getIncusClient, getInstanceState, startInstance, stopInstance } from '../lib/incus/index.js'
+import type { Host } from '../types/database.js'
+import { networkModeAllowsPortMapping, networkModeNeedsPublicIpv4 } from './network-modes.js'
+import { provisionAutoRemotePort } from './instance-port-mapping.js'
+
+export interface ManagedInstanceProvisionConfig {
+  name: string
+  image: string
+  cpu: number
+  memory: number
+  disk: number
+  cloudInitConfig?: Record<string, string>
+  networkMode: 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat' | 'public_ipv4' | 'public_ipv4_ipv6'
+  nested?: boolean
+  privileged?: boolean
+  portLimit?: number
+  instanceType?: 'container' | 'vm'
+  sshPort?: number | null
+  storagePool?: string | null
+  ipv4Address?: string | null
+  ipv6Address?: string | null
+  ipv6Gateway?: string | null
+  hostInterface?: string | null
+  limitsRead?: string | null
+  limitsWrite?: string | null
+  limitsReadIops?: number | null
+  limitsWriteIops?: number | null
+  limitsIngress?: string | null
+  limitsEgress?: string | null
+  limitsProcesses?: number | null
+  limitsCpuPriority?: number | null
+  bootAutostart?: boolean | null
+  bootAutostartPriority?: number | null
+  bootAutostartDelay?: number | null
+  bootHostShutdownTimeout?: number | null
+  // 创建实例时是否自动下发远程端口映射（Linux=22 / Windows=3389）。用户在创建页可取消勾选；
+  // 未传时按全局开关 instance_auto_remote_port 走。
+  autoRemotePort?: boolean
+}
+
+export async function provisionManagedInstanceAsync(
+  instanceId: number,
+  host: Host,
+  config: ManagedInstanceProvisionConfig
+): Promise<void> {
+  try {
+    console.log(`\n[Managed Provisioning] ===== start =====`)
+    console.log(`[Managed Provisioning] instanceId=${instanceId}, name=${config.name}, host=${host.name}`)
+
+    const client = await getIncusClient(host)
+    const ipv6Config = config.ipv6Address ? { primaryIp: config.ipv6Address } : null
+
+    const incusConfig = buildInstanceConfig({
+      name: config.name,
+      image: config.image,
+      cpu: config.cpu,
+      memory: config.memory,
+      disk: config.disk,
+      sshKey: '',
+      password: '',
+      cloudInitConfig: config.cloudInitConfig as { 'user.user-data': string } | undefined,
+      networkMode: config.networkMode,
+      nested: config.nested || false,
+      privileged: config.privileged || false,
+      instanceType: config.instanceType || 'container',
+      storagePool: config.storagePool || 'default',
+      ipv4Address: config.ipv4Address,
+      ipv6Config,
+      hostInterface: config.hostInterface || 'eth0',
+      ipv6Address: config.ipv6Address,
+      ipv6Gateway: config.ipv6Gateway,
+      limitsRead: config.limitsRead,
+      limitsWrite: config.limitsWrite,
+      limitsReadIops: config.limitsReadIops,
+      limitsWriteIops: config.limitsWriteIops,
+      limitsIngress: config.limitsIngress,
+      limitsEgress: config.limitsEgress,
+      limitsProcesses: config.limitsProcesses,
+      limitsCpuPriority: config.limitsCpuPriority,
+      bootAutostart: config.bootAutostart,
+      bootAutostartPriority: config.bootAutostartPriority,
+      bootAutostartDelay: config.bootAutostartDelay,
+      bootHostShutdownTimeout: config.bootHostShutdownTimeout
+    })
+
+    await createInstance(client, incusConfig)
+
+    let ready = false
+    for (let i = 0; i < 60; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      try {
+        const stateResp = await getInstanceState(client, config.name) as { status?: string }
+        if (stateResp?.status) {
+          ready = true
+          break
+        }
+      } catch {
+        // keep waiting
+      }
+    }
+
+    if (!ready) {
+      throw new Error('Instance creation timed out')
+    }
+
+    await startInstance(client, config.name)
+
+    for (let i = 0; i < 30; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      try {
+        const stateResp = await getInstanceState(client, config.name) as { status?: string }
+        if (stateResp?.status === 'Running') {
+          break
+        }
+      } catch {
+        // keep waiting
+      }
+    }
+
+    let ipv4: string | null = config.ipv4Address || null
+    let ipv6: string | null = config.ipv6Address || null
+
+    try {
+      const stateResp = await getInstanceState(client, config.name) as {
+        network?: Record<string, { addresses?: Array<{ family: string; scope: string; address: string }> }>
+      }
+      const network = stateResp?.network
+      if (network?.eth0?.addresses) {
+        for (const addr of network.eth0.addresses) {
+          if (addr.family === 'inet' && addr.scope === 'global') {
+            ipv4 = addr.address
+          } else if (addr.family === 'inet6' && addr.scope === 'global') {
+            ipv6 = addr.address
+          }
+        }
+      }
+    } catch {
+      // keep pre-allocated addresses
+    }
+
+    const updateResult = await prisma.instance.updateMany({
+      where: { id: instanceId, status: 'creating' },
+      data: {
+        status: 'running',
+        ipv4,
+        ipv6,
+        storagePoolName: config.storagePool || 'default'
+      }
+    })
+
+    if (updateResult.count === 0) {
+      console.log(`[Managed Provisioning] instance ${instanceId} was already finalized, cleaning created Incus instance`)
+      try {
+        await stopInstance(client, config.name, true)
+        await deleteInstance(client, config.name)
+      } catch (cleanupError) {
+        console.error(`[Managed Provisioning] failed to clean finalized instance ${config.name}:`, cleanupError)
+      }
+      return
+    }
+
+    if (ipv4) {
+      try {
+        await db.createIpAddress({
+          address: ipv4,
+          type: 'inet4',
+          isPrimary: true,
+          device: 'eth0',
+          instanceId
+        })
+      } catch (error) {
+        console.warn(`[Managed Provisioning] failed to create IPv4 record for instance ${instanceId}:`, error)
+      }
+    }
+
+    if (ipv6) {
+      try {
+        await db.createIpAddress({
+          address: ipv6,
+          type: 'inet6',
+          isPrimary: true,
+          device: 'eth1',
+          instanceId
+        })
+      } catch (error) {
+        console.warn(`[Managed Provisioning] failed to create IPv6 record for instance ${instanceId}:`, error)
+      }
+    }
+
+    // 自动下发远程端口映射（Linux=22/SSH，Windows=3389/RDP）。
+    // 只对新建实例生效，不回填存量；这条映射不计入用户端口配额（systemManaged=true）。
+    // 失败只记日志、不影响实例创建结果 —— 实例已经跑起来了，用户随时可以自己手动加一条。
+    await provisionAutoRemotePort({
+      instanceId,
+      image: config.image,
+      networkMode: config.networkMode,
+      autoRemotePort: config.autoRemotePort
+    })
+
+    const instance = await db.getInstanceById(instanceId).catch((error) => {
+      console.warn(`[Managed Provisioning] failed to load notification context for instance ${instanceId}:`, error)
+      return null
+    })
+    if (instance) {
+      try {
+        const { sendNotification } = await import('./notifier.js')
+        await sendNotification(instance.user_id, 'instance_created', {
+          instanceName: instance.name,
+          status: 'running',
+          hostName: host.name,
+          hostLocation: host.location || undefined,
+          image: config.image,
+          cpu: config.cpu,
+          memory: config.memory,
+          disk: config.disk,
+          networkMode: config.networkMode,
+          ipv4: ipv4 || undefined,
+          ipv6: ipv6 || undefined
+        })
+      } catch (error) {
+        console.warn(`[Managed Provisioning] failed to notify user for instance ${instanceId}:`, error)
+      }
+
+      try {
+        const { sendInstanceCreatedEmail } = await import('./mailer.js')
+        const user = await db.findUserById(instance.user_id)
+        if (user?.email) {
+          const instanceWithBilling = await prisma.instance.findUnique({
+            where: { id: instanceId },
+            select: {
+              packagePlanId: true,
+              billingPrice: true,
+              expiresAt: true,
+              packagePlan: { select: { name: true } }
+            }
+          })
+          const isPaid = instanceWithBilling?.packagePlanId !== null
+
+          await sendInstanceCreatedEmail(user.email, {
+            username: user.username,
+            instanceName: instance.name,
+            hostName: host.name,
+            image: config.image,
+            cpu: config.cpu,
+            memory: config.memory,
+            disk: config.disk,
+            ipv4: ipv4 || undefined,
+            ipv6: ipv6 || undefined,
+            isPaid,
+            planName: instanceWithBilling?.packagePlan?.name,
+            amount: isPaid ? Number(instanceWithBilling?.billingPrice) : undefined,
+            expiresAt: instanceWithBilling?.expiresAt ?? undefined
+          })
+        }
+      } catch (error) {
+        console.warn(`[Managed Provisioning] failed to email user for instance ${instanceId}:`, error)
+      }
+    }
+  } catch (error) {
+    console.error(`[Managed Provisioning] instance ${instanceId} failed:`, error)
+
+    const updateResult = await prisma.instance.updateMany({
+      where: { id: instanceId, status: 'creating' },
+      data: { status: 'error' }
+    }).catch(() => ({ count: 0 }))
+
+    if (updateResult.count > 0) {
+      const instance = await prisma.instance.findUnique({
+        where: { id: instanceId },
+        select: {
+          userId: true,
+          hostId: true,
+          cpu: true,
+          memory: true,
+          disk: true,
+          networkMode: true,
+          portLimit: true
+        }
+      }).catch(() => null)
+
+      if (instance) {
+        try {
+          await db.rollbackResources({
+            hostId: instance.hostId,
+            cpu: instance.cpu,
+            memory: instance.memory,
+            disk: instance.disk,
+            portCount: networkModeAllowsPortMapping(instance.networkMode) ? (instance.portLimit || 0) : 0
+          })
+        } catch (rollbackError) {
+          console.error(`[Managed Provisioning] failed to roll back resources for instance ${instanceId}:`, rollbackError)
+        }
+
+        if (networkModeNeedsPublicIpv4(instance.networkMode)) {
+          try {
+            await prisma.$transaction((tx) => db.releasePublicIpv4ForInstance(tx, instanceId))
+          } catch (releaseError) {
+            console.error(`[Managed Provisioning] failed to release public IPv4 for instance ${instanceId}:`, releaseError)
+          }
+        }
+
+        try {
+          await db.compensateFailedInstancePurchase(instanceId, instance.userId, instance.hostId)
+        } catch (compensationError) {
+          console.error(`[Managed Provisioning] failed to compensate billing for instance ${instanceId}:`, compensationError)
+        }
+      }
+    }
+
+    try {
+      const client = await getIncusClient(host)
+      await deleteInstance(client, config.name)
+    } catch {
+      // Instance may not exist or may already have been cleaned by timeout handling.
+    }
+
+    throw error
+  }
+}

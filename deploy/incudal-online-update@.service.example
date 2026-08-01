@@ -1,0 +1,19 @@
+[Unit]
+Description=XPayincus online update task %i
+Documentation=https://github.com/XiaoLong-Taiwan/XPayincus
+After=network.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/incudal
+EnvironmentFile=/opt/incudal/.env
+Environment=HOME=/var/cache/incudal-ota
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/libexec/incudal/incudal-online-task update %i
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=incudal-online-update
