@@ -74,6 +74,7 @@ rejectText(workflow, "- 'v*'", 'docs workflow')
 requireText(workflow, 'check:deployment', 'docs workflow')
 requireText(workflow, 'workflow_run:', 'docs workflow')
 requireText(workflow, 'actions/upload-pages-artifact@v3', 'docs workflow')
+rejectText(workflow, 'version: 10.17.1', 'docs workflow')
 requireText(workflow, 'test -s docs-site/docs/.vitepress/dist/index.html', 'docs workflow')
 
 console.log('Deployment documentation guards passed.')
