@@ -49,9 +49,10 @@ readonly NDPPD_MANAGED_MARKER="# Managed by XPayincus (incudal) - do not edit, w
 readonly WGCF_VERSION="2.2.22"
 readonly WGCF_SHA256_AMD64="268d187e649870b603ad2e5c1b74a696251f6c2f6f075c726a174a0039b0b1e2"
 readonly WGCF_SHA256_ARM64="e5ff08d3aae5374935211053b2d64d96daaa3f1aec8e9a1dab7418125585a011"
-readonly RFW_VERSION="v0.1.9"
-readonly RFW_SHA256_X86_64="b2486f8a500ae2eb2da3aa8a4191878404ea46b8dbd6e4c9041a1bb2d20e3b6a"
-readonly RFW_SHA256_AARCH64="79781139edf77222560a9fd307d1bae5b5bc5aed6b80df44f02542950f42933a"
+RFW_VERSION_DEFAULT="v0.1.9"
+RFW_VERSION="${RFW_VERSION_OVERRIDE:-${RFW_VERSION_DEFAULT}}"
+readonly RFW_DEFAULT_SHA256_X86_64="b2486f8a500ae2eb2da3aa8a4191878404ea46b8dbd6e4c9041a1bb2d20e3b6a"
+readonly RFW_DEFAULT_SHA256_AARCH64="79781139edf77222560a9fd307d1bae5b5bc5aed6b80df44f02542950f42933a"
 # /etc/resolv.conf 可能由客户或系统网络服务管理；只恢复本脚本打过标记的版本。
 readonly RESOLV_MANAGED_MARKER="# Managed by XPayincus (incudal) DNS64 - restore backup on uninstall"
 readonly PRESEED_FILE="/tmp/.incus-preseed-$$.yaml"
@@ -128,6 +129,8 @@ DEFAULT_IFACE=""
 IS_PURE_IPV6="false"
 AGENT_INSTALL_STATUS="未安装"
 AGENT_HEARTBEAT_INTERVAL_SECONDS="30"
+ZFS_ARC_MAX_GB=""
+ZFS_ARC_MIN_GB=""
 LISTEN_PORT=""
 IPV6_SUBNET=""
 IPV6_IFACE=""
@@ -628,6 +631,137 @@ configure_agent_heartbeat_interval() {
     fi
 }
 
+configure_zfs_arc_memory() {
+    if [[ "$OS_ID" != "debian" && "$OS_ID" != "ubuntu" ]]; then
+        return 0
+    fi
+
+    local total_mem_kb=0
+    total_mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")
+    if [[ "$total_mem_kb" -lt 1048576 ]]; then
+        info "系统内存不足 1GB，跳过 ZFS ARC 配置（ZFS 将使用默认值）"
+        return 0
+    fi
+
+    local total_mem_gb=$(( total_mem_kb / 1048576 ))
+    local default_max_gb=$(( total_mem_gb / 2 ))
+    local default_min_gb=$(( total_mem_gb / 8 ))
+    [[ "$default_max_gb" -lt 1 ]] && default_max_gb=1
+    [[ "$default_min_gb" -lt 1 ]] && default_min_gb=1
+    if [[ "$default_max_gb" -gt 32 ]]; then
+        default_max_gb=32
+    fi
+
+    if [[ ! -t 0 ]]; then
+        ZFS_ARC_MAX_GB=""
+        ZFS_ARC_MIN_GB=""
+        info "非交互环境，跳过 ZFS ARC 内存配置（使用系统默认值）"
+        return 0
+    fi
+
+    echo ""
+    divider
+    echo -e "  ${BOLD}ZFS ARC 内存配置（可选）${NC}"
+    divider
+    echo ""
+    echo -e "  ZFS 使用 ARC (Adaptive Replacement Cache) 作为文件系统缓存。"
+    echo -e "  合理设置 ARC 可以在 ZFS 性能和系统可用内存之间取得平衡。"
+    echo -e ""
+    echo -e "  检测到系统总内存: ${GREEN}${total_mem_gb} GB${NC}"
+    echo -e "  推荐 ARC 最大值: ${GREEN}${default_max_gb} GB${NC} (约为总内存的一半，上限 32GB)"
+    echo -e "  推荐 ARC 最小值: ${GREEN}${default_min_gb} GB${NC} (约为总内存的 1/8)"
+    echo -e ""
+    echo -e "  ${DIM}说明:${NC}"
+    echo -e "    • 留空回车 = 使用上方推荐值"
+    echo -e "    • 专用存储节点可适当增大（如总内存 75%）"
+    echo -e "    • 需同时运行大量容器时建议保守（如总内存 25%-50%）"
+    echo ""
+
+    local arc_max_input=""
+    local arc_min_input=""
+
+    while true; do
+        echo -ne "  ${BOLD}ARC 最大值 (GB) [回车使用推荐值: ${default_max_gb}]: ${NC}"
+        read -r arc_max_input
+        if [[ -z "$arc_max_input" ]]; then
+            ZFS_ARC_MAX_GB="$default_max_gb"
+            break
+        fi
+        if [[ "$arc_max_input" =~ ^[0-9]+$ ]] && [[ "$arc_max_input" -ge 1 ]] && [[ "$arc_max_input" -le "$total_mem_gb" ]]; then
+            ZFS_ARC_MAX_GB="$arc_max_input"
+            break
+        fi
+        warn "请输入 1-${total_mem_gb} 之间的整数，或回车使用推荐值"
+    done
+
+    if [[ -n "$ZFS_ARC_MAX_GB" ]]; then
+        while true; do
+            echo -ne "  ${BOLD}ARC 最小值 (GB) [回车默认: ${default_min_gb}，必须 ≤ 最大值]: ${NC}"
+            read -r arc_min_input
+            if [[ -z "$arc_min_input" ]]; then
+                ZFS_ARC_MIN_GB="$default_min_gb"
+                if [[ "$ZFS_ARC_MIN_GB" -gt "$ZFS_ARC_MAX_GB" ]]; then
+                    ZFS_ARC_MIN_GB="$ZFS_ARC_MAX_GB"
+                fi
+                break
+            fi
+            if [[ "$arc_min_input" =~ ^[0-9]+$ ]] && [[ "$arc_min_input" -ge 1 ]] && [[ "$arc_min_input" -le "$ZFS_ARC_MAX_GB" ]]; then
+                ZFS_ARC_MIN_GB="$arc_min_input"
+                break
+            fi
+            warn "请输入 1-${ZFS_ARC_MAX_GB} 之间的整数，或回车使用推荐值"
+        done
+    else
+        ZFS_ARC_MIN_GB=""
+    fi
+
+    if [[ -n "$ZFS_ARC_MAX_GB" ]]; then
+        echo ""
+        info "ZFS ARC 配置已选择:"
+        echo -e "    最大值: ${GREEN}${ZFS_ARC_MAX_GB} GB${NC}"
+        echo -e "    最小值: ${GREEN}${ZFS_ARC_MIN_GB} GB${NC}"
+    else
+        echo ""
+        info "未设置 ARC 限制，ZFS 将使用系统默认策略自动管理内存"
+    fi
+}
+
+apply_zfs_arc_config() {
+    if ! command -v zpool >/dev/null 2>&1 && ! modprobe zfs 2>/dev/null; then
+        return 0
+    fi
+    if [[ -z "$ZFS_ARC_MAX_GB" ]]; then
+        return 0
+    fi
+
+    local arc_max_bytes=$(( ZFS_ARC_MAX_GB * 1024 * 1024 * 1024 ))
+    local arc_min_bytes=$(( ZFS_ARC_MIN_GB * 1024 * 1024 * 1024 ))
+    local modprobe_file="/etc/modprobe.d/99-zfs-arc.conf"
+
+    info "写入 ZFS ARC 内存配置..."
+
+    cat > "$modprobe_file" <<EOF_MODPROBE
+options zfs zfs_arc_max=${arc_max_bytes}
+options zfs zfs_arc_min=${arc_min_bytes}
+EOF_MODPROBE
+    chmod 0644 "$modprobe_file"
+    info "已写入模块参数: ${modprobe_file}"
+
+    if [[ -w /sys/module/zfs/parameters/zfs_arc_max ]]; then
+        printf '%s' "$arc_max_bytes" > /sys/module/zfs/parameters/zfs_arc_max || true
+    fi
+    if [[ -w /sys/module/zfs/parameters/zfs_arc_min ]]; then
+        printf '%s' "$arc_min_bytes" > /sys/module/zfs/parameters/zfs_arc_min || true
+    fi
+
+    if lsinitramfs /boot/initrd.img-$(uname -r) >/dev/null 2>&1 && command -v update-initramfs >/dev/null 2>&1; then
+        info "更新 initramfs 以包含 ZFS 模块参数（约需 1-2 分钟）..."
+        update-initramfs -u -k $(uname -r) >/dev/null 2>&1 || true
+    fi
+
+    log "ZFS ARC 内存配置完成: 最大 ${ZFS_ARC_MAX_GB}GB / 最小 ${ZFS_ARC_MIN_GB}GB"
+}
+
 # ========================== 安装确认 ==========================
 confirm_install() {
     local mode_label=""
@@ -659,6 +793,11 @@ confirm_install() {
     echo -e "  Token     :  ${GREEN}${token_masked}${NC}"
     if [[ "$AGENT_ENABLED" == "true" && ( -n "$AGENT_INSTALL_TOKEN" || ( -n "$AGENT_ID" && -n "$AGENT_SECRET" ) ) ]]; then
         echo -e "  Agent     :  ${GREEN}${AGENT_HEARTBEAT_INTERVAL_SECONDS} 秒上报${NC}"
+    fi
+    if [[ -n "$ZFS_ARC_MAX_GB" ]]; then
+        echo -e "  ZFS ARC   :  ${GREEN}最大 ${ZFS_ARC_MAX_GB}GB / 最小 ${ZFS_ARC_MIN_GB}GB${NC}"
+    else
+        echo -e "  ZFS ARC   :  ${DIM}使用系统默认${NC}"
     fi
     
     if [[ "$IS_PURE_IPV6" == "true" ]]; then
@@ -1379,52 +1518,13 @@ install_deps() {
         fi
     fi
 
-    # Debian DKMS 编译后清理：删除编译工具链以释放资源
     if [[ "$debian_zfs_compiled" == "true" ]]; then
-        info "ZFS DKMS 编译成功，清理编译环境以释放资源..."
-
-        # 锁定「当前正在运行」的内核 —— ZFS 模块正是为它编译的。
-        # 取 dpkg 列表里的第一个 linux-image 是错的：机器上有多个内核时会锁错版本，
-        # 重启后进入另一个没有 ZFS 模块的内核，存储池直接不可用。
         local kernel_pkg="linux-image-$(uname -r)"
         if dpkg -s "$kernel_pkg" >/dev/null 2>&1; then
             apt-mark hold "$kernel_pkg" >/dev/null 2>&1 || true
             info "已锁定内核版本: ${kernel_pkg}（防止自动更新导致 ZFS 失效）"
         fi
-
-        # 只卸载「本脚本为了编译 ZFS 而新装的」软件包。
-        # 绝不使用 linux-headers-* 这类通配符，也绝不动客户机器上原本就有的工具链——
-        # 否则会把客户自己的开发环境和其它内核的头文件一起删掉。
-        #
-        # zfs-dkms / zfsutils-linux 必须排除在外：purge zfs-dkms 会触发 DKMS 卸载钩子，
-        # 把刚刚编译好的内核模块一起删掉，ZFS 当场失效。
-        local zfs_added_pkgs=""
-        local _pkg
-        for _pkg in ${ZFS_BUILD_PKGS_ADDED_BY_US:-}; do
-            case "$_pkg" in
-                zfs-dkms|zfsutils-linux|zfs-zed) continue ;;
-                *) zfs_added_pkgs="${zfs_added_pkgs} ${_pkg}" ;;
-            esac
-        done
-        if [[ -n "${zfs_added_pkgs// /}" ]]; then
-            # shellcheck disable=SC2086
-            apt-get purge -y -qq $zfs_added_pkgs >/dev/null 2>&1 || true
-            apt-get autoremove -y -qq >/dev/null 2>&1 || true
-            info "已清理本次为编译 ZFS 新装的工具链:${zfs_added_pkgs}"
-        else
-            info "编译工具链为客户机器原有环境，全部保留不清理"
-        fi
-
-        # 清理后复验：确认 ZFS 仍然可用。清理不该把刚装好的 ZFS 弄坏，坏了必须当场告诉用户。
-        if ! modprobe zfs 2>/dev/null || ! command -v zpool >/dev/null 2>&1; then
-            warn "清理编译环境后 ZFS 不再可用，请检查；面板可改用 dir 存储池"
-        fi
-        # 清理 APT 下载缓存
-        apt-get clean 2>/dev/null || true
-
-        log "编译环境已清理，磁盘空间已释放"
-        warn "注意：内核版本已锁定，如需更新内核请先重装编译依赖"
-        info "更新内核前请运行: apt install build-essential linux-headers-\$(uname -r)"
+        log "ZFS 套件、DKMS 编译工具链与当前内核标头已全部保留"
     fi
 }
 
@@ -2225,9 +2325,83 @@ SHORTCUT
 # RFW 下载地址
 # 固定到具体版本（原先用的是 latest/download）：latest 意味着上游一改，客户机器上
 # 装到的就是另一个二进制，既不可复现、也无法用固定哈希校验。版本与哈希见脚本顶部常量。
-readonly RFW_RELEASE_URL="https://github.com/XiaoLong-Taiwan/XPayincus-RFW/releases/download/${RFW_VERSION}"
+# RFW_RELEASE_URL 在使用时动态拼接（因为 RFW_VERSION 可被 CLI 参数覆盖）。
+RFW_GITHUB_REPO="XiaoLong-Taiwan/XPayincus-RFW"
+RFW_RELEASE_BASE="https://github.com/${RFW_GITHUB_REPO}/releases/download"
 readonly RFW_INSTALL_DIR="/root/rfw"
 readonly RFW_SERVICE_FILE="/etc/systemd/system/rfw.service"
+
+# RFW CLI 参数暂存区（用于独立可控安装模式）
+RFW_CLI_IFACE=""
+RFW_CLI_ARGS=""
+RFW_CLI_SKIP_CONFIRM="false"
+
+# 根据 uname -m 输出映射到 GitHub Release 资产使用的两个命名体系：
+#   gh_arch:        amd64 / arm64       (build.yml 里 matrix.arch 用的)
+#   aya_arch:       x86_64 / aarch64    (旧文件名 rfw-${arch}-unknown-linux-musl 用)
+# 返回 0 且同时设置两个全局变量。
+map_rfw_arch() {
+    local machine="$1"
+    case "$machine" in
+        x86_64|amd64)
+            RFW_GH_ARCH="amd64"
+            RFW_AYA_ARCH="x86_64"
+            ;;
+        aarch64|arm64)
+            RFW_GH_ARCH="arm64"
+            RFW_AYA_ARCH="aarch64"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# 解析 --rfw-* 独立参数为 RFW_ARGS 与摘要信息。
+# 结果写入全局 RFW_ARGS / RFW_SUMMARY_RULES / RFW_SUMMARY_GEO / RFW_SUMMARY_LOG。
+build_rfw_args_from_cli() {
+    RFW_ARGS="${RFW_CLI_ARGS}"
+    local rules=()
+    local geo="不使用 GeoIP"
+    local log_status="关闭"
+
+    if [[ -n "${RFW_BLOCK_EMAIL:-}" ]]; then rules+=("Email"); fi
+    if [[ -n "${RFW_BLOCK_HTTP:-}" ]]; then rules+=("HTTP"); fi
+    if [[ -n "${RFW_BLOCK_SOCKS5:-}" ]]; then rules+=("SOCKS5"); fi
+    if [[ -n "${RFW_BLOCK_FET_STRICT:-}" ]]; then rules+=("FET-Strict"); fi
+    if [[ -n "${RFW_BLOCK_FET_LOOSE:-}" ]]; then rules+=("FET-Loose"); fi
+    if [[ -n "${RFW_BLOCK_WIREGUARD:-}" ]]; then rules+=("WireGuard"); fi
+    if [[ -n "${RFW_BLOCK_QUIC:-}" ]]; then rules+=("QUIC"); fi
+
+    if [[ -n "${RFW_BLOCK_ALL_FROM:-}" ]]; then
+        RFW_SUMMARY_RULES="所有入站"
+        geo="黑名单 (${RFW_BLOCK_ALL_FROM})"
+    elif [[ -n "${RFW_BLOCK_ALL:-}" ]]; then
+        RFW_SUMMARY_RULES="所有入站"
+        if [[ -n "${RFW_COUNTRIES:-}" ]]; then
+            geo="黑名单 (${RFW_COUNTRIES})"
+        elif [[ -n "${RFW_ALLOW_ONLY_COUNTRIES:-}" ]]; then
+            geo="白名单 (${RFW_ALLOW_ONLY_COUNTRIES})"
+        fi
+    else
+        if [[ ${#rules[@]} -gt 0 ]]; then
+            RFW_SUMMARY_RULES=$(IFS=/ ; echo "${rules[*]}")
+        else
+            RFW_SUMMARY_RULES="无协议屏蔽"
+        fi
+        if [[ -n "${RFW_COUNTRIES:-}" ]]; then
+            geo="黑名单 (${RFW_COUNTRIES})"
+        elif [[ -n "${RFW_ALLOW_ONLY_COUNTRIES:-}" ]]; then
+            geo="白名单 (${RFW_ALLOW_ONLY_COUNTRIES})"
+        fi
+    fi
+
+    if [[ -n "${RFW_LOG_PORT_ACCESS:-}" ]]; then log_status="开启"; fi
+
+    RFW_SUMMARY_GEO="$geo"
+    RFW_SUMMARY_LOG="$log_status"
+}
 
 # RFW 交互式配置规则
 configure_rfw_rules() {
@@ -2397,20 +2571,13 @@ install_rfw() {
 
     # 检测架构
     step "检测系统架构..."
-    local arch_suffix=""
-    case "$(uname -m)" in
-        x86_64)
-            arch_suffix="x86_64"
-            ;;
-        aarch64|arm64)
-            arch_suffix="aarch64"
-            ;;
-        *)
-            error "不支持的架构: $(uname -m)（仅支持 x86_64 / aarch64）"
-            return 1
-            ;;
-    esac
-    log "系统架构: $(uname -m) (${arch_suffix})"
+    RFW_GH_ARCH=""
+    RFW_AYA_ARCH=""
+    if ! map_rfw_arch "$(uname -m)"; then
+        error "不支持的架构: $(uname -m)（仅支持 x86_64 / aarch64）"
+        return 1
+    fi
+    log "系统架构: $(uname -m) (github=${RFW_GH_ARCH}, aya=${RFW_AYA_ARCH})"
 
     # 选择网络接口
     step "选择网络接口..."
@@ -2427,8 +2594,23 @@ install_rfw() {
 
     local selected_interface=""
 
-    if [[ ${#interfaces[@]} -eq 1 ]]; then
-        # 只有一个接口，自动选择
+    if [[ -n "$RFW_CLI_IFACE" ]]; then
+        # CLI 参数优先：验证传入的接口存在
+        local found_iface=""
+        local iface_candidate
+        for iface_candidate in "${interfaces[@]}"; do
+            if [[ "$iface_candidate" == "$RFW_CLI_IFACE" ]]; then
+                found_iface="$RFW_CLI_IFACE"
+                break
+            fi
+        done
+        if [[ -z "$found_iface" ]]; then
+            error "--rfw-iface 指定的网卡 ${RFW_CLI_IFACE} 不存在，可用: ${interfaces[*]}"
+            return 1
+        fi
+        selected_interface="$found_iface"
+        info "使用 CLI 指定网卡: ${selected_interface}"
+    elif [[ ${#interfaces[@]} -eq 1 ]]; then
         selected_interface="${interfaces[0]}"
         info "自动选择网卡: ${selected_interface}"
     else
@@ -2437,7 +2619,6 @@ install_rfw() {
         local i
         for i in "${!interfaces[@]}"; do
             local num=$((i + 1))
-            # 获取该接口的 IP
             local iface_ip
             iface_ip=$(ip -4 addr show "${interfaces[$i]}" 2>/dev/null | awk '/inet / {print $2}' | head -n1 || echo "")
             if [[ -n "$iface_ip" ]]; then
@@ -2468,61 +2649,147 @@ install_rfw() {
     step "下载 RFW 程序..."
     mkdir -p "$RFW_INSTALL_DIR"
 
-    local rfw_url="${RFW_RELEASE_URL}/rfw-${arch_suffix}-unknown-linux-musl"
-    # 期望 SHA-256 按架构取（固定在脚本顶部常量里）
-    local rfw_sha256=""
-    case "$arch_suffix" in
-        x86_64)  rfw_sha256="$RFW_SHA256_X86_64" ;;
-        aarch64) rfw_sha256="$RFW_SHA256_AARCH64" ;;
-        *)
-            error "RFW 不支持的架构: ${arch_suffix}"
-            return 1
-            ;;
-    esac
+    # 构造两个候选 URL，兼容 GitHub Actions 当前产出的 xpayincus-rfw-<ver>-linux-<gh_arch>
+    # 以及旧文件名 rfw-<aya_arch>-unknown-linux-musl，按顺序尝试。
+    local rfw_release_url="${RFW_RELEASE_BASE}/${RFW_VERSION}"
+    local rfw_url_new="${rfw_release_url}/xpayincus-rfw-${RFW_VERSION}-linux-${RFW_GH_ARCH}"
+    local rfw_url_old="${rfw_release_url}/rfw-${RFW_AYA_ARCH}-unknown-linux-musl"
+
+    # 确定期望 SHA-256：
+    #   1) 用户显式通过 --rfw-sha256 指定 → 使用它；
+    #   2) 版本等于默认版本且哈希常量存在 → 使用固定哈希（供应链防护）；
+    #   3) 否则 → 仅 ELF 校验，并警告用户版本是自定义的。
+    local rfw_sha256="${RFW_CLI_SHA256:-}"
+    local using_default_version="false"
+    if [[ "$RFW_VERSION" == "$RFW_VERSION_DEFAULT" ]]; then
+        using_default_version="true"
+        if [[ -z "$rfw_sha256" ]]; then
+            case "$RFW_AYA_ARCH" in
+                x86_64)  rfw_sha256="$RFW_DEFAULT_SHA256_X86_64" ;;
+                aarch64) rfw_sha256="$RFW_DEFAULT_SHA256_AARCH64" ;;
+            esac
+        fi
+    fi
+
     local staged_binary="${RFW_INSTALL_DIR}/.rfw.new.$$"
     local staged_service="${RFW_SERVICE_FILE}.new.$$"
     local binary_backup="${RFW_INSTALL_DIR}/.rfw.before-incudal.$$"
     local service_backup="${RFW_SERVICE_FILE}.before-incudal.$$"
     local download_ok=false
+    local used_url=""
     local attempt
 
-    for attempt in 1 2 3; do
-        info "下载 RFW (第 ${attempt} 次)..."
-        rm -f "$staged_binary" 2>/dev/null || true
-        if curl -sSfL --connect-timeout 15 --max-time 120 \
-            "$rfw_url" -o "$staged_binary" 2>/dev/null; then
-            # 双重校验：
-            # 1) ELF 魔数 —— Release 资产缺失或被 CDN/WAF 拦截时，HTTP 可能仍返回
-            #    200 + 一段 HTML；不校验就 chmod +x 去跑，行为不可预测。
-            # 2) SHA-256 与本仓库固定值逐字节比对 —— 这一步才是真正的供应链防护，
-            #    能挡住上游被投毒或传输被替换。任一不符即按下载失败处理并重试。
-            if is_elf_binary "$staged_binary" && verify_sha256 "$staged_binary" "$rfw_sha256"; then
-                download_ok=true
-                break
-            fi
-            warn "第 ${attempt} 次下载校验未通过（ELF 或 SHA-256 不符），已丢弃该文件"
+    # 每个 URL 重试 3 次；先新格式再旧格式，最多 6 次 HTTP 请求。
+    local url_candidates=("$rfw_url_new" "$rfw_url_old")
+    local candidate_url
+    for candidate_url in "${url_candidates[@]}"; do
+        for attempt in 1 2 3; do
+            info "下载 RFW (${candidate_url##*/} 第 ${attempt}/3 次)..."
             rm -f "$staged_binary" 2>/dev/null || true
-            [[ "$attempt" -lt 3 ]] && sleep 3
-        else
-            warn "第 ${attempt} 次下载失败"
-            [[ "$attempt" -lt 3 ]] && sleep 3
-        fi
+            if curl -sSfL --connect-timeout 15 --max-time 120 \
+                "$candidate_url" -o "$staged_binary" 2>/dev/null; then
+                # 校验 1：必须是 ELF 可执行，挡住 HTML 错误页 / 截断文件
+                if ! is_elf_binary "$staged_binary"; then
+                    warn "下载结果不是 ELF 二进制，已丢弃"
+                    rm -f "$staged_binary" 2>/dev/null || true
+                    [[ "$attempt" -lt 3 ]] && sleep 3
+                    continue
+                fi
+                # 校验 2：SHA-256（若已知）
+                if [[ -n "$rfw_sha256" ]]; then
+                    if verify_sha256 "$staged_binary" "$rfw_sha256"; then
+                        download_ok=true
+                        used_url="$candidate_url"
+                        break 2
+                    fi
+                    warn "SHA-256 与期望值不符（可能是 CDN 缓存了旧文件，已丢弃）"
+                    rm -f "$staged_binary" 2>/dev/null || true
+                    [[ "$attempt" -lt 3 ]] && sleep 3
+                    continue
+                fi
+                # 无固定哈希：只有默认版本才强制要求哈希；自定义版本放行但告警。
+                if [[ "$using_default_version" == "true" ]]; then
+                    warn "默认版本缺少 SHA-256 校验值（脚本 bug），拒绝放行"
+                    rm -f "$staged_binary" 2>/dev/null || true
+                    [[ "$attempt" -lt 3 ]] && sleep 3
+                    continue
+                fi
+                warn "自定义版本 ${RFW_VERSION} 未提供 --rfw-sha256，仅校验 ELF 通过（非推荐）"
+                download_ok=true
+                used_url="$candidate_url"
+                break 2
+            else
+                warn "下载失败（HTTP ${PIPESTATUS[0]:-?}）"
+                [[ "$attempt" -lt 3 ]] && sleep 3
+            fi
+        done
     done
 
     if [[ "$download_ok" != "true" ]]; then
-        error "RFW 下载失败（已重试 3 次）"
-        error "下载地址: ${rfw_url}"
+        error "RFW 下载失败（已尝试两个命名格式各 3 次）"
+        error "URL 1 (新格式): ${rfw_url_new}"
+        error "URL 2 (旧格式): ${rfw_url_old}"
+        if [[ "$using_default_version" != "true" ]]; then
+            error "提示：当前使用自定义版本 ${RFW_VERSION}，如 Release 尚未发布请先在 GitHub 打 tag"
+        fi
         rm -f "$staged_binary" 2>/dev/null || true
         return 1
     fi
 
     chmod 0755 "$staged_binary"
-    log "RFW 下载并校验完成（旧服务保持原状态）"
+    log "RFW 下载完成: ${used_url##*/}"
+    log "RFW 校验完成（旧服务保持原状态）"
 
-    # 交互式配置 RFW 规则
-    if ! configure_rfw_rules; then
-        rm -f "$staged_binary" 2>/dev/null || true
-        return 0
+    # 配置 RFW 规则：CLI 参数模式优先，否则走交互
+    local use_cli_config="false"
+    if [[ -n "$RFW_CLI_ARGS" ]] || \
+       [[ -n "${RFW_BLOCK_ALL:-}" ]] || \
+       [[ -n "${RFW_BLOCK_ALL_FROM:-}" ]] || \
+       [[ -n "${RFW_BLOCK_EMAIL:-}" ]] || \
+       [[ -n "${RFW_BLOCK_HTTP:-}" ]] || \
+       [[ -n "${RFW_BLOCK_SOCKS5:-}" ]] || \
+       [[ -n "${RFW_BLOCK_FET_STRICT:-}" ]] || \
+       [[ -n "${RFW_BLOCK_FET_LOOSE:-}" ]] || \
+       [[ -n "${RFW_BLOCK_WIREGUARD:-}" ]] || \
+       [[ -n "${RFW_BLOCK_QUIC:-}" ]] || \
+       [[ -n "${RFW_COUNTRIES:-}" ]] || \
+       [[ -n "${RFW_ALLOW_ONLY_COUNTRIES:-}" ]] || \
+       [[ -n "${RFW_LOG_PORT_ACCESS:-}" ]] || \
+       [[ "$RFW_CLI_SKIP_CONFIRM" == "true" ]]; then
+        use_cli_config="true"
+    fi
+
+    if [[ "$use_cli_config" == "true" ]]; then
+        build_rfw_args_from_cli
+        # 在 skip-confirm 模式下也打印一份确认摘要给用户复核
+        echo ""
+        divider
+        echo -e "  ${BOLD}RFW CLI 可控安装配置${NC}（RFW_VERSION=${RFW_VERSION}）"
+        divider
+        echo -e "  网卡      :  ${GREEN}${selected_interface}${NC}"
+        echo -e "  屏蔽规则  :  ${GREEN}${RFW_SUMMARY_RULES}${NC}"
+        echo -e "  GeoIP     :  ${GREEN}${RFW_SUMMARY_GEO}${NC}"
+        echo -e "  端口日志  :  ${GREEN}${RFW_SUMMARY_LOG}${NC}"
+        echo -e "  运行参数  :  ${DIM}${RFW_ARGS}${NC}"
+        divider
+        if [[ "$RFW_CLI_SKIP_CONFIRM" != "true" ]]; then
+            echo ""
+            echo -ne "  ${YELLOW}确认使用上述 CLI 参数安装 RFW？${NC}[Y/n]: "
+            read -r confirm || true
+            if [[ "${confirm:-Y}" =~ ^[nN]$ ]]; then
+                info "已取消安装"
+                rm -f "$staged_binary" 2>/dev/null || true
+                return 0
+            fi
+        else
+            echo ""
+            info "--rfw-yes 已设置，跳过确认并立即安装"
+        fi
+    else
+        if ! configure_rfw_rules; then
+            rm -f "$staged_binary" 2>/dev/null || true
+            return 0
+        fi
     fi
 
     # 先准备完整的新 systemd 服务文件，尚不触碰当前运行中的服务。
@@ -3186,6 +3453,27 @@ main() {
 
     # ---- 解析命令行参数（兼容非交互模式）----
     local ACTION="install"   # 默认动作为安装
+    # RFW 独立可控安装的专用暂存变量（CLI 参数先放这里，install_rfw 会按需读取）
+    RFW_CLI_IFACE=""
+    RFW_CLI_ARGS=""
+    RFW_CLI_SHA256=""
+    RFW_CLI_SKIP_CONFIRM="false"
+    RFW_BLOCK_EMAIL=""
+    RFW_BLOCK_HTTP=""
+    RFW_BLOCK_SOCKS5=""
+    RFW_BLOCK_FET_STRICT=""
+    RFW_BLOCK_FET_LOOSE=""
+    RFW_BLOCK_WIREGUARD=""
+    RFW_BLOCK_QUIC=""
+    RFW_BLOCK_ALL=""
+    RFW_BLOCK_ALL_FROM=""
+    RFW_COUNTRIES=""
+    RFW_ALLOW_ONLY_COUNTRIES=""
+    RFW_LOG_PORT_ACCESS=""
+    # 让 --rfw-version 能覆盖默认的 RFW_VERSION（在脚本顶部已经通过 RFW_VERSION_OVERRIDE 间接支持，
+    # 这里再提供一个显式参数名方便用户记忆）
+    local rfw_version_override=""
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --mode)
@@ -3207,10 +3495,57 @@ main() {
                 ACTION="uninstall"; shift ;;
             --agent|--agent-menu)
                 ACTION="agent"; shift ;;
+            # ==================== RFW 独立可控模式 ====================
+            --install-rfw|--rfw)
+                ACTION="install_rfw"; shift ;;
+            --uninstall-rfw)
+                ACTION="uninstall_rfw"; shift ;;
+            --rfw-version)
+                if [[ $# -lt 2 ]]; then error "--rfw-version 缺少参数值（例如 v0.1.9）"; exit 1; fi
+                rfw_version_override="$2"; shift 2 ;;
+            --rfw-sha256)
+                if [[ $# -lt 2 ]]; then error "--rfw-sha256 缺少参数值（64 位十六进制）"; exit 1; fi
+                RFW_CLI_SHA256="$2"; shift 2 ;;
+            --rfw-iface)
+                if [[ $# -lt 2 ]]; then error "--rfw-iface 缺少参数值（例如 eth0）"; exit 1; fi
+                RFW_CLI_IFACE="$2"; shift 2 ;;
+            --rfw-args)
+                if [[ $# -lt 2 ]]; then error "--rfw-args 缺少参数值（原样透传给 rfw 可执行文件）"; exit 1; fi
+                RFW_CLI_ARGS="$2"; shift 2 ;;
+            --rfw-block-email)
+                RFW_BLOCK_EMAIL="1"; RFW_CLI_ARGS+=" --block-email"; shift ;;
+            --rfw-block-http)
+                RFW_BLOCK_HTTP="1"; RFW_CLI_ARGS+=" --block-http"; shift ;;
+            --rfw-block-socks5)
+                RFW_BLOCK_SOCKS5="1"; RFW_CLI_ARGS+=" --block-socks5"; shift ;;
+            --rfw-block-fet-strict)
+                RFW_BLOCK_FET_STRICT="1"; RFW_CLI_ARGS+=" --block-fet-strict"; shift ;;
+            --rfw-block-fet-loose)
+                RFW_BLOCK_FET_LOOSE="1"; RFW_CLI_ARGS+=" --block-fet-loose"; shift ;;
+            --rfw-block-wireguard)
+                RFW_BLOCK_WIREGUARD="1"; RFW_CLI_ARGS+=" --block-wireguard"; shift ;;
+            --rfw-block-quic)
+                RFW_BLOCK_QUIC="1"; RFW_CLI_ARGS+=" --block-quic"; shift ;;
+            --rfw-block-all)
+                RFW_BLOCK_ALL="1"; RFW_CLI_ARGS+=" --block-all"; shift ;;
+            --rfw-block-all-from)
+                if [[ $# -lt 2 ]]; then error "--rfw-block-all-from 缺少参数值（例如 CN,RU,KP）"; exit 1; fi
+                RFW_BLOCK_ALL_FROM="$2"; RFW_CLI_ARGS+=" --block-all-from $2"; shift 2 ;;
+            --rfw-countries)
+                if [[ $# -lt 2 ]]; then error "--rfw-countries 缺少参数值（逗号分隔的国家代码，如 CN,RU）"; exit 1; fi
+                RFW_COUNTRIES="$2"; RFW_CLI_ARGS+=" --countries $2"; shift 2 ;;
+            --rfw-allow-only-countries)
+                if [[ $# -lt 2 ]]; then error "--rfw-allow-only-countries 缺少参数值（逗号分隔的国家代码）"; exit 1; fi
+                RFW_ALLOW_ONLY_COUNTRIES="$2"; RFW_CLI_ARGS+=" --allow-only-countries $2"; shift 2 ;;
+            --rfw-log-port-access)
+                RFW_LOG_PORT_ACCESS="1"; RFW_CLI_ARGS+=" --log-port-access"; shift ;;
+            --rfw-yes)
+                RFW_CLI_SKIP_CONFIRM="true"; shift ;;
+            # ==================== RFW 独立可控模式结束 ====================
             --help|-h)
                 echo "用法: $0 [选项]"
                 echo ""
-                echo "选项:"
+                echo "通用选项:"
                 echo "  --mode <nat|nat_ipv6>   网络模式（不指定则交互选择）"
                 echo "  --token <TOKEN>         面板认证 Token"
                 echo "  --ipv6-subnet <CIDR>    IPv6 子网段（例如 2001:db8::/64）"
@@ -3220,9 +3555,46 @@ main() {
                 echo "  --agent                 打开 Agent 安装 / 更新菜单"
                 echo "  --help, -h              显示帮助信息"
                 echo ""
+                echo "RFW 防火墙独立可控安装（不依赖节点安装）:"
+                echo "  --install-rfw, --rfw    仅安装 RFW 防火墙（配合下列 --rfw-* 参数使用）"
+                echo "  --uninstall-rfw         仅卸载 RFW 防火墙"
+                echo "  --rfw-version <TAG>     指定 RFW 版本（默认 ${RFW_VERSION_DEFAULT}，可自定义如 v0.2.0）"
+                echo "  --rfw-sha256 <HASH>     自定义版本时提供二进制的 SHA-256（可选但强烈推荐）"
+                echo "  --rfw-iface <IFACE>     绑定的网卡（例如 eth0 / ens3）"
+                echo "  --rfw-args '<ARGS>'     原样透传给 rfw 的额外参数（优先级最高，可覆盖其他 --rfw-block-*）"
+                echo "  --rfw-block-email       屏蔽 SMTP 发送邮件端口 (25/587/465/2525)"
+                echo "  --rfw-block-http        深度检测并屏蔽明文 HTTP 入站"
+                echo "  --rfw-block-socks5      深度检测并屏蔽 SOCKS5 代理入站"
+                echo "  --rfw-block-fet-strict  FET 算法严格模式屏蔽 SS/V2Ray 全加密代理"
+                echo "  --rfw-block-fet-loose   FET 算法宽松模式"
+                echo "  --rfw-block-wireguard   精准识别并屏蔽 WireGuard VPN"
+                echo "  --rfw-block-quic        屏蔽 QUIC/HTTP3 入站"
+                echo "  --rfw-block-all         屏蔽所有入站流量（搭配 GeoIP 使用最有效）"
+                echo "  --rfw-block-all-from <CC,..>   快捷方式：屏蔽指定国家的所有入站（等价于 --countries + --block-all 的优化）"
+                echo "  --rfw-countries <CC,..>         GeoIP 黑名单国家代码（逗号分隔）"
+                echo "  --rfw-allow-only-countries <CC,..>  GeoIP 白名单国家代码（只允许这些国家）"
+                echo "  --rfw-log-port-access   开启端口访问日志统计（可用 ./rfw stats 查看）"
+                echo "  --rfw-yes               跳过 CLI 配置确认，直接安装（脚本/CI 自动化场景使用）"
+                echo ""
                 echo "交互模式: sudo bash $0"
                 echo "命令行:   sudo bash $0 --mode nat --token <YOUR_TOKEN> --port 10001"
                 echo "卸载:     sudo bash $0 --uninstall"
+                echo ""
+                echo "RFW 可控安装示例（按需求自定义防火墙）:"
+                echo "  # 例 1：屏蔽来自 CN/RU 的邮件+HTTP+SOCKS5，并开启日志"
+                echo "  sudo bash $0 --install-rfw --rfw-iface eth0 \\"
+                echo "      --rfw-countries CN,RU --rfw-block-email --rfw-block-http --rfw-block-socks5 --rfw-log-port-access"
+                echo ""
+                echo "  # 例 2：白名单模式 - 只允许 US/JP/KR，其他全屏蔽"
+                echo "  sudo bash $0 --install-rfw --rfw-iface eth0 \\"
+                echo "      --rfw-allow-only-countries US,JP,KR --rfw-block-all --rfw-yes"
+                echo ""
+                echo "  # 例 3：屏蔽指定国家一切入站（最激进单条指令）"
+                echo "  sudo bash $0 --install-rfw --rfw-iface eth0 --rfw-block-all-from CN,RU,KP --rfw-yes"
+                echo ""
+                echo "  # 例 4：自定义测试版本（GitHub 打了 v0.2.1-rc1 tag 后即可直接用）"
+                echo "  sudo bash $0 --install-rfw --rfw-iface eth0 \\"
+                echo "      --rfw-version v0.2.1-rc1 --rfw-block-all-from CN --rfw-yes"
                 exit 0
                 ;;
             *)
@@ -3233,12 +3605,17 @@ main() {
         esac
     done
 
+    # 应用 --rfw-version 覆盖（必须在 CLI 解析后，任何使用 RFW_VERSION 的代码之前）
+    if [[ -n "$rfw_version_override" ]]; then
+        RFW_VERSION="$rfw_version_override"
+    fi
+
     # 合并面板注入值并在任何系统改动前完成非交互入参校验。
     TOKEN="${INJECT_TOKEN:-${TOKEN:-}}"
     MODE="${INJECT_MODE:-${MODE:-}}"
     IPV6_SUBNET="${INJECT_IPV6_SUBNET:-${IPV6_SUBNET:-}}"
     IPV6_IFACE="${INJECT_IPV6_IFACE:-${IPV6_IFACE:-}}"
-    if [[ -n "$MODE" && "$MODE" != "nat" && "$MODE" != "nat_ipv6" ]]; then
+    if [[ -n "$MODE" && "$MODE" != "nat" && "$MODE" != "nat_ipv6" && "$ACTION" != "install_rfw" && "$ACTION" != "uninstall_rfw" ]]; then
         error "--mode 必须为 'nat' 或 'nat_ipv6'"
         exit 1
     fi
@@ -3258,6 +3635,30 @@ main() {
     if [[ "$ACTION" == "agent" ]]; then
         manage_incudal_agent
         exit 0
+    fi
+    # RFW 独立动作（不进入节点安装流程）
+    if [[ "$ACTION" == "install_rfw" ]]; then
+        install_rfw
+        exit $?
+    fi
+    if [[ "$ACTION" == "uninstall_rfw" ]]; then
+        # 非交互卸载场景下，跳过确认（与 --uninstall 的行为一致）
+        if [[ ! -t 0 || "$RFW_CLI_SKIP_CONFIRM" == "true" ]]; then
+            if [[ -f "${RFW_INSTALL_DIR}/rfw" ]] || systemctl list-unit-files 2>/dev/null | grep -q "rfw.service"; then
+                step "非交互卸载 RFW（--rfw-yes 或 管道执行，跳过确认）..."
+                systemctl stop rfw >/dev/null 2>&1 || true
+                systemctl disable rfw >/dev/null 2>&1 || true
+                rm -f "$RFW_SERVICE_FILE"
+                rm -rf "$RFW_INSTALL_DIR"
+                systemctl daemon-reload >/dev/null 2>&1 || true
+                log "RFW 已非交互卸载完成"
+            else
+                info "RFW 未安装，无需卸载"
+            fi
+            exit 0
+        fi
+        uninstall_rfw
+        exit $?
     fi
 
     # ---- 交互式流程 ----
@@ -3368,6 +3769,7 @@ main() {
     fi
 
     configure_agent_heartbeat_interval
+    configure_zfs_arc_memory
 
     # WARP 询问逻辑（纯 IPv6 专供）
     if [[ "$IS_PURE_IPV6" == "true" ]]; then
@@ -3421,6 +3823,8 @@ main() {
         info "请重新下载脚本后使用: sudo bash <脚本路径>"
         exit 1
     fi
+
+    apply_zfs_arc_config
 
     install_incus     # 3/5 安装 Incus
     init_incus        # 4/5 初始化 Incus

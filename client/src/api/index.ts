@@ -1135,11 +1135,11 @@ const api = {
     regenerateInstall: (id: number): Promise<{ success: boolean; installCommand: string; installToken?: string; message: string }> =>
       http.post(`/hosts/${id}/regenerate-install`, {}),
     getAgentStatus: (id: number): Promise<HostAgentStatusResponse> =>
-      http.get(`/XPayincus-Agent/hosts/${id}/status`),
+      http.get(`/agent/hosts/${id}/status`),
     generateAgentInstallCommand: (id: number): Promise<HostAgentInstallCommandResponse> =>
-      http.post(`/XPayincus-Agent/hosts/${id}/install-command`, {}),
+      http.post(`/agent/hosts/${id}/install-command`, {}),
     requestAgentUpgrade: (id: number): Promise<HostAgentUpgradeRequestResponse> =>
-      http.post(`/XPayincus-Agent/hosts/${id}/upgrade`, {}),
+      http.post(`/agent/hosts/${id}/upgrade`, {}),
     sync: (id: number): Promise<void> => http.post(`/hosts/${id}/sync`, {}, { timeout: TIMEOUT.LONG }),
     setMaintenance: (id: number, enabled: boolean): Promise<Host> =>
       http.post(`/hosts/${id}/maintenance`, { enabled }),

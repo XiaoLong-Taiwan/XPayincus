@@ -143,11 +143,21 @@ assert.ok(
   'ZFS DKMS success must be proven by the module existing for the running kernel and actually loading'
 )
 
-// purge zfs-dkms 会触发 DKMS 卸载钩子，把刚编译好的内核模块一起删掉 —— 清理编译工具链时
-// 必须把它排除在外，否则「编译成功」之后 ZFS 当场失效。
 assert.ok(
-  hostInstallScript.includes('zfs-dkms|zfsutils-linux|zfs-zed) continue'),
-  'the post-build cleanup must never purge zfs-dkms/zfsutils-linux: purging zfs-dkms removes the module it just built'
+  hostInstallScript.includes('ZFS 套件、DKMS 编译工具链与当前内核标头已全部保留') &&
+    !hostInstallScript.includes('apt-get purge -y -qq $zfs_added_pkgs') &&
+    !hostInstallScript.includes('编译环境已清理，磁盘空间已释放'),
+  'the host installer must preserve ZFS packages, DKMS build tools, and running-kernel headers for later use'
+)
+
+assert.ok(
+  hostInstallScript.includes('configure_zfs_arc_memory()') &&
+    hostInstallScript.includes('ARC 最大值 (GB) [回车使用推荐值: ${default_max_gb}]') &&
+    hostInstallScript.includes('options zfs zfs_arc_max=${arc_max_bytes}') &&
+    hostInstallScript.includes('options zfs zfs_arc_min=${arc_min_bytes}') &&
+    hostInstallScript.indexOf('configure_zfs_arc_memory\n') < hostInstallScript.indexOf('confirm_install\n') &&
+    hostInstallScript.indexOf('apply_zfs_arc_config\n') > hostInstallScript.indexOf('if ! install_deps; then'),
+  'the host installer must ask for ZFS ARC limits before confirmation and apply them after ZFS installation'
 )
 
 // 锁内核必须锁「当前正在运行」的那个 —— 取 dpkg 列表里第一个 linux-image 会在多内核机器上
