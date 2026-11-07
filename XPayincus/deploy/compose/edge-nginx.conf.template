@@ -1,0 +1,56 @@
+map $http_upgrade $edge_connection {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 443 ssl;
+    server_name ${FRONTEND_HOST};
+    ssl_certificate /etc/nginx/tls/user/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/user/privkey.pem;
+    client_max_body_size 304m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        proxy_pass http://user:80;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $edge_connection;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${ADMIN_FRONTEND_HOST};
+    ssl_certificate /etc/nginx/tls/admin/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/admin/privkey.pem;
+    client_max_body_size 304m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        proxy_pass http://admin:80;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $edge_connection;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}

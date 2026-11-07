@@ -14,9 +14,9 @@ die() {
 usage() {
   printf '%s\n' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
-    'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain' \
+    'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
     'bash deploy/compose/panel.sh up|down|status' \
-    'bash deploy/compose/panel.sh logs [init|db|api|user|admin]' \
+    'bash deploy/compose/panel.sh logs [init|db|api|user|admin|nginx|tunnel-origin|cloudflared]' \
     'bash deploy/compose/panel.sh export [/absolute/path/panel.dump]  (預設 ./backups)' \
     'bash deploy/compose/panel.sh import /absolute/path/panel.dump --confirm-replace-incudal'
 }
@@ -48,12 +48,12 @@ if [[ "$command_name" == install ]]; then
   [[ -z "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]] || die '安裝目的地必須為空目錄，拒絕覆蓋來源或既有部署。'
   mkdir -m 700 -- "$destination/source"
   tar --exclude=node_modules --exclude=dist --exclude='.env*' --exclude=certs \
-    --exclude=deploy/compose/secrets --exclude=deploy/compose/backups \
+    --exclude=deploy/compose/secrets --exclude=deploy/compose/backups --exclude=deploy/compose/tls \
     --exclude=deploy/compose/data --exclude=deploy/compose/config --exclude=deploy/compose/.state \
     --exclude=.git --exclude='*.log' --exclude='*.dump' \
     -C "$source_root" -cf - package.json pnpm-lock.yaml pnpm-workspace.yaml client server deploy/compose \
     | tar -C "$destination/source" -xf -
-  for deployment_file in compose.yaml panel.sh README.md https-proxy.conf.example; do
+  for deployment_file in docker-compose.yml compose.yaml panel.sh README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
     cp -- "$base/$deployment_file" "$destination/$deployment_file"
   done
   if [[ -f "$base/.env.example" ]]; then cp -- "$base/.env.example" "$destination/.env.example"; fi
@@ -68,10 +68,19 @@ exec 9>"$base/.state/operation.lock"
 flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
 
 if [[ "$command_name" == init ]]; then
-  (($# == 3)) || die 'init 需要使用者 HTTPS origin、管理端 HTTPS origin、管理員電子郵件。'
+  (($# == 3 || $# == 4)) || die 'init 需要使用者 HTTPS origin、管理端 HTTPS origin、管理員電子郵件，以及可選的 nginx、cloudflare 或 external。'
+  selected_profile="${4:-nginx}"
+  case "$selected_profile" in
+    nginx|cloudflare) ;;
+    external) selected_profile='' ;;
+    *) die '部署模式必須是 nginx、cloudflare 或 external。' ;;
+  esac
   origin_pattern='^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
   [[ "$1" =~ $origin_pattern && "$2" =~ $origin_pattern ]] || die 'URL 必須是無路徑、無尾斜線的 HTTPS origin。'
   [[ "$1" != "$2" ]] || die '使用者與管理端必須使用不同 origin。'
+  user_host="${1#https://}"
+  admin_host="${2#https://}"
+  [[ "${user_host%%:*}" != "${admin_host%%:*}" ]] || die '使用者與管理端必須使用不同 hostname，供反向代理分流。'
   [[ "$3" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || die '電子郵件格式不支援。'
   [[ ! -e "$base/.env" && ! -L "$base/.env" && ! -e "$base/secrets" && ! -L "$base/secrets" ]] || die '已有設定或 secrets，拒絕覆蓋。'
   command -v openssl >/dev/null || die '需要 openssl。'
@@ -82,18 +91,28 @@ if [[ "$command_name" == init ]]; then
     printf 'Aa1!%s\n' "$secret_value" >"$base/secrets/$secret_name"
   done
   unset secret_value
-  printf 'FRONTEND_URL=%s\nADMIN_FRONTEND_URL=%s\nADMIN_EMAIL=%s\nUSER_PORT=8080\nADMIN_PORT=8081\n' "$1" "$2" "$3" >"$base/.env"
+  build_context='../..'
+  if [[ "$source_root" == "$base/source" ]]; then build_context='./source'; fi
+  compose_files='docker-compose.yml'
+  if [[ -f "$base/compose.release.yaml" ]]; then compose_files='compose.yaml:compose.release.yaml'; fi
+  printf 'FRONTEND_URL=%s\nADMIN_FRONTEND_URL=%s\nADMIN_EMAIL=%s\nUSER_PORT=3000\nADMIN_PORT=3001\nCOMPOSE_PROFILES=%s\nCOMPOSE_FILE=%s\nBUILD_CONTEXT=%s\nHTTPS_PORT=443\nINCUDAL_RELEASE_REPOSITORY=\nINCUDAL_AGENT_RELEASE_REPOSITORY=\n' "$1" "$2" "$3" "$selected_profile" "$compose_files" "$build_context" >"$base/.env"
+  if [[ "$selected_profile" == cloudflare ]]; then
+    printf '%s\n' '請以安全編輯器將 Tunnel token 寫入 ./secrets/cloudflare_tunnel_token，再設定權限 600；不要把 token 放入 .env 或命令列。'
+  elif [[ "$selected_profile" == nginx ]]; then
+    printf '%s\n' '請準備 ./tls/user/ 與 ./tls/admin/ 的 fullchain.pem、privkey.pem，再啟動。'
+  fi
   printf '設定與獨立密鑰已建立。管理員帳號：admin；密碼存於 %s/secrets/admin_password。請用安全方式讀取。\n' "$base"
   printf '%s\n' '若要匯入既有 DB，啟動前必須還原原 encryption_key、其他密鑰與憑證；新產生的加密金鑰無法解密舊資料。'
   exit 0
 fi
 
 [[ -f "$base/.env" ]] || die '請先執行 init。'
-command -v docker >/dev/null || die '需要 Docker 與 Compose v2。'
-compose=(docker compose --project-name incudal-panel --env-file "$base/.env" --file "$base/compose.yaml")
+command -v docker >/dev/null || die '需要 Docker 與 Compose v2.20.0 以上。'
+compose_entry="$base/docker-compose.yml"
+if [[ -f "$base/compose.release.yaml" ]]; then compose_entry="$base/compose.yaml"; fi
+compose=(docker compose --project-name incudal-panel --project-directory "$base" --env-file "$base/.env" --file "$compose_entry")
 if [[ "$source_root" == "$base/source" ]]; then
-  printf 'services:\n  api:\n    build:\n      context: ./source\n  user:\n    build:\n      context: ./source\n  admin:\n    build:\n      context: ./source\n' >"$base/.state/build-context.yaml"
-  compose+=(--file "$base/.state/build-context.yaml")
+  export BUILD_CONTEXT=./source
 fi
 if [[ -e "$base/compose.release.yaml" || -L "$base/compose.release.yaml" ]]; then
   [[ -f "$base/compose.release.yaml" && -r "$base/compose.release.yaml" && -s "$base/compose.release.yaml" ]] || die 'compose.release.yaml 必須是可讀、非空的一般檔案。'
@@ -142,23 +161,39 @@ case "$command_name" in
     check_sources
     check_secrets
     "${compose[@]}" config --quiet
+    configured_profiles="$(awk -F= '$1 == "COMPOSE_PROFILES" { print substr($0, index($0, "=") + 1) }' "$base/.env" | tr -d '\r')"
+    configured_profiles="${COMPOSE_PROFILES-$configured_profiles}"
+    case "$configured_profiles" in
+      nginx)
+        for tls_file in user/fullchain.pem user/privkey.pem admin/fullchain.pem admin/privkey.pem; do
+          [[ -r "$base/tls/$tls_file" && -s "$base/tls/$tls_file" ]] || die "缺少或無法讀取 TLS 檔案：tls/$tls_file。"
+        done
+        ;;
+      cloudflare)
+        [[ -f "$base/secrets/cloudflare_tunnel_token" && -r "$base/secrets/cloudflare_tunnel_token" && -s "$base/secrets/cloudflare_tunnel_token" && ! -L "$base/secrets/cloudflare_tunnel_token" ]] || die '請先安全建立非空的 secrets/cloudflare_tunnel_token 一般檔案。'
+        chmod 600 -- "$base/secrets/cloudflare_tunnel_token"
+        ;;
+      '') ;;
+      *) die 'COMPOSE_PROFILES 僅接受 nginx、cloudflare 或空值；不可同時啟用兩種入口。' ;;
+    esac
     "${compose[@]}" build
     "${compose[@]}" stop user admin api
+    "${compose[@]}" --profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared
     "${compose[@]}" up -d --wait --wait-timeout 300
-    printf '%s\n' '面板已啟動。HTTPS 與真實來源 IP 請依 README 設定宿主機反向代理。'
+    printf '%s\n' '面板已依 COMPOSE_PROFILES 啟動；請依 README 完成 HTTPS 與來源 IP 驗收。'
     ;;
   down)
     (($# == 0)) || die 'down 不接受額外參數。'
-    "${compose[@]}" down
+    "${compose[@]}" --profile nginx --profile cloudflare down
     ;;
   status)
     (($# == 0)) || die 'status 不接受額外參數。'
-    "${compose[@]}" ps --all
+    "${compose[@]}" --profile nginx --profile cloudflare ps --all
     ;;
   logs)
     (($# <= 1)) || die 'logs 最多接受一個服務名稱。'
     if (($#)); then
-      case "$1" in init|db|api|user|admin) ;; *) die '服務名稱必須是 init、db、api、user 或 admin。' ;; esac
+      case "$1" in init|db|api|user|admin|nginx|tunnel-origin|cloudflared) ;; *) die '服務名稱必須是 init、db、api、user、admin、nginx、tunnel-origin 或 cloudflared。' ;; esac
     fi
     "${compose[@]}" logs --tail 100 "$@"
     ;;

@@ -2,7 +2,13 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，目前 `v1.0.0`，本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，目前 `v1.0.2`，本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+
+## 宿主元件整合
+
+Agent 來源樹納入 [RFW](components/rfw/README.md) 與 [ZFS builder](components/zfs/README.md)，實體路徑分別為 `components/rfw` 與 `components/zfs`。以宿主元件 bundle 與 [管理文件](components/README.md) 整合，保留獨立工具鏈及既有資產名稱，不將 Rust/eBPF 或 ZFS 核心功能嵌入 Go Agent。
+
+Go 程序仍只負責監控、心跳與自身二進位升級；不自動啟停 RFW、不下載或載入 eBPF、不執行 DKMS／`modprobe`。bundle 是同一統一 Release 的邏輯元件集合，不新增封裝資產，不代表 Agent 安裝器或自升級會安裝全部元件。宿主權限、核心相容性、規則、服務與回復由管理者分別控管。
 
 ## 設定與執行
 
@@ -66,4 +72,4 @@ bash scripts/build-agent-release.sh
 
 此 wrapper 讀取根版本並呼叫本目錄 `scripts/build-release.sh`，輸出未壓縮二進位、單檔 `.gz` 及舊格式 `manifest.json`；manifest 雜湊對應壓縮檔位元組。獨立執行本目錄腳本時預設讀取本目錄 `VERSION`，支援預發行後綴。
 
-根 `.github/workflows/release.yml` 由手動或相符 `v*` tag 觸發，只上傳 Actions artifacts，不會因 Agent `VERSION` 改變就自動發布獨立 `agent-v*` Release。GitHub Release 需要另行發布資產；版本、SHA256 與目標主機升級須有各自的執行證據。本次未建置、發布或驗證升級。
+根 `.github/workflows/release.yml` 由手動或相符 `v*` tag 觸發；手動只上傳 Actions artifacts，tag 流程成功後發布統一 GitHub Release，不會因 Agent `VERSION` 改變就自動發布獨立 `agent-v*` Release。RFW 由根 `scripts/build-rfw-release.sh` 從 `components/rfw` 建置，ZFS 由根 `scripts/package-zfs-source.sh` 從 `components/zfs` 封裝 source-only 包；兩者不進入 Agent 舊格式 `manifest.json` 或面板 OTA manifest。版本、SHA256 與目標主機升級須有各自的執行證據。本次未建置、發布或驗證升級。

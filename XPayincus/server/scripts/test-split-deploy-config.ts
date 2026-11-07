@@ -832,7 +832,7 @@ const repoFiles = new Set(listRepoFilesRecursively(repoRoot).map(file => file.sl
 for (const file of retiredDockerDeploymentFiles) {
   assert.ok(!repoFiles.has(file), `${file} must stay removed from the host-process split deployment`)
 }
-for (const file of ['Dockerfile', 'compose.yaml', 'panel.sh', 'api-entrypoint.sh', 'nginx.conf.template', 'README.md']) {
+for (const file of ['Dockerfile', 'docker-compose.yml', 'compose.yaml', '.env.example', 'panel.sh', 'api-entrypoint.sh', 'nginx.conf.template', 'origin-entrypoint.sh', 'edge-nginx.conf.template', 'tunnel-nginx.conf.template', 'README.md']) {
   assert.ok(repoFiles.has(`deploy/compose/${file}`), `panel-only Compose deployment must retain deploy/compose/${file}`)
 }
 

@@ -1,6 +1,6 @@
 # XPayincus RFW
 
-基於 Rust、Aya 與 eBPF/XDP 的宿主機防火牆，提供 IPv4 GeoIP、協定特徵過濾及存取統計。此目錄屬於 XPayincus 統一倉庫；產品發行版本讀取 [根 VERSION](../VERSION)，目前為 `v1.0.0`。RFW 在宿主機執行，不屬於面板 Compose。
+基於 Rust、Aya 與 eBPF/XDP 的宿主機防火牆，提供 IPv4 GeoIP、協定特徵過濾及存取統計。此目錄屬於 XPayincus Agent 宿主元件；產品發行版本讀取 [根 VERSION](../../../VERSION)，目前為 `v1.0.2`。RFW 在宿主機執行，不屬於面板 Compose；由獨立 Rust 程序載入 eBPF，Go Agent 不載入核心程式。整合邊界見 [元件管理](../README.md)。
 
 ## 功能與限制
 
@@ -18,7 +18,7 @@
 bash scripts/build-rfw-release.sh
 ```
 
-產物為 `xpayincus-rfw-${VERSION}-linux-amd64` 或 `xpayincus-rfw-${VERSION}-linux-arm64`；實際輸出位置與完整流程見 [RELEASE.md](../RELEASE.md)。根 `.github/workflows/release.yml` 為發行入口，僅上傳 Actions artifacts，不自動建立 GitHub Release。子目錄 workflow 僅保留歷史參考。
+產物為 `xpayincus-rfw-${VERSION}-linux-amd64` 或 `xpayincus-rfw-${VERSION}-linux-arm64`；實際輸出位置與完整流程見 [RELEASE.md](../../../RELEASE.md)。根 `.github/workflows/release.yml` 為發行入口；手動觸發只上傳 Actions artifacts，相符根版本的 tag 流程成功後發布統一 GitHub Release。子目錄 workflow 僅保留歷史參考，不作為可直接啟用的統一倉庫工作流。
 
 在本目錄開發建置：
 

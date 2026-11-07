@@ -10,17 +10,19 @@
 - 與 owner 預設用**繁體中文**溝通。
 
 ## 1. 这是什么项目
-**XPayincus**（內部代號 `incudal`）——商用 Incus（LXC/KVM）NAT VPS 銷售與交付平台。統一發行版本以根 `../VERSION` 為準，目前為 **v1.0.1**；不從歷史交接檔推定目前生產版本。本目錄是統一倉庫中的 pnpm workspace，下表路徑相對於本目錄：
+**XPayincus**（內部代號 `incudal`）——商用 Incus（LXC/KVM）NAT VPS 銷售與交付平台。統一發行版本以根 `../VERSION` 為準，目前為 **v1.0.2**；不從歷史交接檔推定目前生產版本。本目錄是統一倉庫中的 pnpm workspace，下表路徑相對於本目錄：
 
 | 目录 | 技术栈 / 作用 |
 |------|----------------|
 | `client/` | Vue 3 + Vite SPA。双端构建（`VITE_APP_ENTRY`）→ `dist/user`（pay.xpayincus.com）+ `dist/admin`（admin.xpayincus.com）。两端独立源、**不共享 cookie 域**。 |
 | `server/` | Fastify 5 + Prisma 7 + PostgreSQL，包含 API 路由與排程／worker。核心不依賴 Redis；資料庫任務使用 PG advisory lock，程序內狀態仍要求單一 Node 程序。三套鉴权面：Web 的 JWT+refresh cookie、Public API 的 `pat_`/`poa_` token、host agent 的 HMAC。 |
 | `../XPayincus-Agent/` | Go 宿主 Agent，只讀監控（心跳／資源／實例狀態／流量），HMAC 簽名與自升級。 |
-| `../XPayincus-RFW/`、`../XPayincus-ZFS/` | 宿主 eBPF/XDP 防火牆與 Debian ZFS builder。 |
+| `../XPayincus-Agent/components/rfw/`、`../XPayincus-Agent/components/zfs/` | 宿主 eBPF/XDP 防火牆與 Debian ZFS builder；Go Agent 不直接載入核心模組，管理邊界見 `../XPayincus-Agent/components/README.md`。 |
 | 其它 | `docs-site/`（VitePress）、`deploy/compose/`（面板容器配置）、`scripts/`（安裝／校驗／OTA）；插件與主題平台已移除，不再列為現行目錄。 |
 
 部署：使用者端／管理端／單一私有 API 分離。Compose 僅部署雙前端、API 與 PostgreSQL；Agent、Incus、RFW、ZFS 保留宿主部署。既有 systemd 部署使用 `/opt/incudal` 與原子 OTA（`releases/<ver-ts>` + `current` 軟連結）；Compose 不支援此 systemd／sudo OTA，須備份後重建。發行入口是統一倉庫根 `../.github/workflows`，本目錄 workflow 僅保留歷史參考。本地 pnpm 指令均在本目錄執行。
+
+v1.0.2 Compose 使用 `deploy/compose/docker-compose.yml` 引用 `compose.yaml`，支援 Nginx／Cloudflare Tunnel／外部代理，前端預設 loopback 3000／3001。`server/scripts/export-legacy-host.mjs` 與 `LEGACY_HOST_EXPORT.md` 隨原生 Panel 及 Dashboard 來源包交付；匯出不等於 schema 相容或完成遷移，首次匯入須保留原加密金鑰並停止舊寫入端。
 
 ### 私有后端必须单实例运行
 

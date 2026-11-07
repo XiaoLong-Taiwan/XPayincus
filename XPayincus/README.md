@@ -1,6 +1,6 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前為 `v1.0.0`。歷史交接檔中的線上版本不代表統一版本已部署。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前為 `v1.0.2`。歷史交接檔中的線上版本不代表統一版本已部署。
 
 ## 目錄與能力
 
@@ -14,7 +14,7 @@
 | `scripts/` | 安裝、OTA、守衛與維運腳本；可用性須以實際檔案為準 |
 | `docs-site/` | 獨立 VitePress 文件 package |
 | `../XPayincus-Agent/` | Go 宿主監控與自升級元件 |
-| `../XPayincus-RFW/`、`../XPayincus-ZFS/` | 宿主防火牆與儲存建置元件 |
+| `../XPayincus-Agent/components/rfw/`、`../XPayincus-Agent/components/zfs/` | 宿主防火牆與儲存建置元件；Go Agent 不直接載入核心模組 |
 
 面板提供 Incus LXC／KVM 管理、NAT 與流量、方案購買與續費、錢包與訂單、支付回調、工單通知、管理後台、OAuth 及 `/api/v1` Public API。Agent 以 HMAC 心跳回報宿主資源、實例狀態和流量；不執行建立、銷毀或啟停實例的下發任務。
 
@@ -30,7 +30,7 @@ bash deploy/compose/panel.sh init https://pay.example.org https://admin.example.
 bash deploy/compose/panel.sh up
 ```
 
-Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Agent、RFW 或 ZFS，也不需要 Redis。前端預設監聽 `127.0.0.1:8080`、`127.0.0.1:8081`，需宿主 HTTPS 代理；API 與 DB 不發布宿主埠。容器內 `127.0.0.1` 不是宿主 Incus 端點。
+Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Agent、RFW 或 ZFS，也不需要 Redis。v1.0.2 以 `docker-compose.yml` 引用 `compose.yaml`，支援 Nginx（預設）、Cloudflare Tunnel 或外部 HTTPS 代理；前端預設監聽 `127.0.0.1:3000`、`127.0.0.1:3001`，API 與 DB 不發布宿主埠。容器內 `127.0.0.1` 不是宿主 Incus 端點。
 
 所有部署都必須遵守：
 
@@ -51,6 +51,8 @@ bash deploy/compose/panel.sh import /srv/private-backups/panel.dump --confirm-re
 ```
 
 CLI 沒有對應的新管理面板按鈕。匯入僅限可信 custom／tar archive；會先停面板與 API，再保留還原前備份，以單一交易還原。成功或失敗均維持面板停止，確認程式版本、金鑰及憑證後手動 `up`。備份未加密，需另行加密並離機保存。完整限制見 Compose 說明。
+
+舊無 Docker 宿主可使用 v1.0.2 的 `server/scripts/export-legacy-host.mjs`，匯出 DB、設定、原密鑰及憑證；工具不自動停止服務或切換部署。工具與 [首次匯入指南](server/scripts/LEGACY_HOST_EXPORT.md) 隨原生 Panel 及 Dashboard Compose 來源包交付，首次啟動前須保留原加密金鑰、核對 schema 相容性並停止舊寫入端。
 
 ## 開發與檢查命令
 
@@ -78,7 +80,7 @@ pnpm docs:build
 
 ## 統一發行與 OTA
 
-正式入口為根 `.github/workflows/ci.yml`、`.github/workflows/release.yml`，子目錄 workflow 保留歷史參考。根 release workflow 產生 Actions artifacts，不自動建立 GitHub Release。版本、兩架構原生依賴、資產清單與發布要求見 [統一發行說明](../RELEASE.md)。
+正式入口為根 `.github/workflows/ci.yml`、`.github/workflows/release.yml`，子目錄 workflow 保留歷史參考。根 release workflow 在相符的 `v*` tag 推送後自動發布 GitHub Release，手動觸發僅產生 Actions artifacts，不自動部署。版本、兩架構原生依賴、資產清單與發布要求見 [統一發行說明](../RELEASE.md)。
 
 舊宿主部署的 OTA 使用 `/api/admin/system-update/*`，由超級管理員執行；Compose 不支援容器內 systemd／sudo 更新。Compose 應先備份，選定來源版本後執行 `panel.sh up` 重建，migration 不會自動回滾。
 

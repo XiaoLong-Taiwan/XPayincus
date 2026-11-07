@@ -18,6 +18,35 @@ function section(source: string, start: string, end: string): string {
 
 const api = section(compose, '\n  api:', '\n  user:')
 assert.ok(api.includes("INCUDAL_CONTAINER_DEPLOYMENT: 'true'"), 'Compose API must explicitly identify container deployments')
+const entry = read('deploy/compose/docker-compose.yml')
+const envExample = read('deploy/compose/.env.example')
+const cli = read('deploy/compose/panel.sh')
+const edge = read('deploy/compose/edge-nginx.conf.template')
+const tunnel = read('deploy/compose/tunnel-nginx.conf.template')
+assert.equal(entry.trim(), 'include:\n  - path: ./compose.yaml', 'New entry must reference the sole legacy service definition')
+assert.ok(!/^    ports:/m.test(api), 'API must remain private without published ports')
+assert.ok(api.includes('container_name: incudal-panel-api') && !api.includes('replicas:'), 'API must remain a single fixed container')
+assert.ok(compose.includes('127.0.0.1:${USER_PORT:-3000}:80') && compose.includes('127.0.0.1:${ADMIN_PORT:-3001}:80'), 'Dashboard and admin must default to loopback 3000 and 3001')
+assert.ok(envExample.includes('USER_PORT=3000') && envExample.includes('ADMIN_PORT=3001') && envExample.includes('COMPOSE_PROFILES=nginx'), 'Environment example must retain the public entry defaults')
+const nginx = section(compose, '\n  nginx:', '\n  tunnel-origin:')
+const tunnelOrigin = section(compose, '\n  tunnel-origin:', '\n  cloudflared:')
+const cloudflared = section(compose, '\n  cloudflared:', '\nnetworks:')
+assert.ok(nginx.includes('profiles: [nginx]') && tunnelOrigin.includes('profiles: [cloudflare]') && cloudflared.includes('profiles: [cloudflare]'), 'Optional services must be profile gated')
+assert.ok(!/^    ports:/m.test(tunnelOrigin) && !/^    ports:/m.test(cloudflared), 'Tunnel ingress must not publish host ports')
+assert.ok(cloudflared.includes('--token-file, /run/secrets/cloudflare_tunnel_token') && cloudflared.includes('secrets:\n      - cloudflare_tunnel_token'), 'Tunnel token must be passed through a file secret')
+assert.ok(compose.includes('file: ./secrets/cloudflare_tunnel_token') && !/TUNNEL_TOKEN[:=]|--token[, ]|\$\{[^}]*TOKEN/.test(compose + envExample + cli), 'Tunnel credentials must never be interpolated into configuration or arguments')
+assert.ok(edge.includes('proxy_set_header X-Real-IP $remote_addr;') && tunnel.includes('proxy_set_header X-Real-IP $http_cf_connecting_ip;'), 'Each trusted ingress must overwrite client IP headers')
+for (const source of [edge, tunnel]) {
+  assert.ok(source.includes('proxy_pass http://user:80;') && source.includes('proxy_pass http://admin:80;'), 'Both ingress modes must route through the frontend boundary')
+  assert.ok(source.includes('proxy_set_header Upgrade $http_upgrade;'), 'Ingress must preserve WebSocket upgrade')
+}
+for (const file of ['secrets', 'tls']) {
+  assert.ok(read('deploy/compose/.gitignore').includes(`${file}/`), `${file} must remain ignored`)
+  assert.ok(cli.includes(`--exclude=deploy/compose/${file}`), `Install must exclude private ${file} material`)
+}
+assert.ok(cli.includes('COMPOSE_PROFILES=%s') && cli.includes('BUILD_CONTEXT=%s') && cli.includes('COMPOSE_FILE=%s'), 'Init must write deployment settings without sourcing the env file')
+assert.ok(!/^\s*(source|\.) .*\.env/m.test(cli), 'CLI must not execute the deployment env file')
+assert.ok(cli.includes('--profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared'), 'Mode changes must stop the previous ingress services')
 
 const policy = section(route, 'function getContainerUpdateError()', 'export default async function')
 assert.ok(policy.includes("process.env.INCUDAL_CONTAINER_DEPLOYMENT === 'true'"), 'OTA policy must use the explicit deployment flag')

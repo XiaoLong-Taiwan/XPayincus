@@ -1,19 +1,19 @@
 # XPayincus
 
-統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，目前為 `v1.0.1`；歷史子專案發行紀錄保留原版本，不代表目前部署版本。
+統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，目前為 `v1.0.2`；歷史子專案發行紀錄保留原版本，不代表目前部署版本。
 
 | 邏輯端 | 來源目錄 | 部署方式 |
 | --- | --- | --- |
 | Server / Dashboard | `XPayincus/client`、`XPayincus/server` | 面板專用 Docker Compose；既有宿主部署另見面板文件 |
 | Agent | `XPayincus-Agent` | Incus 宿主機二進位與 systemd |
-| Agent 防火牆元件 | `XPayincus-RFW` | 宿主機 eBPF/XDP |
-| Agent 儲存元件 | `XPayincus-ZFS` | Debian 宿主機核心相依建置 |
+| Agent 防火牆元件 | `XPayincus-Agent/components/rfw` | 宿主機 eBPF/XDP |
+| Agent 儲存元件 | `XPayincus-Agent/components/zfs` | Debian 宿主機核心相依建置 |
 
-前後端業務說明見 [面板 README](XPayincus/README.md)，宿主元件分別見 [Agent](XPayincus-Agent/README.md)、[RFW](XPayincus-RFW/README.md) 與 [ZFS](XPayincus-ZFS/README.md)。pnpm workspace 位於 `XPayincus/`，不是統一倉庫根目錄。
+前後端業務說明見 [面板 README](XPayincus/README.md)，宿主元件分別見 [Agent](XPayincus-Agent/README.md)、[RFW](XPayincus-Agent/components/rfw/README.md) 與 [ZFS](XPayincus-Agent/components/zfs/README.md)。宿主元件 bundle 與管理邊界見 [元件管理](XPayincus-Agent/components/README.md)；Go Agent 不直接載入 eBPF 或 ZFS 核心模組。pnpm workspace 位於 `XPayincus/`，不是統一倉庫根目錄。
 
 ## 面板 Docker Compose
 
-在 Linux、Docker Engine 與 Compose v2 環境，先準備兩個獨立 HTTPS origin、DNS、TLS 憑證及宿主機反向代理，再從統一倉庫根目錄執行：
+在 Linux、Docker Engine 與 Compose v2.20.0 以上環境，先準備兩個獨立 HTTPS origin、DNS 及 TLS 憑證，再從統一倉庫根目錄執行（預設 Nginx 入口，也可選 Cloudflare Tunnel 或外部代理）：
 
 ```bash
 cd XPayincus
@@ -21,7 +21,7 @@ bash deploy/compose/panel.sh init https://pay.example.org https://admin.example.
 bash deploy/compose/panel.sh up
 ```
 
-部署包含 PostgreSQL 16、一個 Node API 程序及使用者／管理端前端。前端預設只發布本機 8080／8081，由 HTTPS 代理對外提供服務。後端依賴程序內鎖、防重放與快取狀態，禁止多副本，也不能與舊 systemd 後端同時寫入同一資料庫。Agent、Incus、RFW、ZFS 與宿主網路服務不容器化。
+部署包含 PostgreSQL 16、一個 Node API 程序及使用者／管理端前端。前端預設只發布本機 3000／3001，由選定 HTTPS 入口對外提供服務。主要入口 `docker-compose.yml` 引用 `compose.yaml`。後端依賴程序內鎖、防重放與快取狀態，禁止多副本，也不能與舊 systemd 後端同時寫入同一資料庫。Agent、Incus、RFW、ZFS 與宿主網路服務不容器化。
 
 完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。發行包附帶 `compose.release.yaml`，`panel.sh` 會自動載入並套用版本映像名稱與建置標籤。Compose 更新使用指定版本原始碼重建，不支援容器內 systemd／sudo OTA。
 
@@ -37,6 +37,8 @@ bash deploy/compose/panel.sh import /srv/private-backups/panel.dump --confirm-re
 這是維運 CLI，沒有新增管理面板按鈕。僅支援此 Compose 的 PostgreSQL 16，匯入只接受可信的 custom／tar archive。匯入會停止面板並先備份現有資料；成功或失敗都維持停機，確認版本、密鑰與憑證後再執行 `up`。不提供自動 migration 回滾。
 
 DB 備份未加密，也不含 `.env`、secrets、Incus 客戶端憑證或實例資料。須另行安全保存，移機需保留原加密金鑰。不要提交備份、環境設定、私鑰或執行產物。
+
+v1.0.2 新增 [舊宿主匯出與首次匯入指南](XPayincus/server/scripts/LEGACY_HOST_EXPORT.md)：`export-legacy-host.mjs` 可獨立匯出舊平鋪／current 布局的 DB、設定、原密鑰及憑證，不停止舊服務或自動切換。工具與指南隨原生 Panel 包及 Dashboard Compose 來源包交付；正式遷移須另行授權及隔離還原驗證。
 
 ## 版本與發行
 

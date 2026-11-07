@@ -2,7 +2,7 @@
 
 統一倉庫的 Debian 宿主 ZFS 預編譯模組打包工具。`zfs-builder.sh` 在專用 Debian 編譯主機安裝建置相依與 DKMS，針對指定核心建置並封裝模組；不部署於面板 Compose。
 
-產品發行版本由 [根 VERSION](../VERSION) 管理，目前為 `v1.0.0`，本目錄 `VERSION` 為產品版本記錄。實際 ZFS 模組版本仍由 Debian 套件與 DKMS 來源決定，不能改成產品版本號。
+產品發行版本由 [根 VERSION](../../../VERSION) 管理，目前為 `v1.0.2`，本目錄 `VERSION` 為產品版本記錄。實際 ZFS 模組版本仍由 Debian 套件與 DKMS 來源決定，不能改成產品版本號。此目錄納入 Agent 宿主元件管理，不代表 Go Agent 編譯、安裝或載入 ZFS 核心模組；管理邊界見 [元件管理](../README.md)。
 
 ## 使用方式
 
@@ -25,4 +25,4 @@ xpayincus-zfs-<實際 ZFS 版本>-linux-<架構>-<核心版本>.tar.gz
 
 從統一倉庫根目錄執行的 `bash scripts/package-zfs-source.sh`，以及根 release workflow，只封裝 `xpayincus-zfs-builder-${VERSION}-source.tar.gz` 原始碼包，不產生核心模組。統一 manifest 明示 `kernelModulesBuilt: false`。
 
-宿主安裝器仍可能使用歷史獨立來源的匹配核心資產或 DKMS 回退；builder 原始碼不能代替這些模組。根 workflow 僅上傳 Actions artifacts，不會建立 GitHub Release 或部署。詳見 [RELEASE.md](../RELEASE.md)。本次文件整理未建置模組、計算實際產物雜湊或驗證主機載入。
+宿主安裝器仍可能使用歷史獨立來源的匹配核心資產或 DKMS 回退；builder 原始碼不能代替這些模組。根 workflow 手動觸發只上傳 Actions artifacts，相符根版本的 tag 流程成功後發布統一 GitHub Release，不會部署。詳見 [RELEASE.md](../../../RELEASE.md)。本目錄 workflow 僅保留歷史參考，不作為可直接啟用的統一倉庫工作流。本次未建置模組、計算實際產物雜湊或驗證主機載入。

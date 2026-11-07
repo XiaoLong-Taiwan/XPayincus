@@ -1,8 +1,10 @@
 # Architecture
 
-XPayincus is a control panel for commercial Incus/LXC/KVM delivery. The unified repository contains `XPayincus/client`, `XPayincus/server`, and host components `XPayincus-Agent`, `XPayincus-RFW`, and `XPayincus-ZFS`. Root `VERSION` defines the product release.
+XPayincus is a control panel for commercial Incus/LXC/KVM delivery. The unified repository contains `XPayincus/client`, `XPayincus/server`, and `XPayincus-Agent`, with RFW/ZFS sources at `XPayincus-Agent/components/rfw` and `XPayincus-Agent/components/zfs`. Root `VERSION` defines the product release, currently v1.0.2. The Go Agent does not directly load eBPF or ZFS kernel modules.
 
-Panel Compose deploys PostgreSQL, one API, and both frontends only, with a host HTTPS proxy forwarding to loopback 8080/8081. Incus, Agent, RFW, and ZFS remain host components. The diagram below describes the retained systemd/Nginx host layout; its OTA flow does not apply to Compose, which rebuilds a selected source revision. Run exactly one Node API process, without cluster, multiple workers, container replicas, or old and new backends writing the same database.
+Panel Compose deploys PostgreSQL, one API, and both frontends only. In v1.0.2, `deploy/compose/docker-compose.yml` includes `compose.yaml`, supporting Nginx, Cloudflare Tunnel, or an external HTTPS proxy; frontends default to loopback 3000/3001. Incus, Agent, RFW, and ZFS remain host components. The diagram below describes the retained systemd/Nginx host layout; its OTA flow does not apply to Compose, which rebuilds a selected source revision. Run exactly one Node API process, without cluster, multiple workers, container replicas, or old and new backends writing the same database.
+
+The legacy host export tool and guide are at `XPayincus/server/scripts/export-legacy-host.mjs` and `LEGACY_HOST_EXPORT.md` relative to the unified repository root. Both ship in native Panel archives and Dashboard Compose source packages. Export includes the database, configuration, original keys, and certificates; it does not stop services, import data, switch deployments, or guarantee cross-version schema compatibility.
 
 ## Standard Topology
 
@@ -34,6 +36,7 @@ The legacy installer keeps Redis for deployment compatibility; the core does not
 | Admin console | `client/src/admin` + `VITE_APP_ENTRY=admin` | Operations, configuration, resources, billing, delivery, and OTA |
 | Backend | `server/src` | Fastify APIs, auth, database, jobs, payment, delivery and audit |
 | Agent | `../XPayincus-Agent` | Host heartbeat, resources, instance and traffic reporting; table paths are relative to `XPayincus/` |
+| Host components | `../XPayincus-Agent/components/rfw`, `../XPayincus-Agent/components/zfs` | eBPF/XDP firewall and Debian ZFS builder; not automatically replaced by Go Agent upgrades |
 | Docs site | `docs-site/docs` | Public docs, API reference, and SDK examples |
 
 ## Build Outputs

@@ -18,8 +18,17 @@ git -C "$ROOT_DIR" archive --format=tar HEAD -- \
     --exclude='dist' --exclude='certs' --exclude='*.pem' --exclude='*.key' \
     --exclude='*.p12' --exclude='*.pfx' --exclude='*.dump' --exclude='*.log'
 [[ -z "$(find "$STAGING" -type l -print -quit)" ]] || { printf 'Dashboard sources must not contain symlinks\n' >&2; exit 1; }
-for entry in package.json pnpm-lock.yaml pnpm-workspace.yaml client/package.json server/package.json server/prisma/schema.prisma deploy/compose/compose.yaml deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore deploy/compose/panel.sh deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template; do
-  [[ -f "$STAGING/source/XPayincus/$entry" ]] || { printf 'Missing committed Dashboard source: %s\n' "$entry" >&2; exit 1; }
+for entry in \
+  package.json pnpm-lock.yaml pnpm-workspace.yaml \
+  client/package.json client/index.html client/vite.config.ts client/tsconfig.json client/tsconfig.node.json client/src/main.ts client/src/admin/main.ts \
+  server/package.json server/tsconfig.json server/src/app.ts server/prisma.config.ts server/prisma/schema.prisma server/prisma/migrations/migration_lock.toml \
+  server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh \
+  server/scripts/export-legacy-host.mjs server/scripts/LEGACY_HOST_EXPORT.md \
+  deploy/compose/docker-compose.yml deploy/compose/compose.yaml deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore \
+  deploy/compose/panel.sh deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template \
+  deploy/compose/origin-entrypoint.sh deploy/compose/edge-nginx.conf.template deploy/compose/tunnel-nginx.conf.template \
+  deploy/compose/README.md deploy/compose/https-proxy.conf.example; do
+  [[ -f "$STAGING/source/XPayincus/$entry" && -r "$STAGING/source/XPayincus/$entry" && -s "$STAGING/source/XPayincus/$entry" ]] || { printf 'Missing, unreadable or empty committed Dashboard source: %s\n' "$entry" >&2; exit 1; }
 done
 node "$ROOT_DIR/scripts/prepare-compose-release.mjs" "$STAGING/source"
 tar -czf "$STAGING/archive.tar.gz" -C "$STAGING/source" .

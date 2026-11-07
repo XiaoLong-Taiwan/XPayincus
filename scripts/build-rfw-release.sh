@@ -9,7 +9,7 @@ case "$ARCH" in
 esac
 OUTPUT="$DIST_DIR/xpayincus-rfw-${VERSION}-linux-${ARCH}"
 require_new "$OUTPUT"
-cd "$ROOT_DIR/XPayincus-RFW"
+cd "$ROOT_DIR/XPayincus-Agent/components/rfw"
 CC=musl-gcc CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
   cargo build --locked --package rfw --release --target "$TARGET"
 STAGING="$(mktemp -d "$DIST_DIR/.rfw.XXXXXXXX")"

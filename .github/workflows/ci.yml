@@ -20,7 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node scripts/release-contract.mjs
+      - name: Validate versions and Agent component source layout
+        run: node scripts/release-contract.mjs
   panel:
     needs: version
     runs-on: ubuntu-24.04
@@ -64,6 +65,23 @@ jobs:
       - run: go test ./...
         working-directory: XPayincus-Agent
       - run: bash scripts/build-agent-release.sh
+  host-components:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check host component shell syntax
+        run: |
+          bash -n scripts/build-rfw-release.sh
+          bash -n scripts/package-zfs-source.sh
+          bash -n XPayincus-Agent/components/zfs/zfs-builder.sh
+      - name: Package Agent ZFS builder source
+        run: bash scripts/package-zfs-source.sh
   compose:
     needs: version
     runs-on: ubuntu-24.04

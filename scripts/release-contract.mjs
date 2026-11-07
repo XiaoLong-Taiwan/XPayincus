@@ -15,17 +15,18 @@ function readVersion(file) {
 }
 
 export function validateVersions() {
+  validateSourceLayout()
   const version = readVersion('VERSION')
   for (const file of ['XPayincus/package.json', 'XPayincus/client/package.json', 'XPayincus/server/package.json', 'XPayincus/docs-site/package.json']) {
     if (JSON.parse(fs.readFileSync(path.join(root, file), 'utf8')).version !== version.slice(1)) {
       throw new Error(`Version mismatch with root VERSION: ${file}`)
     }
   }
-  for (const file of ['XPayincus-Agent/VERSION', 'XPayincus-ZFS/VERSION']) {
+  for (const file of ['XPayincus-Agent/VERSION', 'XPayincus-Agent/components/zfs/VERSION']) {
     if (readVersion(file) !== version) throw new Error(`Version mismatch with root VERSION: ${file}`)
   }
   for (const crate of ['rfw', 'rfw-common', 'rfw-ebpf']) {
-    const file = `XPayincus-RFW/${crate}/Cargo.toml`
+    const file = `XPayincus-Agent/components/rfw/${crate}/Cargo.toml`
     const text = fs.readFileSync(path.join(root, file), 'utf8')
     const section = text.split(/^\[package\]\s*$/m)[1]?.split(/^\[/m)[0]
     const versions = [...(section || '').matchAll(/^version\s*=\s*"([^"\r\n]+)"\s*(?:#.*)?$/gm)]
@@ -35,6 +36,22 @@ export function validateVersions() {
   }
   composeImageTag(version)
   return version
+}
+
+export function validateSourceLayout() {
+  for (const directory of ['XPayincus-Agent/components/rfw', 'XPayincus-Agent/components/zfs']) {
+    const entry = fs.lstatSync(path.join(root, directory))
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error(`Component must be a physical source directory: ${directory}`)
+  }
+  for (const directory of ['XPayincus-RFW', 'XPayincus-ZFS']) {
+    try {
+      fs.lstatSync(path.join(root, directory))
+    } catch (error) {
+      if (error.code === 'ENOENT') continue
+      throw error
+    }
+    throw new Error(`Legacy component source directory must be removed: ${directory}`)
+  }
 }
 
 export const composeImageTag = version => {

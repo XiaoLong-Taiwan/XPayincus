@@ -67,7 +67,7 @@ services:
   api:
     container_name: incudal-panel-api
     build:
-      context: ../..
+      context: ${BUILD_CONTEXT:-../..}
       dockerfile: deploy/compose/Dockerfile
       target: api
       args:
@@ -133,7 +133,7 @@ services:
 
   user:
     build:
-      context: ../..
+      context: ${BUILD_CONTEXT:-../..}
       dockerfile: deploy/compose/Dockerfile
       target: web
       args:
@@ -143,7 +143,7 @@ services:
     environment:
       PANEL_ENTRY: user
     ports:
-      - '127.0.0.1:${USER_PORT:-8080}:80'
+      - '127.0.0.1:${USER_PORT:-3000}:80'
     depends_on:
       api:
         condition: service_healthy
@@ -159,7 +159,7 @@ services:
 
   admin:
     build:
-      context: ../..
+      context: ${BUILD_CONTEXT:-../..}
       dockerfile: deploy/compose/Dockerfile
       target: web
       args:
@@ -169,7 +169,7 @@ services:
     environment:
       PANEL_ENTRY: admin
     ports:
-      - '127.0.0.1:${ADMIN_PORT:-8081}:80'
+      - '127.0.0.1:${ADMIN_PORT:-3001}:80'
     depends_on:
       api:
         condition: service_healthy
@@ -178,12 +178,89 @@ services:
     healthcheck: *web-healthcheck
     logging: *logging
 
+  nginx:
+    image: nginx:1.28-alpine
+    profiles: [nginx]
+    restart: unless-stopped
+    entrypoint: [sh, /origin-entrypoint.sh]
+    environment:
+      FRONTEND_URL: ${FRONTEND_URL}
+      ADMIN_FRONTEND_URL: ${ADMIN_FRONTEND_URL}
+      NGINX_ENVSUBST_FILTER: '^(FRONTEND_HOST|ADMIN_FRONTEND_HOST)$$'
+    ports:
+      - '${HTTPS_PORT:-443}:443'
+    volumes:
+      - ./origin-entrypoint.sh:/origin-entrypoint.sh:ro
+      - ./edge-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - type: bind
+        source: ./tls
+        target: /etc/nginx/tls
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      user:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    networks:
+      - panel
+    logging: *logging
+
+  tunnel-origin:
+    image: nginx:1.28-alpine
+    profiles: [cloudflare]
+    restart: unless-stopped
+    entrypoint: [sh, /origin-entrypoint.sh]
+    environment:
+      FRONTEND_URL: ${FRONTEND_URL}
+      ADMIN_FRONTEND_URL: ${ADMIN_FRONTEND_URL}
+      NGINX_ENVSUBST_FILTER: '^(FRONTEND_HOST|ADMIN_FRONTEND_HOST)$$'
+    volumes:
+      - ./origin-entrypoint.sh:/origin-entrypoint.sh:ro
+      - ./tunnel-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      user:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    networks:
+      - panel
+      - tunnel
+    logging: *logging
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [cloudflare]
+    restart: unless-stopped
+    user: '0:0'
+    command: [tunnel, --no-autoupdate, run, --token-file, /run/secrets/cloudflare_tunnel_token]
+    secrets:
+      - cloudflare_tunnel_token
+    depends_on:
+      tunnel-origin:
+        condition: service_started
+    networks:
+      - tunnel
+      - egress
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    logging: *logging
+
 networks:
   database:
     internal: true
   panel:
+  tunnel:
+    internal: true
+  egress:
 
 secrets:
+  cloudflare_tunnel_token:
+    file: ./secrets/cloudflare_tunnel_token
   postgres_password:
     file: ./secrets/postgres_password
   jwt_secret:

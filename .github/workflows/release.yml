@@ -116,7 +116,8 @@ jobs:
           bpf-linker --version
         env:
           RUST_TARGET: ${{ matrix.target }}
-      - run: bash scripts/build-rfw-release.sh
+      - name: Build Agent RFW host component
+        run: bash scripts/build-rfw-release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: unified-rfw-${{ matrix.arch }}
@@ -138,7 +139,8 @@ jobs:
           path: dist/incoming
           merge-multiple: false
       - run: node scripts/collect-release-artifacts.mjs dist/incoming dist/unified
-      - run: bash scripts/package-zfs-source.sh
+      - name: Package Agent ZFS host component source
+        run: bash scripts/package-zfs-source.sh
       - run: bash scripts/package-dashboard-release.sh
       - run: node scripts/generate-release-manifests.mjs dist/unified
       - uses: actions/upload-artifact@v4

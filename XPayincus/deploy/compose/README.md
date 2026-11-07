@@ -1,25 +1,25 @@
-# 面板 Docker Compose 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.2 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-目前統一發行版本為 `v1.0.1`，以根 `VERSION` 為準。相符 `v*` tag 推送後，release workflow 自動發布 GitHub Release，逐一附加完整 26 件資產，包含 `xpayincus-dashboard-v1.0.1-compose.tar.gz`；手動觸發僅上傳 Actions artifacts。GitHub CI 包含 Compose 的 API／雙前端映像建置，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.2 的 Compose 配置；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
 
-- Linux 主機，Bash、OpenSSL、util-linux `flock`、GNU coreutils／tar／find、Docker Engine 與 Compose v2 外掛；Compose 必須支援 `up --wait --wait-timeout`、`service_completed_successfully` 與 bind mount 的 `create_host_path: false`，不支援舊版 `docker-compose` v1。操作帳號須能存取 Docker daemon 並讀寫部署目錄，初始化與後續操作請使用同一帳號。
+- Linux 主機，Bash、OpenSSL、util-linux `flock`、GNU coreutils／tar／find／awk、Docker Engine 與 Compose v2.20.0 以上外掛；需要 `include`、`up --wait --wait-timeout`、`service_completed_successfully` 與 bind mount 的 `create_host_path: false`，不支援舊版 `docker-compose` v1。操作帳號須能存取 Docker daemon 並讀寫部署目錄，初始化與後續操作請使用同一帳號。
 - 完整面板原始碼與既有 pnpm lockfile；建置需存取容器 registry、Debian 套件來源、npm registry 與 Prisma engine 下載來源。建置階段使用 Node 22、pnpm 9.14.2，執行既有前後端 build；宿主機不必安裝 Node、pnpm 或 PostgreSQL。
-- 兩個不同的 HTTPS origin、DNS、TLS 憑證，以及同一台主機上的可信反向代理。預設使用 `127.0.0.1:8080`／`127.0.0.1:8081` 作為反向代理 upstream。
+- 兩個不同 hostname 的 HTTPS origin 與 DNS。選擇自搭 Nginx 時準備 TLS 憑證；選擇 Cloudflare Tunnel 時準備 remotely-managed tunnel。Dashboard／管理端預設為 `127.0.0.1:3000`／`127.0.0.1:3001`，API 的容器內部 3001 不發布至宿主機。
 - 僅部署一套 `incudal-panel`。API 固定容器名稱，禁止 `--scale api=2`、額外 Compose project 或與舊 systemd 後端同時連線至同一 DB。API 的程序內狀態要求單實例。
 
 Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有 Docker 存取權的 WSL Linux 檔案系統執行，並使用 LF 換行。不要透過 PowerShell 5 的文字重導向處理二進位備份。
 
 ### 原始碼與必要檔案
 
-可使用完整倉庫，或解壓 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。包內須保留 `XPayincus/` 的相對目錄；**只複製 `deploy/compose/` 無法建置**。`compose.yaml` 的 `context: ../..` 解析為 `XPayincus/`，不是統一倉庫根目錄。這是原始碼建置部署，並非下載預先發布的面板映像。
+可使用完整倉庫，或解壓 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。包內須保留 `XPayincus/` 的相對目錄；**只複製 `deploy/compose/` 無法建置**。`compose.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，不是統一倉庫根目錄；安裝模式改用 `BUILD_CONTEXT=./source`。這是原始碼建置部署，並非下載預先發布的面板映像。
 
 根打包腳本 `scripts/package-dashboard-release.sh` 會透過 `prepare-compose-release.mjs` 在包內產生 `deploy/compose/compose.release.yaml`，為 `api`、`user`、`admin` 指定版本映像名稱與 `org.opencontainers.image.version` 建置標籤。此 override 保留原有 build 設定，`panel.sh up` 仍從包內原始碼建置映像。
 
-`panel.sh` 先載入 `compose.yaml`；透過下述 `install` 安裝時，自動產生並載入 `.state/build-context.yaml`，將三個 build context 指向 `./source`。若同目錄存在 `compose.release.yaml`，最後載入該版本 override；檔案必須可讀且非空，否則停止操作。`up`、`down`、`status`、`logs`、`export`、`import` 均共用這組設定；`install`、`init` 與 help 不呼叫 Compose。
+主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
 | 路徑（相對於 `XPayincus/`） | 用途 |
 | --- | --- |
@@ -27,15 +27,18 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 | 完整 `client/` | 包含 package、Vite／TypeScript 設定、`index.html`、`src/`、`public/`，建置兩套獨立前端 |
 | 完整 `server/` | 包含 package、TypeScript 設定、`src/`、Prisma config、schema 及完整 migration 歷史 |
 | `server/templates/install.sh`、`agent-install.sh`、`caddy.sh` | API 提供的宿主安裝模板；仍由宿主執行，保留在 `server/templates/`，不靠 TypeScript 複製 |
+| `server/scripts/export-legacy-host.mjs`、`LEGACY_HOST_EXPORT.md` | 舊宿主匯出工具與首次匯入指南，也隨原生 Panel 包交付 |
 | `deploy/compose/Dockerfile`、`Dockerfile.dockerignore` | 多階段建置及專屬 build context 排除規則，兩檔皆須保留 |
 | `deploy/compose/api-entrypoint.sh`、`nginx.conf.template` | API secret／migration／單程序啟動及雙前端 Nginx 路由 |
-| `deploy/compose/compose.yaml`、`panel.sh`、`https-proxy.conf.example` | 服務定義、部署 CLI 與宿主 HTTPS 代理範例 |
+| `deploy/compose/docker-compose.yml`、`compose.yaml`、`panel.sh` | 主要入口、唯一服務定義與部署 CLI |
+| `origin-entrypoint.sh`、`edge-nginx.conf.template`、`tunnel-nginx.conf.template` | 選用入口的 hostname 產生與可信來源 IP 轉送 |
+| `https-proxy.conf.example` | 使用既有宿主 Nginx 的範例 |
 
 API 映像保留根 `node_modules` 的 pnpm store、`server/node_modules` 連結、已產生的 Prisma client 與 Prisma CLI；不要只複製 `server/dist/`。建置用的 `DATABASE_URL` 為無實際資料庫的佔位 URL，供 Prisma generate 載入設定；建置不執行 migration、不需要正式 DB 密碼。
 
 ## 首次部署
 
-1. 在 Linux 安裝 Docker Engine 與 Compose v2 外掛。Debian／Ubuntu 的其他前置工具可用 `sudo apt-get install bash openssl util-linux coreutils tar findutils` 安裝。另為宿主 HTTPS 代理準備 Nginx、DNS 與兩組有效憑證。規劃建置、DB、WAL 及備份空間。
+1. 在 Linux 安裝 Docker Engine 與 Compose v2.20.0 以上外掛。Debian／Ubuntu 的其他前置工具可用 `sudo apt-get install bash openssl util-linux coreutils tar findutils gawk` 安裝。按所選模式準備 DNS、憑證或 Tunnel，並規劃建置、DB、WAL 及備份空間。
 2. 確認 `docker version`、`docker compose version` 可用。建立空的部署目錄，從完整倉庫或來源包執行安裝；省略目的地時安裝至目前目錄：
 
 ```bash
@@ -52,12 +55,13 @@ bash panel.sh init https://pay.example.org https://admin.example.org admin@examp
 | 部署目錄路徑 | 用途 |
 | --- | --- |
 | `./source/` | 完整可建置來源，含 `source/deploy/compose/Dockerfile` 及其專屬 ignore |
-| `./.env`、`./secrets/` | 私有配置及五個獨立 secret 檔 |
+| `./.env`、`./secrets/` | 私有配置、五個應用 secret，以及 Cloudflare 模式額外的 token file |
+| `./tls/user/`、`./tls/admin/` | 自搭 Nginx 的 fullchain.pem 與 privkey.pem，唯讀掛載，不複製進來源或映像 |
 | `./data/postgres/` | PostgreSQL 16 資料與 WAL，bind mount |
 | `./certs/` | 面板連線 Incus 的憑證及私鑰，bind mount |
 | `./config/` | API 可寫設定目錄，bind mount |
 | `./backups/` | 預設 DB 匯出及匯入前備份，API 僅唯讀掛載 |
-| `./.state/` | CLI 操作鎖及自動產生的 build context override |
+| `./.state/` | CLI 操作鎖 |
 
 `init` 不連線資料庫、不建立容器。它以 `umask 077` 建立 `.env`、私有 `secrets/` 目錄及各自獨立的 PostgreSQL、JWT、cookie、加密與管理員密碼，拒絕覆蓋既有配置。初始帳號為 `admin`；密碼位於 `./secrets/admin_password`，不會印到終端。請在可信環境以安全方式讀取並保存。若初始化中斷，先檢查已建立的配置，勿任意重新產生或替換既有密鑰。
 
@@ -70,7 +74,7 @@ bash panel.sh import /srv/private-backups/panel.dump --confirm-replace-incudal
 
 匯入命令會停止既有面板，只啟動 DB 及其相依的 Compose `init` 服務，等待 DB 健康後還原；不建置或啟動 API，不執行 Prisma migration。還原前自動備份可能僅含空 DB。匯入成功後面板仍停止，確認資料、密鑰與版本相容後再繼續。
 
-5. 依下一節設定宿主 HTTPS 代理，然後啟動面板：
+5. 依下一節設定所選 HTTPS 入口，然後啟動面板：
 
 ```bash
 bash panel.sh up
@@ -82,6 +86,26 @@ bash panel.sh status
 Compose 啟動等待最長 300 秒，包含 DB／API 健康檢查及兩套 Nginx 的 `/index.html` HTTP 檢查；這不代表已完成 TLS、登入或瀏覽器端驗收。Migration 失敗時前端不會重新開放；修正原因後再執行 `up`。Migration 可能修改資料，升級前請先匯出備份。超時或 unhealthy 不會自動回滾或停止整套服務，先查看 `status`、`logs init` 與 `logs api`，勿直接清除 `data/postgres/`。
 
 ### HTTPS 與容器網路
+
+`init` 的第四個參數可選 `nginx`（預設）、`cloudflare` 或 `external`；它分別寫入 `.env` 的 `COMPOSE_PROFILES=nginx`、`COMPOSE_PROFILES=cloudflare` 或空值。也可初始化後編輯 `.env`。CLI 僅接受這三種值；`up` 建置完成後停止舊入口，再按所選 profile 啟動，`down` 會涵蓋兩種 profile。直接使用 Compose 切換模式時，先以兩種 profile 執行 `down` 再啟動，避免舊服務留在運行中。
+
+| 模式 | 啟動的選用服務 | 前置設定 |
+| --- | --- | --- |
+| `nginx` | `nginx` | 憑證置於 `./tls/user/`、`./tls/admin/`；公開 `${HTTPS_PORT:-443}` |
+| `cloudflare` | `tunnel-origin`、`cloudflared` | token file 與 Cloudflare 公開 hostname 路由；不發布額外宿主埠 |
+| 空值（`external`） | 無 | 自行管理宿主 Nginx，使用 loopback 3000／3001 |
+
+自搭 Nginx 使用兩個公開 hostname 分流，直接以 socket 來源覆寫 `X-Real-IP`。憑證簽發、續期由操作人員管理；更換憑證後重啟 `nginx`。若公開 origin 使用非預設 HTTPS 埠，將 `HTTPS_PORT` 設為相符埠。預設不開啟 HTTP 80。若使用既有宿主 Nginx，選 `external` 以免爭用 443。
+
+Cloudflare 模式可使用：
+
+```bash
+bash panel.sh init https://pay.example.org https://admin.example.org admin@example.org cloudflare
+```
+
+以安全編輯器建立 `./secrets/cloudflare_tunnel_token`，只寫入 token 本身，再執行 `chmod 600 ./secrets/cloudflare_tunnel_token`。CLI 不接受 token 引數、不讀出或列印其內容；Compose 使用 file secret 掛入 `/run/secrets/cloudflare_tunnel_token`，cloudflared 透過 `--token-file` 讀取。不要把 token 放入 `.env`、shell history 或日誌；不要開啟 shell trace 或 cloudflared debug。cloudflared 以 root 讀取 600 file secret，但 drop 全部 capabilities、禁止新增權限並使用唯讀 root filesystem。此映像使用 `latest`，正式部署可由操作人員鎖定已驗證 digest。
+
+在 Cloudflare 的 remotely-managed tunnel 設定兩筆 Public Hostname：`pay.example.org` 與 `admin.example.org`，兩者的 Service 都設為 `http://tunnel-origin:80`，保留原始 Host，不設定共同的 HTTP Host Header override；啟用公開 HTTPS 轉址及 WebSocket。不可指向 API。`tunnel-origin` 無宿主 ports，只在容器網路接收 cloudflared，依 hostname 分流至兩前端並使用 `CF-Connecting-IP` 覆寫來源 IP；不要將這個入口發布至不可信網路。首次連線、DNS／TLS 與來源 IP 仍需在目標環境驗收。
 
 Compose 的 DB 與 API 不發布宿主機埠；DB 使用 internal network，API 另有對外網路以連線既有宿主機及第三方服務。只有雙前端 HTTP 埠發布至 loopback。Docker 網路及防火牆必須允許 API 到既有 Incus／Agent 相關端點，宿主機端點不可填容器內的 `127.0.0.1`。
 
@@ -97,7 +121,11 @@ Nginx 範例的 upstream 為 HTTP，不能改成容器的 HTTPS 埠；若公開 
 | --- | --- |
 | `FRONTEND_URL`、`ADMIN_FRONTEND_URL` | 不同的 HTTPS origin，無路徑或尾斜線；用於 CORS、公開 URL 及建置時跨面板連結 |
 | `ADMIN_EMAIL` | 首次建立 `admin` 的電子郵件；改值不會覆蓋既有管理員資料 |
-| `USER_PORT`、`ADMIN_PORT` | 不同且未占用的宿主 loopback TCP 埠，預設 8080／8081 |
+| `USER_PORT`、`ADMIN_PORT` | 不同且未占用的宿主 loopback TCP 埠，預設 3000／3001 |
+| `COMPOSE_PROFILES` | `nginx`、`cloudflare` 或空值；不要同時啟用兩種入口 |
+| `COMPOSE_FILE` | 預設 `docker-compose.yml`；發行 override 存在時為 `compose.yaml:compose.release.yaml`（Linux） |
+| `BUILD_CONTEXT` | 倉庫模式 `../..`、安裝模式 `./source`，由 init 自動填入 |
+| `HTTPS_PORT` | 自搭 Nginx 對外 HTTPS 埠，預設 443 |
 | `INCUDAL_RELEASE_REPOSITORY`、`INCUDAL_AGENT_RELEASE_REPOSITORY` | 可選的 Agent 資產來源 `owner/repo`；依既有 Agent 來源解析規則使用，不啟用面板 OTA |
 
 `.env` 只供 Compose 插值，不會整份注入 API。額外 API 變數須明確加入部署設定；密碼與金鑰仍放 `secrets/`。避免在執行 shell 預先匯出同名變數，因 shell 的值優先於 `--env-file`。API 的 root entrypoint 只負責載入 secret、設定憑證目錄權限，再交由 UID 1000 執行 migration 與 Node；不要直接改成 `user: node`，否則無法讀取私有 file secrets 或修正 volume 權限。
@@ -112,19 +140,14 @@ bash panel.sh down
 
 `status` 包含已退出的容器，`logs` 顯示全部或指定服務最近 100 行且不持續追蹤。分享日誌前先移除敏感資料。`down` 保留部署目錄內的 bind mount 資料；不要刪除資料目錄，也不要使用 `docker compose down -v`，仍待遷移的舊 named volumes 可能因此被刪除。CLI 固定 project 名稱及 Compose 路徑，可從其他目錄使用腳本絕對路徑執行。所有 CLI 操作使用同一把非阻塞鎖；直接呼叫 Docker 或其他專案副本不受這把鎖保護。
 
-如需直接使用 Compose 工具，在部署目錄明確帶入相同的 project、env 與 compose 路徑，並以相同順序加入 build context 及 release override。先用 `panel.sh status` 產生 context override，再例如查看完整服務狀態：
+初始化後，在部署目錄可直接使用 Compose；`.env` 的 `COMPOSE_FILE` 與 `BUILD_CONTEXT` 已指向相同來源：
 
 ```bash
-compose_files=(--file compose.yaml)
-if [[ -d source ]]; then
-  compose_files+=(--file .state/build-context.yaml)
-fi
-if [[ -f compose.release.yaml ]]; then
-  compose_files+=(--file compose.release.yaml)
-fi
-docker compose --project-name incudal-panel \
-  --env-file .env "${compose_files[@]}" ps --all
+docker compose --profile nginx --profile cloudflare ps --all
+docker compose up -d --build --wait --wait-timeout 300
 ```
+
+建議使用 `panel.sh up`，其包含 secret／憑證檢查、互斥 profile 限制及停止舊入口。直接 Compose 不提供 CLI 操作鎖與這些前置保護。從舊配置升級時保留原 `.env`／secrets，補上 `COMPOSE_PROFILES`、`COMPOSE_FILE` 與 `BUILD_CONTEXT`；未設定 profile 時維持原有宿主代理模式。既有 USER_PORT／ADMIN_PORT 值繼續生效，不會自動改寫。
 
 ### 部署驗收與排查
 

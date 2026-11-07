@@ -16,10 +16,13 @@ pnpm --filter server build
 STAGING="$(mktemp -d "$DIST_DIR/.server.XXXXXXXX")"
 ARCHIVE="$(mktemp "$DIST_DIR/.server-archive.XXXXXXXX")"
 trap 'rm -rf -- "$STAGING"; rm -f -- "$ARCHIVE"' EXIT
-mkdir -p "$STAGING/client/dist" "$STAGING/server" "$STAGING/deploy" "$STAGING/scripts"
+mkdir -p "$STAGING/client/dist" "$STAGING/server/scripts" "$STAGING/deploy" "$STAGING/scripts"
 cp -a client/dist/. "$STAGING/client/dist/"
 for entry in dist prisma prisma.config.ts package.json templates; do
   cp -a "server/$entry" "$STAGING/server/"
+done
+for entry in export-legacy-host.mjs LEGACY_HOST_EXPORT.md; do
+  cp "server/scripts/$entry" "$STAGING/server/scripts/"
 done
 cp package.json pnpm-lock.yaml pnpm-workspace.yaml .env.example "$STAGING/"
 cp -a deploy/. "$STAGING/deploy/"
