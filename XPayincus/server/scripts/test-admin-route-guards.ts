@@ -293,6 +293,7 @@ function isAllowedPublicOrTokenRoute(route: RouteInfo): boolean {
 
   if (file === 'system-config.ts') return path === '/public'
   if (file === 'packages.ts') return path === '/public' || path.startsWith('/public/')
+  if (file === 'network-probe.ts') return (route.method === 'GET' && path === '/targets') || (route.method === 'POST' && path === '/test')
   if (file === 'help.ts') return !path.startsWith('/admin')
   if (file === 'agent.ts') {
     return [
