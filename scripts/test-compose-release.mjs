@@ -7,12 +7,12 @@ import { spawnSync } from 'node:child_process'
 import { artifactNames, composeImages, root, validateVersions } from './release-contract.mjs'
 
 const version = validateVersions()
-assert.equal(version, 'v1.0.2')
+assert.equal(version, 'v1.0.3')
 const images = composeImages(version)
 assert.deepEqual(images, {
-  api: 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2',
-  user: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2',
-  admin: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2'
+  api: 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3',
+  user: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3',
+  admin: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3'
 })
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'xpayincus-compose-'))
 function run(script, directory, success = true) {
@@ -54,7 +54,10 @@ try {
   assert.equal(manifest.compose.defaultMode, 'pull')
   assert.equal(manifest.compose.buildOverride, 'XPayincus/deploy/compose/compose.build.yaml')
   assert.deepEqual(manifest.compose.images, images)
-  assert.equal(fs.readdirSync(artifacts).length, 26)
+  const bootstrap = manifest.artifacts.find(item => item.name === `xpayincus-compose-${version}.sh`)
+  assert.equal(bootstrap.sha256, crypto.createHash('sha256').update(content).digest('hex'))
+  assert.ok(fs.readFileSync(path.join(artifacts, 'SHA256SUMS'), 'utf8').includes(`${bootstrap.sha256}  ${bootstrap.name}`))
+  assert.equal(fs.readdirSync(artifacts).length, 28)
   console.log('Compose release contract and manifest fixtures passed')
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true })

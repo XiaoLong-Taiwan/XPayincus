@@ -29,6 +29,7 @@ import {
   type HostAgentRecord
 } from '../lib/host-agent-credentials.js'
 import { processAgentInstanceReport } from '../services/agent-instance-report.js'
+import { clampAgentHeartbeatIntervalSeconds, deriveAgentStatus, getAgentHeartbeatIntervalSeconds } from '../lib/agent-status.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -117,10 +118,6 @@ const agentReleaseCacheTtlMs = 5 * 60 * 1000
 const agentBinaryDownloadLimitBytes = 64 * 1024 * 1024
 const agentReleaseFetchTimeoutMs = 15 * 1000
 const maxAgentInstallUrlLength = 2048
-const defaultAgentHeartbeatIntervalSeconds = 30
-const minAgentHeartbeatIntervalSeconds = 5
-const maxAgentHeartbeatIntervalSeconds = 3600
-const minAgentOfflineThresholdSeconds = 120
 let agentReleaseManifestCache: { expiresAt: number; manifest: AgentUpgradeManifest } | null = null
 let agentReleaseAssetCache: { expiresAt: number; assets: Map<string, GitHubReleaseAsset> } | null = null
 let agentReleaseBinaryCache: { expiresAt: number; binaries: Map<string, Buffer> } | null = null
@@ -162,31 +159,6 @@ function normalizeCapabilities(value: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function parseInteger(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isSafeInteger(value)) {
-    return value
-  }
-  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
-    const parsed = Number.parseInt(value.trim(), 10)
-    return Number.isSafeInteger(parsed) ? parsed : null
-  }
-  return null
-}
-
-function clampAgentHeartbeatIntervalSeconds(value: unknown): number {
-  const parsed = parseInteger(value)
-  if (!parsed) {
-    return defaultAgentHeartbeatIntervalSeconds
-  }
-  if (parsed < minAgentHeartbeatIntervalSeconds) {
-    return minAgentHeartbeatIntervalSeconds
-  }
-  if (parsed > maxAgentHeartbeatIntervalSeconds) {
-    return maxAgentHeartbeatIntervalSeconds
-  }
-  return parsed
 }
 
 function buildRequestPath(request: FastifyRequest): string {
@@ -870,32 +842,6 @@ function normalizeAgentMetrics(metrics: Record<string, unknown> | undefined): Re
   }
 }
 
-function getAgentHeartbeatIntervalSeconds(agent: HostAgentRecord): number {
-  if (!isRecord(agent.lastReport)) {
-    return defaultAgentHeartbeatIntervalSeconds
-  }
-  const metrics = agent.lastReport.metrics
-  if (!isRecord(metrics)) {
-    return defaultAgentHeartbeatIntervalSeconds
-  }
-  return clampAgentHeartbeatIntervalSeconds(metrics.heartbeatIntervalSeconds)
-}
-
-function deriveAgentStatus(agent: HostAgentRecord, now = new Date()): string {
-  if (!agent.enabled || agent.status !== 'online') {
-    return agent.status
-  }
-  if (!agent.lastSeenAt) {
-    return 'offline'
-  }
-
-  const heartbeatIntervalSeconds = getAgentHeartbeatIntervalSeconds(agent)
-  const offlineThresholdSeconds = Math.max(heartbeatIntervalSeconds * 3, minAgentOfflineThresholdSeconds)
-  const lastSeenAgeMs = now.getTime() - agent.lastSeenAt.getTime()
-
-  return lastSeenAgeMs > offlineThresholdSeconds * 1000 ? 'offline' : agent.status
-}
-
 async function serializeAgent(agent: HostAgentRecord) {
   const latestVersion = await getLatestAgentVersion()
   const versionStatus = getAgentVersionStatus(agent.version, latestVersion)
@@ -1055,7 +1001,9 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       .send(manifest)
   })
 
-  fastify.get<{ Params: AgentInstallTokenParams }>('/install-config/:token', async (
+  fastify.get<{ Params: AgentInstallTokenParams }>('/install-config/:token', {
+    logLevel: 'silent'
+  }, async (
     request: FastifyRequest<{ Params: AgentInstallTokenParams }>,
     reply: FastifyReply
   ) => {
@@ -1524,8 +1472,12 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       )
     }
 
-    await agentModel.update({
-      where: { agentId: agent.agentId },
+    const heartbeatResult = await agentModel.updateMany({
+      where: {
+        agentId: agent.agentId,
+        enabled: true,
+        OR: [{ lastSeenAt: null }, { lastSeenAt: { lte: now } }]
+      },
       data: {
         status: 'online',
         version: sanitizeShortString(request.body.version, 128),
@@ -1535,6 +1487,10 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         lastHeartbeatIp: sanitizeShortString(getAgentHeartbeatIp(request), 128)
       }
     })
+
+    if (heartbeatResult.count !== 1) {
+      return reply.code(409).send({ error: 'Agent heartbeat is superseded or Agent is disabled', code: 'AGENT_HEARTBEAT_REJECTED' })
+    }
 
     return {
       ok: true,

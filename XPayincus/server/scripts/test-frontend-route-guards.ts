@@ -623,7 +623,7 @@ assert.ok(
 )
 assert.ok(
   appSource.includes("import PublicSiteLayout from '@/components/public/PublicSiteLayout.vue'") &&
-    appSource.includes("const publicSiteRouteNames = new Set(['portal', 'market', 'help', 'help-article'])") &&
+    appSource.includes("const publicSiteRouteNames = new Set(['portal', 'market', 'network-test', 'help', 'help-article'])") &&
     appSource.includes('const showPublicSiteLayout = computed<boolean>') &&
     appSource.includes('!showPublicSiteLayout.value') &&
     appSource.includes('<PublicSiteLayout v-else-if="showPublicSiteLayout">'),

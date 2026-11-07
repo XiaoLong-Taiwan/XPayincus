@@ -5,7 +5,7 @@ import { artifactNames, validateVersions } from './release-contract.mjs'
 const version = validateVersions()
 const source = path.resolve(process.argv[2])
 const destination = path.resolve(process.argv[3])
-const expected = artifactNames(version).filter(name => name !== `xpayincus-dashboard-${version}-compose.tar.gz` && name !== `xpayincus-zfs-builder-${version}-source.tar.gz`)
+const expected = artifactNames(version).filter(name => name !== `xpayincus-dashboard-${version}-compose.tar.gz` && name !== `xpayincus-zfs-builder-${version}-source.tar.gz` && name !== `xpayincus-compose-${version}.sh`)
 const files = new Map()
 for (const group of fs.readdirSync(source)) {
   const directory = path.join(source, group)

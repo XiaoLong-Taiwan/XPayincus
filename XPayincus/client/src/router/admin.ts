@@ -169,6 +169,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'admin.system.sections.operations.title', title: '运营配置' }
   },
   {
+    path: '/admin/settings/network-probe',
+    name: 'admin-settings-network-probe',
+    component: () => import('@/views/admin/SystemConfigView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'admin.system.sections.networkProbe.title', title: '網路測試目標' }
+  },
+  {
     path: '/admin/settings/popup-announcement',
     name: 'admin-settings-popup-announcement',
     component: () => import('@/views/admin/SystemConfigView.vue'),

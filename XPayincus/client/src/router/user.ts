@@ -102,6 +102,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.dashboard', title: '概览' }
   },
   {
+    path: '/network-test',
+    name: 'network-test',
+    component: () => import('@/views/NetworkTestView.vue'),
+    meta: { title: '公開網路測試' }
+  },
+  {
     path: '/market',
     name: 'market',
     component: () => import('@/views/MarketView.vue'),

@@ -10,6 +10,15 @@ export default {
         statusUpdateFailed: '更新地址状态失败：{error}', deleteConfirm: '删除 IPv4 地址 {address}？', deleteFailed: '删除地址失败：{error}',
         status: { free: '可用', assigned: '已分配', disabled: '禁用' },
     },
+    networkTest: {
+        title: '公开网络测试',
+        description: '测试连接至管理员允许的公开目标。',
+        target: '测试目标',
+        testing: '测试中...',
+        run: '开始测试',
+        sourceWarning: '测试由面板 API 主机发出至目标，不是买家发出的 ping，也不是宿主节点 ping。你可以在自己的设备对公开 hostname 执行 ping，测量自己的连接路径。',
+        success: '连接成功',
+    },
     invites: {
         title: '邀请码管理', description: '生成新的注册链接，并查看每个邀请码的使用情况。', backToOverview: '返回概览',
         generateSuccess: '邀请码已生成', generateFailed: '生成邀请码失败', pointsBalance: '{points} 积分',
@@ -284,6 +293,7 @@ export default {
         main: '常用',
         dashboard: '概览',
         instances: '实例',
+        networkTest: '网络测试',
         transfers: '转移',
         friends: '好友',
         tickets: '工单',
@@ -3206,6 +3216,7 @@ export default {
                     title: '运营配置',
                     description: '管理 OTA 更新与礼品卡管理员白名单等平台运营参数',
                 },
+                networkProbe: { title: '网络测试目标', description: '管理可供 TCP 与 ICMP 测试的固定公开 DNS 目标' },
             },
             popupAnnouncement: {
                 title: '弹窗公告',

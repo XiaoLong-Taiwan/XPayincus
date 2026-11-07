@@ -233,6 +233,7 @@ export default {
         main: 'Main',
         dashboard: 'Dashboard',
         instances: 'Instances',
+        networkTest: 'Network Test',
         transfers: 'Transfers',
         friends: 'Friends',
         tickets: 'Tickets',
@@ -3152,6 +3153,10 @@ export default {
                     title: 'Operations',
                     description: 'Manage platform operations such as OTA updates and gift card administrator allowlists',
                 },
+                networkProbe: {
+                    title: 'Network Probe Targets',
+                    description: 'Manage fixed public DNS targets available for TCP and ICMP testing',
+                },
             },
             popupAnnouncement: {
                 title: 'Popup Notice',
@@ -4891,6 +4896,15 @@ export default {
                 failed: 'Failed',
             },
         },
+    },
+    networkTest: {
+        title: 'Public Network Test',
+        description: 'Test connectivity to administrator-approved public targets.',
+        target: 'Target',
+        testing: 'Testing...',
+        run: 'Run test',
+        sourceWarning: 'Tests originate from the panel API host to the target. This is not a buyer-originated ping or a ping from the hosting node. You can run ping from your own device to the public hostname to measure your own path.',
+        success: 'Reachable',
     },
 
     // Error pages

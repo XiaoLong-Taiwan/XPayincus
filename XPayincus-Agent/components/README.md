@@ -1,6 +1,6 @@
 # Agent 宿主元件管理
 
-本目錄以宿主元件 bundle 的方式組織 RFW 與 ZFS builder。bundle 是同一統一 Release 下的邏輯交付集合，沿用現有獨立資產，不新增 bundle tarball、不改變既有 26 件發行資產契約，也不代表自動安裝或共同原子升級。
+本目錄以宿主元件 bundle 的方式組織 RFW 與 ZFS builder。bundle 是同一統一 Release 下的邏輯交付集合，沿用現有獨立資產，不新增 bundle tarball、不改變既有 28 件發行資產契約，也不代表自動安裝或共同原子升級。
 
 ## 來源與責任
 

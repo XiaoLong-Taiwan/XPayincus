@@ -6,3 +6,4 @@ config/
 secrets/
 backups/
 .state/
+.bootstrap/

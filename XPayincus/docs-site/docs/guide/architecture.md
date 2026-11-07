@@ -1,8 +1,8 @@
 # 系统架构
 
-XPayincus 是面向 Incus/LXC/KVM 商業交付的主控面板。統一倉包含 `XPayincus/client`、`XPayincus/server` 與 `XPayincus-Agent`；RFW／ZFS 位於 `XPayincus-Agent/components/rfw`、`XPayincus-Agent/components/zfs`，整體版本以根 `VERSION` 為準，目前為 v1.0.2。Go Agent 不直接載入 eBPF 或 ZFS 核心模組。
+XPayincus 是面向 Incus/LXC/KVM 商業交付的主控面板。統一倉包含 `XPayincus/client`、`XPayincus/server` 與 `XPayincus-Agent`；RFW／ZFS 位於 `XPayincus-Agent/components/rfw`、`XPayincus-Agent/components/zfs`，整體版本以根 `VERSION` 為準，目前為 v1.0.3。Go Agent 不直接載入 eBPF 或 ZFS 核心模組。
 
-面板可使用專用 Compose，僅部署 PostgreSQL、單一 API 與雙前端；v1.0.2 以 `deploy/compose/docker-compose.yml` 引用 `compose.yaml`，支援 Nginx、Cloudflare Tunnel 或外部 HTTPS 代理，前端預設 loopback 3000／3001。Incus、Agent、RFW、ZFS 保留宿主部署。下圖為保留的 systemd／Nginx 宿主布局，該布局的 OTA 不適用 Compose；Compose 以指定來源版本重建。API 僅允許一個 Node 程序，不支援 cluster、多 worker、多容器副本或新舊後端同寫 DB。
+面板可使用專用 Compose，僅部署 PostgreSQL、單一 API 與雙前端；v1.0.3 以 `deploy/compose/docker-compose.yml` 引用 `compose.yaml`，支援 Nginx、Cloudflare Tunnel 或外部 HTTPS 代理，前端預設 loopback 3000／3001。Incus、Agent、RFW、ZFS 保留宿主部署。下圖為保留的 systemd／Nginx 宿主布局，該布局的 OTA 不適用 Compose；Compose 以指定來源版本重建。API 僅允許一個 Node 程序，不支援 cluster、多 worker、多容器副本或新舊後端同寫 DB。
 
 舊宿主遷移工具與指南位於 `XPayincus/server/scripts/export-legacy-host.mjs`、`LEGACY_HOST_EXPORT.md`（相對統一倉根），隨原生 Panel 及 Dashboard Compose 來源包交付。匯出包含 DB、設定、原密鑰與憑證，不自動停機、匯入或切換，也不保證跨版本 schema 相容。
 

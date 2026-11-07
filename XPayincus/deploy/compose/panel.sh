@@ -13,6 +13,8 @@ die() {
 
 usage() {
   printf '%s\n' \
+    'bash deploy/compose/panel.sh setup https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]  (同 init，只初始化)' \
+    'bash deploy/compose/panel.sh update VERSION SHA256  (驗證 Release 並準備部署檔案；完成後另執行 up)' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
     'bash deploy/compose/panel.sh up [pull|build]  (預設 pull)' \
@@ -24,6 +26,11 @@ usage() {
 
 case "$command_name" in
   help|-h|--help) usage; exit 0 ;;
+  setup) command_name=init ;;
+  update)
+    (($# == 2)) || die 'update 需要固定 VERSION 與 Release Dashboard Compose 資產的可信 SHA256。'
+    exec bash "$base/download.sh" update "$base" "$@"
+    ;;
   install|init|up|down|status|logs|export|import) ;;
   *) usage; exit 2 ;;
 esac
@@ -49,12 +56,13 @@ if [[ "$command_name" == install ]]; then
   [[ -z "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]] || die '安裝目的地必須為空目錄，拒絕覆蓋來源或既有部署。'
   mkdir -m 700 -- "$destination/source"
   tar --exclude=node_modules --exclude=dist --exclude='.env*' --exclude=certs \
+    --exclude=deploy/compose/.bootstrap \
     --exclude=deploy/compose/secrets --exclude=deploy/compose/backups --exclude=deploy/compose/tls \
     --exclude=deploy/compose/data --exclude=deploy/compose/config --exclude=deploy/compose/.state \
     --exclude=.git --exclude='*.log' --exclude='*.dump' \
     -C "$source_root" -cf - package.json pnpm-lock.yaml pnpm-workspace.yaml client server deploy/compose \
     | tar -C "$destination/source" -xf -
-  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
+  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh download.sh README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
     cp -- "$base/$deployment_file" "$destination/$deployment_file"
   done
   if [[ -f "$base/.env.example" ]]; then cp -- "$base/.env.example" "$destination/.env.example"; fi

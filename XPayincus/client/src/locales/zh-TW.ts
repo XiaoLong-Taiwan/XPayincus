@@ -11,6 +11,15 @@ const zhTW = {
         addressRequired: '請輸入要新增的 IPv4 位址', addSuccess: '已新增 {count} 個位址', addFailed: '新增位址失敗：{error}', statusUpdateFailed: '更新位址狀態失敗：{error}',
         deleteConfirm: '刪除 IPv4 位址 {address}？', deleteFailed: '刪除位址失敗：{error}', status: { free: '可用', assigned: '已分配', disabled: '停用' },
     },
+    networkTest: {
+        title: '公開網路測試',
+        description: '測試連線至管理員允許的公開目標。',
+        target: '測試目標',
+        testing: '測試中...',
+        run: '開始測試',
+        sourceWarning: '測試由面板 API 主機發出至目標，不是買家發出的 ping，也不是宿主節點 ping。你可以在自己的裝置對公開 hostname 執行 ping，測量自己的連線路徑。',
+        success: '連線成功',
+    },
     invites: {
         title: '邀請碼管理', description: '產生新的註冊連結，並查看每個邀請碼的使用情況。', backToOverview: '返回總覽', generateSuccess: '邀請碼已產生', generateFailed: '產生邀請碼失敗', pointsBalance: '{points} 積分',
         generateTitle: '產生邀請碼', generateDescription: '選擇一種管理員設定的成本方式，產生成功後可複製註冊連結給新使用者。', noCostOptions: '管理員尚未開啟使用者產生邀請碼的價格選項。',
@@ -237,6 +246,7 @@ const zhTW = {
         main: '常用',
         dashboard: '總覽',
         instances: '實例',
+        networkTest: '網路測試',
         transfers: '移轉',
         friends: '好友',
         tickets: '工單',
@@ -4135,6 +4145,7 @@ const zhTW = {
                     title: '營運配置',
                     description: '管理 OTA 更新與禮品卡管理員白名單等平台營運參數',
                 },
+                networkProbe: { title: '網路測試目標', description: '管理可供 TCP 與 ICMP 測試的固定公開 DNS 目標' },
             },
             popupAnnouncement: {
                 title: '彈窗公告',

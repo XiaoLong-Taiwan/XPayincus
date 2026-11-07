@@ -1,4 +1,4 @@
-export type SystemSettingsSectionKey = 'access' | 'hosting' | 'brand' | 'security' | 'mail' | 'tickets' | 'popup' | 'operations'
+export type SystemSettingsSectionKey = 'access' | 'hosting' | 'brand' | 'security' | 'mail' | 'tickets' | 'popup' | 'operations' | 'networkProbe'
 
 export interface SystemSettingsNavigationItem {
   key: SystemSettingsSectionKey | 'telegram'
@@ -49,6 +49,12 @@ export const systemSettingsSections: Array<SystemSettingsNavigationItem & { key:
     path: '/admin/settings/operations',
     labelKey: 'admin.system.sections.operations.title',
     descriptionKey: 'admin.system.sections.operations.description'
+  },
+  {
+    key: 'networkProbe',
+    path: '/admin/settings/network-probe',
+    labelKey: 'admin.system.sections.networkProbe.title',
+    descriptionKey: 'admin.system.sections.networkProbe.description'
   },
   {
     key: 'popup',

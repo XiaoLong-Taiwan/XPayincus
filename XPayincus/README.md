@@ -1,6 +1,6 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前為 `v1.0.2`。歷史交接檔中的線上版本不代表統一版本已部署。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前為 `v1.0.3`。歷史交接檔中的線上版本不代表統一版本已部署。
 
 ## 目錄與能力
 
@@ -30,7 +30,7 @@ bash deploy/compose/panel.sh init https://pay.example.org https://admin.example.
 bash deploy/compose/panel.sh up
 ```
 
-Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Agent、RFW 或 ZFS，也不需要 Redis。v1.0.2 以 `docker-compose.yml` 引用 `compose.yaml`，支援 Nginx（預設）、Cloudflare Tunnel 或外部 HTTPS 代理；前端預設監聽 `127.0.0.1:3000`、`127.0.0.1:3001`，API 與 DB 不發布宿主埠。容器內 `127.0.0.1` 不是宿主 Incus 端點。
+Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Agent、RFW 或 ZFS，也不需要 Redis。v1.0.3 以 `docker-compose.yml` 引用 `compose.yaml`，支援 Nginx（預設）、Cloudflare Tunnel 或外部 HTTPS 代理；前端預設監聽 `127.0.0.1:3000`、`127.0.0.1:3001`，API 與 DB 不發布宿主埠。容器內 `127.0.0.1` 不是宿主 Incus 端點。
 
 所有部署都必須遵守：
 
@@ -52,7 +52,7 @@ bash deploy/compose/panel.sh import /srv/private-backups/panel.dump --confirm-re
 
 CLI 沒有對應的新管理面板按鈕。匯入僅限可信 custom／tar archive；會先停面板與 API，再保留還原前備份，以單一交易還原。成功或失敗均維持面板停止，確認程式版本、金鑰及憑證後手動 `up`。備份未加密，需另行加密並離機保存。完整限制見 Compose 說明。
 
-舊無 Docker 宿主可使用 v1.0.2 的 `server/scripts/export-legacy-host.mjs`，匯出 DB、設定、原密鑰及憑證；工具不自動停止服務或切換部署。工具與 [首次匯入指南](server/scripts/LEGACY_HOST_EXPORT.md) 隨原生 Panel 及 Dashboard Compose 來源包交付，首次啟動前須保留原加密金鑰、核對 schema 相容性並停止舊寫入端。
+舊無 Docker 宿主可使用自 v1.0.2 提供的 `server/scripts/export-legacy-host.mjs`，匯出 DB、設定、原密鑰及憑證；工具不自動停止服務或切換部署。工具與 [首次匯入指南](server/scripts/LEGACY_HOST_EXPORT.md) 隨原生 Panel 及 Dashboard Compose 來源包交付，首次啟動前須保留原加密金鑰、核對 schema 相容性並停止舊寫入端。
 
 ## 開發與檢查命令
 

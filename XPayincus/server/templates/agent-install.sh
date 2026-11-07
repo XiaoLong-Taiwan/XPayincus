@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
+umask 077
 
 SERVICE_NAME="incudal-agent"
 CONFIG_DIR="${INCUDAL_CONFIG_DIR:-/etc/incudal-agent}"
@@ -11,10 +13,89 @@ HEARTBEAT_INTERVAL="${INCUDAL_HEARTBEAT_INTERVAL_SECONDS:-60}"
 REQUEST_TIMEOUT="${INCUDAL_REQUEST_TIMEOUT_SECONDS:-10}"
 DRY_RUN="${INCUDAL_AGENT_DRY_RUN:-0}"
 INSTALL_CONFIG_PATH=""
+REINSTALL="0"
+LOCAL_BINARY=""
+TOKEN_FILE=""
+
+usage() {
+  printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--reinstall] [--binary FILE --sha256 HEX]' \
+    'Without credentials, prompts on /dev/tty for panel URL and hidden one-time TOKEN.' \
+    '--reinstall preserves the existing config; do not supply a new URL or TOKEN.'
+}
 
 fail() {
   echo "error: $*" >&2
   exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --reinstall) REINSTALL="1"; shift ;;
+    --panel-url|--token-file|--binary|--sha256)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || fail "option requires a value"
+      case "$1" in
+        --panel-url) INCUDAL_PANEL_URL="$2" ;;
+        --token-file) TOKEN_FILE="$2" ;;
+        --binary) LOCAL_BINARY="$2" ;;
+        --sha256) INCUDAL_AGENT_BINARY_SHA256="$2" ;;
+      esac
+      shift 2
+      ;;
+    *) fail "unknown option; use --help" ;;
+  esac
+done
+
+prompt_value() {
+  local name="$1" label="$2" hidden="${3:-0}"
+  [ -r /dev/tty ] && [ -w /dev/tty ] || fail "non-interactive input requires --panel-url and --token-file (or existing credential environment)"
+  if [ "${hidden}" = "1" ]; then
+    IFS= read -r -s -p "${label}" "${name}" </dev/tty || fail "input cancelled"
+    printf '\n' >/dev/tty
+  else
+    IFS= read -r -p "${label}" "${name}" </dev/tty || fail "input cancelled"
+  fi
+}
+
+prepare_inputs() {
+  if [ "${REINSTALL}" = "1" ]; then
+    [ -z "${INCUDAL_PANEL_URL:-}${INCUDAL_AGENT_INSTALL_TOKEN:-}${TOKEN_FILE}${INCUDAL_AGENT_ID:-}${INCUDAL_AGENT_SECRET:-}" ] || fail "--reinstall cannot be combined with new credentials or panel URL"
+    [ -f "${CONFIG_FILE}" ] && [ ! -L "${CONFIG_FILE}" ] || fail "--reinstall requires an existing regular config file"
+    INCUDAL_PANEL_URL="$(sed -nE 's/^panel_url: "([^"\\]+)"$/\1/p' "${CONFIG_FILE}")"
+  else
+    if [ -n "${TOKEN_FILE}" ]; then
+      [ -z "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ] || fail "multiple TOKEN sources"
+      [ -f "${TOKEN_FILE}" ] && [ ! -L "${TOKEN_FILE}" ] || fail "TOKEN file must be a regular file"
+      [ "$(stat -c '%a' "${TOKEN_FILE}")" = "600" ] && [ "$(stat -c '%u' "${TOKEN_FILE}")" = "$(id -u)" ] || fail "TOKEN file must be owned by current user with mode 0600"
+      INCUDAL_AGENT_INSTALL_TOKEN="$(cat "${TOKEN_FILE}")"
+    fi
+    [ -n "${INCUDAL_PANEL_URL:-}" ] || prompt_value INCUDAL_PANEL_URL 'Panel URL: '
+    if [ -z "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ] && [ -z "${INCUDAL_AGENT_ID:-}${INCUDAL_AGENT_SECRET:-}" ]; then
+      prompt_value INCUDAL_AGENT_INSTALL_TOKEN 'Agent install TOKEN: ' 1
+    fi
+  fi
+  [[ "${INCUDAL_PANEL_URL:-}" =~ ^https?://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]{1,5})?/?$ ]] || fail "panel URL must be an HTTP(S) origin without credentials, query, or path"
+  INCUDAL_PANEL_URL="${INCUDAL_PANEL_URL%/}"
+  if [ -n "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
+    [[ "${INCUDAL_AGENT_INSTALL_TOKEN}" =~ ^ait_[A-Za-z0-9_-]{32,128}$ ]] || fail "invalid Agent install TOKEN format"
+  fi
+  if [ -n "${LOCAL_BINARY}" ]; then
+    [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ] || fail "--binary cannot be combined with a binary URL"
+    [ -f "${LOCAL_BINARY}" ] && [ -r "${LOCAL_BINARY}" ] || fail "local binary must be a readable file"
+    [[ "${LOCAL_BINARY}" != *.gz ]] || fail "--binary requires an uncompressed compiled binary"
+    LOCAL_BINARY="$(cd "$(dirname "${LOCAL_BINARY}")" && pwd)/$(basename "${LOCAL_BINARY}")"
+    BINARY_LOCAL_SHA256="$(sha256_file "${LOCAL_BINARY}")"
+    if [ -n "${INCUDAL_AGENT_BINARY_SHA256:-}" ]; then
+      verify_sha256 "${LOCAL_BINARY}" "${INCUDAL_AGENT_BINARY_SHA256}" || fail "local binary checksum mismatch"
+    fi
+    INCUDAL_AGENT_BINARY_URL="file://${LOCAL_BINARY}"
+    INCUDAL_AGENT_BINARY_SHA256="${BINARY_LOCAL_SHA256}"
+  fi
+}
+
+fetch_public() {
+  curl -q -fsSL --proto '=http,https' --proto-redir '=http,https' \
+    --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 "$@"
 }
 
 normalize_heartbeat_interval() {
@@ -101,7 +182,7 @@ download_binary_once() {
     install -m 0644 "${binary_url#file://}" "${target}.download" || return 1
   else
     command -v curl >/dev/null 2>&1 || fail "curl is required"
-    curl -fsSL "${binary_url}" -o "${target}.download" || {
+    fetch_public "${binary_url}" -o "${target}.download" || {
       rm -f "${target}.download"
       return 1
     }
@@ -200,7 +281,7 @@ download_manifest() {
   fi
 
   command -v curl >/dev/null 2>&1 || fail "curl is required"
-  curl -fsSL "${manifest_url}" -o "${target}"
+  fetch_public "${manifest_url}" -o "${target}"
 }
 
 manifest_value() {
@@ -267,7 +348,9 @@ preflight_environment() {
     [ "$(id -u)" -eq 0 ] || fail "must run as root"
     command -v systemctl >/dev/null 2>&1 || fail "systemctl is required"
     [ -d /run/systemd/system ] || fail "systemd is not running"
-    command -v curl >/dev/null 2>&1 || fail "curl is required"
+    if [ -z "${LOCAL_BINARY}" ] || [ -n "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
+      command -v curl >/dev/null 2>&1 || fail "curl is required"
+    fi
   fi
 
   preflight_target_parent "${BIN_PATH}"
@@ -327,13 +410,28 @@ fetch_agent_install_config() {
 
   command -v curl >/dev/null 2>&1 || fail "curl is required"
   INSTALL_CONFIG_PATH="$(mktemp)"
-  curl -fsSL "${config_url}" -o "${INSTALL_CONFIG_PATH}"
-  # shellcheck disable=SC1090
-  . "${INSTALL_CONFIG_PATH}"
+  if ! printf 'url = "%s"\n' "${config_url}" | curl -q -fsS --proto '=http,https' \
+    --connect-timeout 10 --max-time 30 --config - -o "${INSTALL_CONFIG_PATH}" 2>/dev/null; then
+    fail "Agent TOKEN exchange failed; do not retry automatically; generate a new TOKEN if consumed or uncertain"
+  fi
+  local line count=0
+  while IFS= read -r line; do
+    if [[ "${line}" =~ ^INCUDAL_AGENT_ID=\'(agt_[A-Za-z0-9_-]{24,64})\'$ ]] && [ "${count}" = "0" ]; then
+      INCUDAL_AGENT_ID="${BASH_REMATCH[1]}"
+    elif [[ "${line}" =~ ^INCUDAL_AGENT_SECRET=\'(ias_[A-Za-z0-9_-]{32,96})\'$ ]] && [ "${count}" = "1" ]; then
+      INCUDAL_AGENT_SECRET="${BASH_REMATCH[1]}"
+    else
+      fail "invalid Agent install config response"
+    fi
+    count=$((count + 1))
+  done < "${INSTALL_CONFIG_PATH}"
+  [ "${count}" = "2" ] || fail "incomplete Agent install config response"
   rm -f "${INSTALL_CONFIG_PATH}"
   INSTALL_CONFIG_PATH=""
+  unset INCUDAL_AGENT_INSTALL_TOKEN
 }
 
+prepare_inputs
 need_env INCUDAL_PANEL_URL
 HEARTBEAT_INTERVAL="$(normalize_heartbeat_interval "${HEARTBEAT_INTERVAL}")"
 
@@ -375,7 +473,7 @@ trap cleanup EXIT
 preflight_environment
 
 # 无一次性 token 时，静态凭据也必须在任何下载前完整存在。
-if [ -z "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
+if [ "${REINSTALL}" != "1" ] && [ -z "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
   need_env INCUDAL_AGENT_ID
   need_env INCUDAL_AGENT_SECRET
 fi
@@ -411,18 +509,26 @@ fi
 download_binary "${BINARY_URL}" "${STAGED_BIN}" "${BINARY_FALLBACK_URL}" "${BINARY_EXPECTED_SHA256}"
 
 fetch_agent_install_config
+if [ "${REINSTALL}" != "1" ]; then
 need_env INCUDAL_AGENT_ID
 need_env INCUDAL_AGENT_SECRET
+fi
 
 echo "Installing Incudal Agent"
 echo "  panel: ${INCUDAL_PANEL_URL}"
-echo "  agent: ${INCUDAL_AGENT_ID}"
-echo "  binary: ${BINARY_URL}"
+echo "  mode: $([ "${REINSTALL}" = "1" ] && echo 'Agent reinstall (preserve config)' || echo 'Agent install')"
 if [ -n "${BINARY_EXPECTED_SHA256}" ]; then
   echo "  sha256: ${BINARY_EXPECTED_SHA256}"
 fi
 
 # 先生成 0600 临时配置并用暂存二进制冒烟，正式文件此时尚未被替换。
+if [ "${REINSTALL}" = "1" ]; then
+  if [ "${DRY_RUN}" = "1" ]; then
+    echo '+ stage existing Agent config (contents hidden)'
+  else
+    install -m 0600 -o root -g root "${CONFIG_FILE}" "${STAGED_CONFIG}"
+  fi
+else
 write_file "${STAGED_CONFIG}" 0600 root:root <<EOF_CONFIG
 panel_url: "${INCUDAL_PANEL_URL}"
 agent_id: "${INCUDAL_AGENT_ID}"
@@ -430,6 +536,7 @@ agent_secret: "${INCUDAL_AGENT_SECRET}"
 heartbeat_interval_seconds: ${HEARTBEAT_INTERVAL}
 request_timeout_seconds: ${REQUEST_TIMEOUT}
 EOF_CONFIG
+fi
 
 write_file "${STAGED_SERVICE}" 0644 root:root <<EOF_SERVICE
 [Unit]

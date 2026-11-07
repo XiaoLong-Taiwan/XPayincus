@@ -62,7 +62,7 @@ export const composeImageTag = version => {
 export const composeImages = version => Object.fromEntries(['api', 'user', 'admin'].map(service => [service, `ghcr.io/xiaolong-taiwan/xpayincus-${service === 'api' ? 'api' : 'panel-web'}:${composeImageTag(version)}`]))
 
 export function artifactNames(version) {
-  const names = ['manifest.json', `xpayincus-zfs-builder-${version}-source.tar.gz`, `xpayincus-dashboard-${version}-compose.tar.gz`]
+  const names = ['manifest.json', `xpayincus-zfs-builder-${version}-source.tar.gz`, `xpayincus-dashboard-${version}-compose.tar.gz`, `xpayincus-compose-${version}.sh`]
   for (const arch of ['amd64', 'arm64']) {
     names.push(`xpayincus-panel-${version}-linux-${arch}.tar.gz`)
     names.push(`xpayincus-agent-${version}-linux-${arch}`, `xpayincus-agent-${version}-linux-${arch}.gz`)

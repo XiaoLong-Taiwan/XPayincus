@@ -576,6 +576,9 @@ onUnmounted(() => {
           <p class="mt-4 max-w-2xl text-base leading-7 sm:text-lg sm:leading-8" :class="ui.body">
             {{ t('publicSite.market.description') }}
           </p>
+          <RouterLink to="/network-test" class="mt-4 inline-flex rounded-lg border border-themed px-4 py-2 text-sm font-medium text-themed hover:bg-themed-hover">
+            {{ t('networkTest.title') }}
+          </RouterLink>
 
           <div class="market-stat-strip mt-7 flex flex-wrap items-center" data-reveal>
             <div v-for="card in summaryCards" :key="card.label" class="market-stat">

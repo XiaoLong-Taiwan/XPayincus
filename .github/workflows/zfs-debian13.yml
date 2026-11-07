@@ -1,0 +1,49 @@
+name: Debian 13 ZFS Kernel Modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel:
+        description: Full Debian 13 cloud kernel release (matching headers must exist)
+        type: string
+        required: true
+        default: 6.12.107+deb13-cloud-amd64
+      architecture:
+        description: Native build architecture
+        type: choice
+        options: [amd64]
+        default: amd64
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_KERNEL: ${{ inputs.kernel }}
+      TARGET_ARCH: ${{ inputs.architecture }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate allowlisted target
+        run: bash XPayincus-Agent/components/zfs/build-debian13-ci.sh --validate-only
+      - name: Build in isolated Debian 13 userspace
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/zfs-artifacts"
+          docker run --rm --platform linux/amd64 --cap-drop=ALL --security-opt=no-new-privileges \
+            --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/XPayincus-Agent/components/zfs,dst=/builder,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/zfs-artifacts,dst=/output" \
+            --env TARGET_KERNEL --env TARGET_ARCH --env SOURCE_COMMIT="$GITHUB_SHA" \
+            debian:13-slim bash /builder/build-debian13-ci.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian13-zfs-${{ inputs.architecture }}-${{ inputs.kernel }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zfs-artifacts/*
+          if-no-files-found: error
+          retention-days: 14

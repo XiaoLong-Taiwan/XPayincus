@@ -1,6 +1,6 @@
 # XPayincus
 
-統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，目前為 `v1.0.2`；歷史子專案發行紀錄保留原版本，不代表目前部署版本。
+統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，目前為 `v1.0.3`；歷史子專案發行紀錄保留原版本，不代表目前部署版本。
 
 | 邏輯端 | 來源目錄 | 部署方式 |
 | --- | --- | --- |
@@ -13,6 +13,8 @@
 
 ## 面板 Docker Compose
 
+可下載的版本化 `.sh` 與完整命令見 [Compose 下載與更新入口](XPayincus/deploy/compose/README.md#安全下載入口建議-pull-部署)：驗證入口腳本後執行 `bash xpayincus-compose-vX.Y.Z.sh install DIRECTORY VERSION SHA256`，固定倉庫、Release 正式版本與 Dashboard archive 的可信 SHA256，驗證成功才原子切換部署檔案。`panel.sh setup` 初始化設定；備份後執行 `panel.sh update VERSION SHA256` 只準備 bootstrap 部署更新，保留 `.env`、secrets、憑證、資料與備份，另執行 `panel.sh up` 才先 pull 再停止舊服務。此模式使用相同版本映像標籤，需對應 Release 與映像已發布；既有手動部署不自動轉換。
+
 在 Linux、Docker Engine 與 Compose v2.20.0 以上環境，先準備兩個獨立 HTTPS origin、DNS 及 TLS 憑證，再從統一倉庫根目錄執行（預設 Nginx 入口，也可選 Cloudflare Tunnel 或外部代理）：
 
 ```bash
@@ -23,7 +25,7 @@ bash deploy/compose/panel.sh up
 
 部署包含 PostgreSQL 16、一個 Node API 程序及使用者／管理端前端。前端預設只發布本機 3000／3001，由選定 HTTPS 入口對外提供服務。主要入口 `docker-compose.yml` 引用 `compose.yaml`。後端依賴程序內鎖、防重放與快取狀態，禁止多副本，也不能與舊 systemd 後端同時寫入同一資料庫。Agent、Incus、RFW、ZFS 與宿主網路服務不容器化。
 
-完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。預設 `panel.sh up` 從 GHCR 拉取 `xiaolong-taiwan/xpayincus-api:v1.0.2` 與共用的 `xpayincus-panel-web:v1.0.2`，全部拉取成功才停舊服務。`panel.sh up build` 可使用完整來源建置。前端公開網址在容器啟動時產生，改網址不需重建映像。發行包的 `compose.release.yaml` 只釘選映像；不支援容器內 systemd／sudo OTA。映像由根 Docker workflow 發布，部署前須確認對應 Actions 成功、GHCR 權限及兩種架構均可拉取。
+完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。預設 `panel.sh up` 從 GHCR 拉取 `xiaolong-taiwan/xpayincus-api:v1.0.3` 與共用的 `xpayincus-panel-web:v1.0.3`，全部拉取成功才停舊服務。`panel.sh up build` 可使用完整來源建置。前端公開網址在容器啟動時產生，改網址不需重建映像。發行包的 `compose.release.yaml` 只釘選映像；不支援容器內 systemd／sudo OTA。映像由根 Docker workflow 發布，部署前須確認對應 Actions 成功、GHCR 權限及兩種架構均可拉取。
 
 ## 資料庫匯出與匯入
 
@@ -44,9 +46,9 @@ v1.0.2 新增 [舊宿主匯出與首次匯入指南](XPayincus/server/scripts/LE
 
 根 `.github/workflows` 是 GitHub Actions 入口；子目錄 workflow 僅保留歷史參考。GitHub 執行統一 CI，涵蓋版本核對、面板型別檢查與守衛、前後端建置、Agent 測試與跨架構建置，以及 Compose 映像建置。
 
-根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，先等待統一 CI 與版本檢查，再呼叫可重用的 `.github/workflows/docker.yml`，使用原生 amd64／arm64 runner 發布 API 與 web 多架構映像。彙整與 GitHub Release 發布均等待映像成功，再逐一附加完整 26 件資產；手動執行 release workflow 須選 `main`，會發布映像與 Actions artifacts，但不建立 GitHub Release。Release 發布不會自動部署或執行正式 OTA。
+根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，先等待統一 CI 與版本檢查，再呼叫可重用的 `.github/workflows/docker.yml`，使用原生 amd64／arm64 runner 發布 API 與 web 多架構映像。彙整與 GitHub Release 發布均等待映像成功，再逐一附加完整 28 件資產；手動執行 release workflow 須選 `main`，會發布映像與 Actions artifacts，但不建立 GitHub Release。Release 發布不會自動部署或執行正式 OTA。
 
-可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.2`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
+可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.3`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
 
 版本同步、產物命名、SHA256 manifests、Agent 來源與舊 OTA 格式見 [RELEASE.md](RELEASE.md)。ZFS 僅提供 builder 原始碼包，並非已建置的核心模組。宿主安裝器仍可能使用明示釘選的歷史 RFW／ZFS 資產或 DKMS 回退，統一來源版本不代表二進位已重新發布。
 

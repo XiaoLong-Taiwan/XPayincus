@@ -66,7 +66,7 @@ services:
 
   api:
     container_name: incudal-panel-api
-    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2
+    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3
     restart: unless-stopped
     init: true
     environment:
@@ -116,6 +116,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - NET_RAW
+    sysctls:
+      net.ipv4.ping_group_range: '1000 1000'
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -126,7 +128,7 @@ services:
     logging: *logging
 
   user:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3
     restart: unless-stopped
     environment:
       PANEL_ENTRY: user
@@ -148,7 +150,7 @@ services:
     logging: *logging
 
   admin:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3
     restart: unless-stopped
     environment:
       PANEL_ENTRY: admin

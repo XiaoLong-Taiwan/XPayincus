@@ -18,6 +18,7 @@ import { getInstanceState } from '../lib/incus/incus-instances.js'
 import { mapInstanceStatus } from '../lib/incus/incus-utils.js'
 import { sendNotification } from '../lib/notifier.js'
 import * as db from '../db/index.js'
+import { runAgentOfflineCheck } from './agent-offline-check.js'
 
 // ==================== 配置常量 ====================
 
@@ -409,6 +410,7 @@ export function startStatusScheduler(): void {
 
     // 每 1 分钟检查一次（实际同步间隔由 getInstancesToSync 控制）
     schedule('*/1 * * * *', () => {
+        runAgentOfflineCheck(prisma).catch(error => console.error('[AgentOffline] Check failed:', error))
         runStatusSyncJob().catch(console.error)
     })
 

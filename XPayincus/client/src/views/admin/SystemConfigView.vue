@@ -143,7 +143,8 @@ const form = ref({
   ticket_image_lsky_target_id: '',
   // 平台运营配置
   system_update_allowed_admin_ids: '',
-  xpayincus_gift_card_admin_ids: ''
+  xpayincus_gift_card_admin_ids: '',
+  network_probe_targets: [] as Array<{ id: string; label: string; host: string; tcpPorts: number[]; icmp: boolean }>
 })
 
 // Config metadata - computed to support i18n
@@ -187,7 +188,7 @@ const stringConfigKeys = ['turnstile_site_key', 'turnstile_secret_key', 'avatar_
 stringConfigKeys.push('popup_announcement', 'popup_promo_image_url', 'popup_promo_package_id', 'ticket_image_lsky_base_url', 'ticket_image_lsky_token', 'ticket_image_lsky_api_version', 'ticket_image_lsky_target_id')
 stringConfigKeys.push('system_update_allowed_admin_ids', 'xpayincus_gift_card_admin_ids')
 
-const jsonConfigKeys = ['invite_generation_costs', 'vip_benefits_config']
+const jsonConfigKeys = ['invite_generation_costs', 'vip_benefits_config', 'network_probe_targets']
 
 const currentSectionKey = computed<SystemSettingsSectionKey>(() => {
   return systemSettingsSections.find(section => section.path === route.path)?.key || 'access'
@@ -205,6 +206,37 @@ const isMailSection = computed(() => currentSectionKey.value === 'mail')
 const isTicketSection = computed(() => currentSectionKey.value === 'tickets')
 const isPopupAnnouncementTab = computed(() => currentSectionKey.value === 'popup')
 const isOperationsSection = computed(() => currentSectionKey.value === 'operations')
+const isNetworkProbeSection = computed(() => currentSectionKey.value === 'networkProbe')
+const savingProbeTargets = ref(false)
+const probeTargetDraft = ref({ id: '', label: '', host: '', ports: '443', icmp: true })
+
+function addProbeTarget() {
+  const ports = probeTargetDraft.value.ports.split(',').map(value => Number(value.trim()))
+  if (!probeTargetDraft.value.label.trim() || !probeTargetDraft.value.host.trim() || ports.some(port => !Number.isInteger(port) || port < 1 || port > 65535)) {
+    toast.error('請輸入名稱、公開 DNS 主機名稱與有效連接埠')
+    return
+  }
+  const id = probeTargetDraft.value.id.trim() || probeTargetDraft.value.host.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 40)
+  if (form.value.network_probe_targets.some(target => target.id === id)) {
+    toast.error('目標識別碼重複')
+    return
+  }
+  form.value.network_probe_targets.push({ id, label: probeTargetDraft.value.label.trim(), host: probeTargetDraft.value.host.trim().toLowerCase(), tcpPorts: [...new Set(ports)], icmp: probeTargetDraft.value.icmp })
+  probeTargetDraft.value = { id: '', label: '', host: '', ports: '443', icmp: true }
+}
+
+async function saveProbeTargets() {
+  savingProbeTargets.value = true
+  try {
+    const response = await api.systemConfig.updateNetworkProbeTargets(form.value.network_probe_targets)
+    form.value.network_probe_targets = response.targets
+    toast.success('公開測試目標已儲存')
+  } catch (error) {
+    toast.error(translateError(error))
+  } finally {
+    savingProbeTargets.value = false
+  }
+}
 
 function hasAtMostTwoDecimalPlaces(value: number): boolean {
   const cents = value * 100
@@ -859,6 +891,30 @@ async function sendTestEmail() {
       </div>
 
       <template v-else>
+        <div v-if="isNetworkProbeSection" class="card p-6">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 class="text-themed font-semibold">主控至節點公開網路測試</h3>
+              <p class="text-sm text-themed-muted mt-1">測試由面板 API 主機發出，不是買家或宿主節點 ping。只允許公開 DNS hostname；禁止任意 URL/IP。</p>
+            </div>
+            <button type="button" class="btn-primary text-sm px-4 py-1.5" :disabled="savingProbeTargets" @click="saveProbeTargets">{{ savingProbeTargets ? '儲存中...' : '儲存目標' }}</button>
+          </div>
+          <div class="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input v-model="probeTargetDraft.label" class="input" placeholder="顯示名稱" />
+            <input v-model="probeTargetDraft.host" class="input" placeholder="公開 DNS hostname" />
+            <input v-model="probeTargetDraft.id" class="input" placeholder="識別碼（可留空自動產生）" />
+            <input v-model="probeTargetDraft.ports" class="input" placeholder="TCP ports，例如 443,80" />
+            <label class="flex items-center gap-2 text-sm text-themed"><input v-model="probeTargetDraft.icmp" type="checkbox" />允許 ICMP</label>
+            <button type="button" class="btn-secondary" @click="addProbeTarget">新增固定目標</button>
+          </div>
+          <ul class="mt-5 divide-y divide-themed">
+            <li v-for="(target, index) in form.network_probe_targets" :key="target.id" class="flex items-center justify-between gap-3 py-3 text-sm">
+              <span class="min-w-0"><strong>{{ target.label }}</strong> · {{ target.host }} · TCP {{ target.tcpPorts.join(', ') }} · ICMP {{ target.icmp ? '開啟' : '關閉' }}</span>
+              <button type="button" class="btn-secondary shrink-0" @click="form.network_probe_targets.splice(index, 1)">移除</button>
+            </li>
+          </ul>
+        </div>
+
         <div v-if="isOperationsSection" class="card p-6">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-2">
             <div>

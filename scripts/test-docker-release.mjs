@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { publication, docker } from './docker-release.mjs'
 
 const sha = 'a'.repeat(40)
-const env = { GITHUB_SHA: sha, IMAGE_TAG: 'v1.0.2', VERSION: 'v1.0.2' }
+const env = { GITHUB_SHA: sha, IMAGE_TAG: 'v1.0.3', VERSION: 'v1.0.3' }
 function fixture() {
   const registry = new Map()
   const writes = []
@@ -30,7 +30,7 @@ test('publish creates both SHA indexes before version tags and retries without o
   run.publish()
   assert.equal(writes.length, 4)
   assert.ok(writes.slice(0, 2).every(ref => ref.endsWith(`sha-${sha}`)))
-  assert.ok(writes.slice(2).every(ref => ref.endsWith(':v1.0.2')))
+  assert.ok(writes.slice(2).every(ref => ref.endsWith(':v1.0.3')))
   run.publish()
   assert.equal(writes.length, 4)
 })
@@ -39,7 +39,7 @@ test('different commit, missing SHA evidence, and changed version index are reje
   for (const mutation of ['commit', 'missing', 'changed', 'platform']) {
     const { run, registry, writes } = fixture()
     run.publish()
-    const ref = 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2'
+    const ref = 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3'
     if (mutation === 'commit') registry.get(ref).annotations['org.opencontainers.image.revision'] = 'c'.repeat(40)
     if (mutation === 'missing') registry.delete(`ghcr.io/xiaolong-taiwan/xpayincus-panel-web:sha-${sha}`)
     if (mutation === 'changed') registry.get(ref).manifests[0].digest = 'sha256:changed'
@@ -52,7 +52,7 @@ test('different commit, missing SHA evidence, and changed version index are reje
 test('partial publication can resume using existing SHA evidence', () => {
   const { run, registry, writes } = fixture()
   run.publish()
-  registry.delete('ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2')
+  registry.delete('ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3')
   run.publish()
   assert.equal(writes.length, 5)
 })
@@ -64,7 +64,7 @@ test('invalid source SHA and mismatched version tag are rejected', () => {
 
 test('only registry missing-manifest errors allow creating new tags', () => {
   const result = stderr => () => ({ status: 1, stderr })
-  for (const message of ['manifest unknown', 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2: not found']) {
+  for (const message of ['manifest unknown', 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3: not found']) {
     assert.equal(docker(['inspect', 'image', '--raw'], result(message)), null)
   }
   for (const message of ['unauthorized: manifest unknown', 'denied', 'certificate not found', 'connection timeout', '503 Service Unavailable']) {

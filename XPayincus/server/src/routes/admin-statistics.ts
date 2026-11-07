@@ -5,13 +5,13 @@
 import { FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
+import { summarizeAgentStatuses } from '../lib/agent-status.js'
 import { BUSINESS_TIMEZONE, getDateStringInTimezone, getMonthStringInTimezone } from '../lib/timezone.js'
 
 const BUSINESS_TZ_OFFSET_MINUTES = 8 * 60
 const DAY_MS = 24 * 60 * 60 * 1000
 const DAILY_DAYS = 30
 const MONTHLY_MONTHS = 12
-const AGENT_STALE_MINUTES = 30
 const TASK_LOOKBACK_DAYS = 1
 const RISK_LOOKBACK_DAYS = 7
 
@@ -153,7 +153,6 @@ export default async function adminStatisticsRoutes(app: FastifyInstance): Promi
       const last7DaysRange = getBusinessRollingRange(7)
       const last30DaysRange = getBusinessRollingRange(30)
       const now = new Date()
-      const agentFreshAfter = new Date(now.getTime() - AGENT_STALE_MINUTES * 60 * 1000)
       const taskLookbackAfter = new Date(now.getTime() - TASK_LOOKBACK_DAYS * DAY_MS)
       const riskLookbackAfter = new Date(now.getTime() - RISK_LOOKBACK_DAYS * DAY_MS)
 
@@ -199,8 +198,7 @@ export default async function adminStatisticsRoutes(app: FastifyInstance): Promi
         failedDeliveryTasks,
         totalHosts,
         onlineHosts,
-        onlineAgents,
-        staleAgents,
+        agentStatuses,
         openTickets,
         unreadInboxMessages,
         failedNotificationLogs,
@@ -409,17 +407,10 @@ export default async function adminStatisticsRoutes(app: FastifyInstance): Promi
         prisma.instanceTask.count({ where: { status: 'FAILED', createdAt: { gte: taskLookbackAfter } } }),
         prisma.host.count(),
         prisma.host.count({ where: { status: 'online' } }),
-        prisma.hostAgent.count({ where: { enabled: true, status: 'online', lastSeenAt: { gte: agentFreshAfter } } }),
-        prisma.hostAgent.count({
-          where: {
-            enabled: true,
-            OR: [
-              { status: { not: 'online' } },
-              { lastSeenAt: null },
-              { lastSeenAt: { lt: agentFreshAfter } }
-            ]
-          }
-        }),
+        prisma.hostAgent.findMany({
+          where: { enabled: true },
+          select: { enabled: true, status: true, lastSeenAt: true, lastReport: true }
+        }).then(agents => summarizeAgentStatuses(agents, now)),
         prisma.ticket.count({ where: { status: { in: ['open', 'in_progress'] } } }),
         prisma.inboxMessage.count({ where: { isRead: false } }),
         prisma.notificationLog.count({ where: { status: 'failed', createdAt: { gte: taskLookbackAfter } } }),
@@ -450,7 +441,7 @@ export default async function adminStatisticsRoutes(app: FastifyInstance): Promi
       addRisk(operationRisks, smtpEnabledConfigs === 0, 'smtp_missing', 'warning', smtpEnabledConfigs)
       addRisk(operationRisks, enabledNotificationChannels === 0, 'notification_channel_missing', 'warning', enabledNotificationChannels)
       addRisk(operationRisks, totalHosts > 0 && onlineHosts < totalHosts, 'host_offline', 'critical', totalHosts - onlineHosts)
-      addRisk(operationRisks, staleAgents > 0, 'agent_stale', 'critical', staleAgents)
+      addRisk(operationRisks, agentStatuses.stale > 0, 'agent_stale', 'critical', agentStatuses.stale)
       addRisk(operationRisks, failedDeliveryTasks > 0, 'delivery_failed', 'critical', failedDeliveryTasks)
       addRisk(operationRisks, attentionOrders > 0, 'payment_attention', 'warning', attentionOrders)
       addRisk(operationRisks, failedUpdateTasks > 0, 'ota_failed', 'critical', failedUpdateTasks)
@@ -523,8 +514,8 @@ export default async function adminStatisticsRoutes(app: FastifyInstance): Promi
           infrastructure: {
             hostsTotal: totalHosts,
             hostsOnline: onlineHosts,
-            agentsOnline: onlineAgents,
-            agentsStale: staleAgents
+            agentsOnline: agentStatuses.online,
+            agentsStale: agentStatuses.stale
           },
           support: {
             openTickets,

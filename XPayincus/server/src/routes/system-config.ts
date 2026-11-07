@@ -16,6 +16,7 @@ import {
     VIP_BENEFITS_CONFIG_KEY,
     normalizeVipBenefitsConfig
 } from '../services/vip-benefits.js'
+import { NETWORK_PROBE_CONFIG_KEY } from '../lib/network-probe.js'
 
 interface UpdateConfigsBody {
     configs: Array<{ key: string; value: string }>
@@ -464,6 +465,7 @@ export default async function systemConfigRoutes(fastify: FastifyInstance) {
             // Platform operation config
             'system_update_allowed_admin_ids',
             'xpayincus_gift_card_admin_ids',
+            NETWORK_PROBE_CONFIG_KEY,
             TRAFFIC_OVERAGE_THROTTLE_CONFIG_KEY
         ]
 
@@ -502,9 +504,11 @@ export default async function systemConfigRoutes(fastify: FastifyInstance) {
             'ticket_image_lsky_target_id',
             'system_update_allowed_admin_ids',
             'xpayincus_gift_card_admin_ids',
+            NETWORK_PROBE_CONFIG_KEY,
             TRAFFIC_OVERAGE_THROTTLE_CONFIG_KEY
         ]
         const jsonKeys = ['invite_generation_costs', VIP_BENEFITS_CONFIG_KEY]
+        jsonKeys.push(NETWORK_PROBE_CONFIG_KEY)
         // 数字类型配置键（包括配额配置）
         const numberKeys = ['smtp_port', 'default_quota_host', 'default_quota_friend', 'default_quota_package', 'free_site_register_gift_points', 'invite_default_expire_days', 'telegram_group_invite_expire_minutes', 'telegram_vip_group_invite_expire_minutes', TICKET_AUTO_CLOSE_HOURS_CONFIG_KEY]
         const decimalKeys = ['free_site_register_gift_balance', 'telegram_group_min_recharge', 'telegram_group_min_consume', 'telegram_vip_group_min_recharge', 'telegram_vip_group_min_consume']
@@ -670,6 +674,16 @@ export default async function systemConfigRoutes(fastify: FastifyInstance) {
                     }
 
                     config.value = serializeInviteCostOptions(options)
+                }
+                if (config.key === NETWORK_PROBE_CONFIG_KEY) {
+                    let parsed: unknown
+                    try {
+                        parsed = JSON.parse(config.value)
+                    } catch {
+                        return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, config.key))
+                    }
+                    const { parseNetworkProbeTargets } = await import('../lib/network-probe.js')
+                    if (!parseNetworkProbeTargets(parsed)) return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, config.key))
                 }
                 continue
             }

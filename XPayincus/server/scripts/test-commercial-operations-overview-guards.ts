@@ -26,7 +26,8 @@ assert.ok(
   route.includes('operations: {') &&
     route.includes('COUNT(DISTINCT user_id)') &&
     route.includes('prisma.paymentProvider.count') &&
-    route.includes('prisma.hostAgent.count') &&
+    route.includes('prisma.hostAgent.findMany') &&
+    route.includes('summarizeAgentStatuses(agents, now)') &&
     route.includes('prisma.systemUpdateTask.count') &&
     route.includes('disk_update_error') &&
     route.includes('payment_provider_missing') &&

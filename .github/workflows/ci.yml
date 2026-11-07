@@ -24,6 +24,12 @@ jobs:
         run: node scripts/release-contract.mjs
       - name: Test Docker publication guards
         run: node --test scripts/test-docker-release.mjs
+      - name: Test Compose release and bootstrap contracts
+        run: |
+          node scripts/test-compose-release.mjs
+          python3 scripts/test-compose-bootstrap.py
+          python3 scripts/test-agent-installer.py
+          python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
   panel:
     needs: version
     runs-on: ubuntu-24.04

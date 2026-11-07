@@ -203,4 +203,31 @@ assert.ok(
   'Agent install-token consumption must clear the token hash and mark used-at'
 )
 
+assert.ok(
+  installScriptSource.includes('--panel-url|--token-file|--binary|--sha256') &&
+    installScriptSource.includes('read -r -s -p') &&
+    installScriptSource.includes('set +x'),
+  'Agent standalone installer must accept independent URL and protected TOKEN input without tracing secrets'
+)
+assert.ok(
+  installScriptSource.includes('install -m 0600 -o root -g root "${CONFIG_FILE}" "${STAGED_CONFIG}"') &&
+    installScriptSource.includes('--reinstall cannot be combined with new credentials or panel URL'),
+  'Agent reinstall must preserve config and reject credential replacement'
+)
+assert.ok(
+  installScriptSource.includes('BINARY_LOCAL_SHA256="$(sha256_file "${LOCAL_BINARY}")"') &&
+    installScriptSource.indexOf('download_binary "${BINARY_URL}"') < installScriptSource.indexOf('\nfetch_agent_install_config\n'),
+  'Local compiled binaries must share checksum staging before TOKEN consumption'
+)
+assert.ok(
+  installScriptSource.includes('--retry 2 --retry-delay 2 --retry-max-time 360') &&
+    installScriptSource.includes('--config - -o "${INSTALL_CONFIG_PATH}" 2>/dev/null') &&
+    !installScriptSource.includes('. "${INSTALL_CONFIG_PATH}"'),
+  'Public downloads must have bounded retries; TOKEN exchange must hide its URL and never execute the response'
+)
+assert.ok(
+  /'\/install-config\/:token', \{\s*logLevel: 'silent'/.test(agentRouteSource),
+  'Agent TOKEN exchange must suppress request URL logging while retaining the separate audit record'
+)
+
 console.log('agent install command guard tests passed')

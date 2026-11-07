@@ -2045,6 +2045,7 @@ const api = {
 
   // 系统配置（管理员）
   systemConfig: {
+    updateNetworkProbeTargets: (targets: Array<{ id: string; label: string; host: string; tcpPorts: number[]; icmp: boolean }>): Promise<{ targets: Array<{ id: string; label: string; host: string; tcpPorts: number[]; icmp: boolean }> }> => http.put('/network-probe/manage-targets', { targets }),
     // 公开配置（无需登录）
     getPublic: (): Promise<{
       registrationEnabled: boolean

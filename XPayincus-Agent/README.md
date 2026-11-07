@@ -2,7 +2,7 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，目前 `v1.0.2`，本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，目前 `v1.0.3`，本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
 
 ## 宿主元件整合
 
@@ -35,16 +35,55 @@ go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml
 
 ## 安裝與資源限制
 
-從管理後台重新產生節點／Agent 安裝命令，在目標宿主機執行。安裝模板位於 `../XPayincus/server/templates/agent-install.sh`，由面板 `/api/agent/install.sh` 提供。安裝 token 有時效且只能使用一次；失敗後應重新產生命令。
+從管理後台產生 **Agent** 安裝 TOKEN（`ait_`，30 分鐘有效、只能兌換一次），在目標宿主機執行。此 TOKEN 與宿主初始化 TOKEN 不同；產生新 Agent TOKEN 會輪換 Agent 憑證，使舊 Agent 憑證失效。安裝模板位於 `../XPayincus/server/templates/agent-install.sh`，由面板 `/api/agent/install.sh` 提供。
 
 安裝器從面板同源 `/api/agent/manifest.json` 選擇 amd64／arm64，下載、核對 SHA256 後原子安裝至 `/usr/local/bin/incudal-agent`，建立設定及 systemd 服務，執行單次心跳後啟動服務。自訂 `INCUDAL_AGENT_BINARY_URL` 必須同時提供 `INCUDAL_AGENT_BINARY_SHA256`。
+
+### 獨立互動與參數入口
+
+先從可信的面板下載模板再執行，避免把 TOKEN 放進下載 URL 或 shell 歷史；正式環境使用 HTTPS。以下指令在 Linux 宿主機執行，需要 root、Bash、systemd 及 curl：
+
+```bash
+curl -q -fsS --proto '=https' https://panel.example.org/api/agent/install.sh -o agent-install.sh
+sudo bash agent-install.sh
+```
+
+依提示輸入面板地址（僅 HTTP(S) origin，例如 `https://panel.example.org:8443`）及隱藏輸入的 Agent TOKEN。地址及 TOKEN 分開輸入，不需執行整套宿主初始化。管線執行時仍從 `/dev/tty` 讀取互動值；沒有 TTY 時必須提供參數或既有憑證環境變數。
+
+自動化入口使用 root 擁有、權限 `0600`、只含 TOKEN 的一般檔案，由秘密管理工具提供：
+
+```bash
+sudo bash agent-install.sh --panel-url https://panel.example.org --token-file /root/agent-install.token
+```
+
+不提供明文 `--token` 參數，避免出現在程序參數及歷史；相容既有面板命令所用 `INCUDAL_PANEL_URL`／`INCUDAL_AGENT_INSTALL_TOKEN` 環境變數。執行後由管理者移除 TOKEN 檔案。安裝器關閉 shell trace、遮蔽 dry-run 金鑰、透過 curl stdin 傳遞兌換 URL，不跟隨兌換轉址，也不執行兌換回應中的 shell 程式碼。反向代理須自行遮蔽既有 `/api/agent/install-config/:token` 路徑的存取日誌，勿記錄完整請求 URL。
+
+### 僅重裝 Agent 與本機 binary
+
+```bash
+sudo bash agent-install.sh --reinstall
+sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent
+sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha256 <可信的64位SHA256>
+```
+
+`--reinstall` 要求已有 `/etc/incudal-agent/config.yaml`，逐位元組保留設定與憑證，更新 Agent binary 及 Agent systemd unit，重啟 `incudal-agent`；不接受新地址／TOKEN。若需更換面板或輪換憑證，使用獨立安裝入口。地址讀取支援安裝器產生的 `panel_url: "…"` 格式；自訂 YAML 格式須先調整。`--binary` 接受已編譯的未壓縮 Linux amd64／arm64 binary，不下載 manifest 或 binary，也不執行編譯；可與首次安裝的地址及 TOKEN 檔案搭配。預設計算本機 SHA256 並驗證暫存副本；指定 `--sha256` 時另核對可信雜湊。自行計算的雜湊只確認複製一致性，不證明來源可信。
+
+所有入口只管理 Agent binary、Agent 設定及 `incudal-agent.service`，不安裝、移除、重啟或改寫 Incus／RFW／ZFS。沒有既有設定時不可使用保留設定的重裝模式。本機重裝不需要下載，但單次冒煙仍需要連到面板；`-once` 不觸發自動升級。
+
+### 失敗與重試
+
+- manifest／binary 下載使用連線逾時 10 秒、單次最多 120 秒，curl 對暫時性錯誤最多重試 2 次、間隔 2 秒，重試視窗 360 秒；永久 HTTP 錯誤、SHA256 不符及解壓失敗不盲目重試。
+- 預檢、下載及 SHA256 檢查在 TOKEN 兌換前完成。此階段失敗可修正網路、權限或檔案後重跑，TOKEN 仍受原本 30 分鐘時效限制。
+- TOKEN 兌換只有一次請求，連線逾時 10 秒、總逾時 30 秒。403／404、兌換回應遺失、格式不符或後續冒煙失敗時，先確認原因，再從管理後台產生新 Agent TOKEN；不自動重送或儲存兌換後的秘密供續跑。
+- 冒煙在替換前執行，失敗保留原安裝；替換後服務檢查失敗會回復舊 binary、設定、unit 與服務狀態。回復不完整時保留備份並報錯，須人工處理，不能無限循環重啟安裝。面板憑證輪換無法由本機回復撤銷，舊設定即使還原也可能無法連線。
+- 保留設定的重裝可在修正問題後重跑；服務由既有 `Restart=always`／`RestartSec=5` 處理執行期重啟，安裝器不改動心跳或 ping 的重試行為。
 
 - 預設心跳 60 秒，最小 30 秒。
 - 每次最多回報 500 個實例，狀態讀取並發為 3，非執行中實例不額外讀取 `/state`。
 - 成功心跳日誌約每 10 分鐘記錄，失敗約每分鐘記錄，並保留首次日誌。
 - 安裝模板設定 `CPUQuota=20%`、`MemoryMax=256M`、`TasksMax=128` 及 journal 速率限制。
 
-二進位自升級不會更新既有 systemd service；舊安裝須重新執行管理後台產生的命令以套用資源與日誌限制。
+二進位自升級不會更新既有 systemd service；舊安裝可使用 `--reinstall` 套用資源與日誌限制。
 
 ## 自動升級
 

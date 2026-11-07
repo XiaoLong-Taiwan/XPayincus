@@ -98,6 +98,7 @@ import adminOAuthAppRoutes from './routes/admin-oauth-apps.js'
 import oauthProviderRoutes from './routes/oauth-provider.js'
 import orderRoutes from './routes/orders.js'
 import giftCardsRoutes from './routes/gift-cards.js'
+import networkProbeRoutes from './routes/network-probe.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -512,6 +513,7 @@ await fastify.register(helpRoutes, { prefix: '/api/help' })
 await fastify.register(imageRoutes, { prefix: '/api/images' })
 await fastify.register(logRoutes, { prefix: '/api/logs' })
 await fastify.register(systemConfigRoutes, { prefix: '/api/system-config' })
+await fastify.register(networkProbeRoutes, { prefix: '/api/network-probe' })
 await fastify.register(trafficRoutes, { prefix: '/api' })
 await fastify.register(transferRoutes, { prefix: '/api/transfers' })
 await fastify.register(friendsRoutes, { prefix: '/api/friends' })
