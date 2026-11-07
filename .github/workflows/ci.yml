@@ -22,6 +22,8 @@ jobs:
           node-version: '22'
       - name: Validate versions and Agent component source layout
         run: node scripts/release-contract.mjs
+      - name: Test Docker publication guards
+        run: node --test scripts/test-docker-release.mjs
   panel:
     needs: version
     runs-on: ubuntu-24.04
@@ -94,6 +96,7 @@ jobs:
         run: |
           bash -n XPayincus/deploy/compose/panel.sh
           sh -n XPayincus/deploy/compose/api-entrypoint.sh
+          sh -n XPayincus/deploy/compose/web-entrypoint.sh
           deployment="$(mktemp -d "$RUNNER_TEMP/panel.XXXXXXXX")"
           bash XPayincus/deploy/compose/panel.sh install "$deployment"
           bash "$deployment/panel.sh" init https://pay.example.com https://admin.example.com admin@example.com
@@ -102,4 +105,4 @@ jobs:
         working-directory: XPayincus
         run: |
           bash deploy/compose/panel.sh init https://pay.example.com https://admin.example.com admin@example.com
-          docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml build
+          docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml -f deploy/compose/compose.build.yaml build

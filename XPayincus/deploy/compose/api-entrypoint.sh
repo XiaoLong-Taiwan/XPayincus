@@ -26,4 +26,44 @@ for directory in /opt/incudal/server/certs /opt/incudal/config; do
 done
 find /opt/incudal/server/certs -type d -exec chown node:node {} + -exec chmod 700 {} +
 find /opt/incudal/server/certs -type f -exec chown node:node {} + -exec chmod 600 {} +
+cert_dir=/opt/incudal/server/certs
+cert_file="$cert_dir/client.crt"
+key_file="$cert_dir/client.key"
+if [ ! -e "$cert_file" ] && [ ! -L "$cert_file" ] && [ ! -e "$key_file" ] && [ ! -L "$key_file" ]; then
+  cert_tmp="$(gosu node mktemp -d "$cert_dir/.client-XXXXXX")"
+  trap 'rm -rf "$cert_tmp"' EXIT
+  trap 'exit 1' HUP INT TERM
+  if ! gosu node openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+    -subj '/CN=incudal-panel/O=XPayincus' \
+    -keyout "$cert_tmp/client.key" -out "$cert_tmp/client.crt" >/dev/null 2>&1; then
+    printf '%s\n' 'Incus client certificate generation failed; check certs mount and free space.' >&2
+    exit 1
+  fi
+  chmod 600 "$cert_tmp/client.crt" "$cert_tmp/client.key"
+  ln "$cert_tmp/client.key" "$key_file"
+  ln "$cert_tmp/client.crt" "$cert_file"
+  rm -rf "$cert_tmp"
+  trap - EXIT HUP INT TERM
+fi
+if ! gosu node node --input-type=module <<'NODE'
+import { readFileSync, statSync } from 'node:fs'
+import { createPrivateKey, X509Certificate } from 'node:crypto'
+import { createSecureContext } from 'node:tls'
+try {
+  const certPath = process.env.PANEL_CRT_PATH
+  const keyPath = process.env.PANEL_KEY_PATH
+  if (!statSync(certPath).isFile() || !statSync(keyPath).isFile()) throw new Error()
+  if ((statSync(keyPath).mode & 0o077) !== 0) throw new Error()
+  const cert = readFileSync(certPath)
+  const key = readFileSync(keyPath)
+  if (!new X509Certificate(cert).checkPrivateKey(createPrivateKey({ key, passphrase: '' }))) throw new Error()
+  createSecureContext({ cert, key })
+} catch {
+  process.exit(1)
+}
+NODE
+then
+  printf '%s\n' 'Incus client cert/key missing, unreadable or invalid. Restore the original matching client.crt/client.key in ./certs; check PANEL_CRT_PATH/PANEL_KEY_PATH and UID 1000 access (directory 700, files 600). Existing files were not replaced. Never delete a partial pair to regenerate; restore from backup. A changed pair requires renewed Incus trust.' >&2
+  exit 1
+fi
 exec gosu node sh -eu -c 'pnpm exec prisma migrate deploy; exec node dist/app.js'

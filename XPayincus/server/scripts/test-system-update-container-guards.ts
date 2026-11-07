@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const repoRoot = resolve(import.meta.dirname, '../..')
-const read = (path: string): string => readFileSync(resolve(repoRoot, path), 'utf8')
+const read = (path: string): string => readFileSync(resolve(repoRoot, path), 'utf8').replace(/\r\n/g, '\n')
 const route = read('server/src/routes/system-update.ts')
 const compose = read('deploy/compose/compose.yaml')
 const readme = read('deploy/compose/README.md')
@@ -47,6 +47,31 @@ for (const file of ['secrets', 'tls']) {
 assert.ok(cli.includes('COMPOSE_PROFILES=%s') && cli.includes('BUILD_CONTEXT=%s') && cli.includes('COMPOSE_FILE=%s'), 'Init must write deployment settings without sourcing the env file')
 assert.ok(!/^\s*(source|\.) .*\.env/m.test(cli), 'CLI must not execute the deployment env file')
 assert.ok(cli.includes('--profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared'), 'Mode changes must stop the previous ingress services')
+
+assert.ok(!/^    build:/m.test(compose), 'Default deployment must only pull published images')
+assert.ok(api.includes('image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2'))
+assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-web:v1\.0\.2/g) || []).length, 2)
+const up = section(cli, '\n  up)', '\n  down)')
+assert.ok(up.includes('deployment_mode="${1:-pull}"') && up.includes('compose.build.yaml'))
+const stop = up.indexOf('"${compose[@]}" stop user admin api')
+for (const preparation of ['build api user admin', 'pull --ignore-buildable', 'pull --policy always']) {
+  assert.ok(up.indexOf(preparation) >= 0 && up.indexOf(preparation) < stop, `${preparation} must succeed before stopping services`)
+}
+assert.ok(up.includes('up -d --no-build --pull never --wait --wait-timeout 300'))
+const webStartup = read('deploy/compose/web-entrypoint.sh')
+assert.ok(webStartup.includes('grep -Eq') && webStartup.includes('mktemp') && webStartup.includes('mv -f'))
+assert.ok(!/secret|token|password/i.test(webStartup), 'Runtime settings must contain public configuration only')
+assert.ok(read('deploy/compose/Dockerfile.dockerignore').includes('!deploy/compose/web-entrypoint.sh'))
+assert.ok(read('deploy/compose/Dockerfile').includes('/docker-entrypoint.d/40-panel-runtime.sh'))
+assert.ok(read('deploy/compose/nginx.conf.template').includes('Cache-Control "no-store"'))
+assert.ok(read('client/public/sw.js').includes("'/runtime-config.js'"))
+const html = read('client/index.html')
+assert.ok(html.indexOf('src="/runtime-config.js"') < html.indexOf('type="module"'))
+const runtime = read('client/src/utils/runtime-config.ts')
+for (const key of ['apiBaseUrl', 'customerBaseUrl', 'adminBaseUrl']) assert.ok(runtime.includes(`config?.${key}?.trim() || import.meta.env.VITE_`))
+for (const file of ['client/src/api/index.ts', 'client/src/api/admin.ts', 'client/src/utils/api-url.ts']) {
+  assert.ok(read(file).includes('import { API_BASE_URL }') && !read(file).includes('import.meta.env.VITE_API_BASE_URL'))
+}
 
 const policy = section(route, 'function getContainerUpdateError()', 'export default async function')
 assert.ok(policy.includes("process.env.INCUDAL_CONTAINER_DEPLOYMENT === 'true'"), 'OTA policy must use the explicit deployment flag')

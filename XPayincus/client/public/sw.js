@@ -19,6 +19,7 @@ const CACHEABLE_EXTENSIONS = ['.js', '.css', '.woff', '.woff2', '.ttf', '.svg', 
 
 // 需要始终从网络获取的路径（不缓存）
 const NETWORK_ONLY_PATTERNS = [
+  '/runtime-config.js',
   '/api/',           // API 请求
   '/auth/',          // 认证请求
   '/oauth/',         // OAuth 请求

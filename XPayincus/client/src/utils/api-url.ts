@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+import { API_BASE_URL } from './runtime-config'
 
 function normalizePath(path: string): string {
   return path.startsWith('/') ? path : `/${path}`

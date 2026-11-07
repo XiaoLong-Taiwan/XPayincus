@@ -721,7 +721,8 @@ assert.ok(
     verifyProductionDbReadiness.includes('Running instances exist on hosts without a fresh online Agent heartbeat'),
   'production DB readiness must identify online host install/API/Agent heartbeat/reporting and traffic-baseline readiness issues'
 )
-assert.ok(clientApi.includes("const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'"), 'client axios base URL must default to same-origin /api')
+const runtimeConfig = readRepoFile('client/src/utils/runtime-config.ts')
+assert.ok(runtimeConfig.includes("config?.apiBaseUrl?.trim() || import.meta.env.VITE_API_BASE_URL || '/api'") && clientApi.includes("import { API_BASE_URL } from '@/utils/runtime-config'"), 'client axios must share runtime settings and default to same-origin /api')
 assert.ok(clientApi.includes('withCredentials: true'), 'client axios must include credentials so cross-site API refresh cookies can be stored and sent')
 // 所有 /auth/refresh 刷新入口（用户/管理端拦截层各 2 处，用户/管理端定时刷新各 1 处）
 // 必须携带凭证并具备 AbortController + 15s 超时保护。
@@ -729,7 +730,7 @@ assertRefreshFetchTimeoutProtected('client API interceptor (api/index.ts)', clie
 assertRefreshFetchTimeoutProtected('client admin API interceptor (api/admin.ts)', clientAdminApi, 2)
 assertRefreshFetchTimeoutProtected('client scheduled refresh (App.vue)', clientApp, 1)
 assertRefreshFetchTimeoutProtected('client admin scheduled refresh (admin/AdminApp.vue)', clientAdminApp, 1)
-assert.ok(clientApiUrl.includes("const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'"), 'client API URL helper must default to same-origin /api')
+assert.ok(clientApiUrl.includes("import { API_BASE_URL } from './runtime-config'"), 'client API URL helper must share the runtime API base URL')
 assert.ok(clientApiUrl.includes('export function buildApiWebSocketUrl') && clientApiUrl.includes("const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'"), 'client WebSocket URLs must derive from API base URL and current origin')
 assert.ok(terminalCore.includes("buildApiWebSocketUrl(`/ws/instances/${instanceId}/terminal?ticket=${encodeURIComponent(ticket)}`)"), 'terminal WebSocket path must stay under /api/ws via buildApiWebSocketUrl')
 

@@ -11,6 +11,7 @@
 !deploy/compose/Dockerfile
 !deploy/compose/api-entrypoint.sh
 !deploy/compose/nginx.conf.template
+!deploy/compose/web-entrypoint.sh
 **/node_modules
 **/dist
 **/.env*

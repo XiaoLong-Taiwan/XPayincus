@@ -28,6 +28,11 @@ server {
         expires -1;
     }
 
+    location = /runtime-config.js {
+        try_files $uri =404;
+        add_header Cache-Control "no-store" always;
+    }
+
     location /assets/ {
         try_files $uri =404;
         expires 1y;

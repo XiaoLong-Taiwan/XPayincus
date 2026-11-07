@@ -32,6 +32,12 @@ jobs:
             exit 1
           fi
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+  docker:
+    needs: version
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yml
   server:
     needs: version
     strategy:
@@ -124,7 +130,7 @@ jobs:
           path: dist/unified/*
           if-no-files-found: error
   assemble:
-    needs: [version, server, agent, rfw]
+    needs: [version, server, agent, rfw, docker]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -151,7 +157,7 @@ jobs:
           retention-days: 30
   publish:
     if: github.ref_type == 'tag'
-    needs: [version, assemble]
+    needs: [version, assemble, docker]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

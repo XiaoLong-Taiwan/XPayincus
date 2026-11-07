@@ -11,11 +11,7 @@ ENV DATABASE_URL=postgresql://build:build@localhost:5432/build
 RUN pnpm install --frozen-lockfile
 COPY client ./client
 COPY server ./server
-ARG VITE_CUSTOMER_BASE_URL
-ARG VITE_ADMIN_BASE_URL
 ENV VITE_API_BASE_URL=/api
-ENV VITE_CUSTOMER_BASE_URL=${VITE_CUSTOMER_BASE_URL}
-ENV VITE_ADMIN_BASE_URL=${VITE_ADMIN_BASE_URL}
 RUN pnpm --filter client build && pnpm --filter server build
 RUN test -s client/dist/user/index.html && test -s client/dist/admin/index.html && test -s server/dist/app.js \
     && test -s server/templates/install.sh && test -s server/templates/agent-install.sh && test -s server/templates/caddy.sh
@@ -35,4 +31,6 @@ ENTRYPOINT ["sh", "/usr/local/bin/panel-api"]
 FROM nginx:1.28-alpine AS web
 COPY --from=build /opt/incudal/app/client/dist /usr/share/nginx/panel
 COPY deploy/compose/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY deploy/compose/web-entrypoint.sh /docker-entrypoint.d/40-panel-runtime.sh
+RUN chmod 755 /docker-entrypoint.d/40-panel-runtime.sh
 ENV NGINX_ENVSUBST_FILTER=^PANEL_ENTRY$

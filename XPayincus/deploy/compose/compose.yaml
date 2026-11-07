@@ -66,13 +66,7 @@ services:
 
   api:
     container_name: incudal-panel-api
-    build:
-      context: ${BUILD_CONTEXT:-../..}
-      dockerfile: deploy/compose/Dockerfile
-      target: api
-      args:
-        VITE_CUSTOMER_BASE_URL: ${FRONTEND_URL}
-        VITE_ADMIN_BASE_URL: ${ADMIN_FRONTEND_URL}
+    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2
     restart: unless-stopped
     init: true
     environment:
@@ -132,16 +126,12 @@ services:
     logging: *logging
 
   user:
-    build:
-      context: ${BUILD_CONTEXT:-../..}
-      dockerfile: deploy/compose/Dockerfile
-      target: web
-      args:
-        VITE_CUSTOMER_BASE_URL: ${FRONTEND_URL}
-        VITE_ADMIN_BASE_URL: ${ADMIN_FRONTEND_URL}
+    image: ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2
     restart: unless-stopped
     environment:
       PANEL_ENTRY: user
+      FRONTEND_URL: ${FRONTEND_URL}
+      ADMIN_FRONTEND_URL: ${ADMIN_FRONTEND_URL}
     ports:
       - '127.0.0.1:${USER_PORT:-3000}:80'
     depends_on:
@@ -158,16 +148,12 @@ services:
     logging: *logging
 
   admin:
-    build:
-      context: ${BUILD_CONTEXT:-../..}
-      dockerfile: deploy/compose/Dockerfile
-      target: web
-      args:
-        VITE_CUSTOMER_BASE_URL: ${FRONTEND_URL}
-        VITE_ADMIN_BASE_URL: ${ADMIN_FRONTEND_URL}
+    image: ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2
     restart: unless-stopped
     environment:
       PANEL_ENTRY: admin
+      FRONTEND_URL: ${FRONTEND_URL}
+      ADMIN_FRONTEND_URL: ${ADMIN_FRONTEND_URL}
     ports:
       - '127.0.0.1:${ADMIN_PORT:-3001}:80'
     depends_on:

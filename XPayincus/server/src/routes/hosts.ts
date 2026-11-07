@@ -86,6 +86,7 @@ import {
 import { provisionManagedInstanceAsync } from '../lib/managed-instance-provision.js'
 import crypto from 'crypto'
 import type { InstanceStatus } from '@prisma/client'
+import { PANEL_CERTIFICATE_ERROR, readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -103,10 +104,13 @@ function getPanelCertificatePaths(): { certPath: string; keyPath: string } {
   const stableCertPath = installDir ? join(installDir, 'server/certs/client.crt') : null
   const stableKeyPath = installDir ? join(installDir, 'server/certs/client.key') : null
 
-  return {
-    certPath: process.env.PANEL_CRT_PATH || (stableCertPath && existsSync(stableCertPath) ? stableCertPath : fallbackCertPath),
-    keyPath: process.env.PANEL_KEY_PATH || (stableKeyPath && existsSync(stableKeyPath) ? stableKeyPath : fallbackKeyPath)
+  if (process.env.PANEL_CRT_PATH || process.env.PANEL_KEY_PATH) {
+    return { certPath: process.env.PANEL_CRT_PATH || '', keyPath: process.env.PANEL_KEY_PATH || '' }
   }
+  if (stableCertPath && stableKeyPath && (existsSync(stableCertPath) || existsSync(stableKeyPath))) {
+    return { certPath: stableCertPath, keyPath: stableKeyPath }
+  }
+  return { certPath: fallbackCertPath, keyPath: fallbackKeyPath }
 }
 
 const AUDIT_SEVERITIES = new Set<AuditSeverity>(['info', 'low', 'medium', 'high'])
@@ -1563,13 +1567,13 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       }
 
       // 读取证书文件
-      const { certPath } = getPanelCertificatePaths()
+      const { certPath, keyPath } = getPanelCertificatePaths()
       let certContent: string
       try {
-        certContent = readFileSync(certPath, 'utf-8')
-      } catch (err) {
-        request.log.error(err, 'Failed to read certificate file')
-        return reply.code(500).send('# Error: Certificate file not found')
+        certContent = readPanelCertificatePair(certPath, keyPath).cert.toString('utf8')
+      } catch {
+        request.log.error('Panel Incus certificate pair validation failed')
+        return reply.code(500).send(`# Error: ${PANEL_CERTIFICATE_ERROR}`)
       }
 
       request.log.info(`Certificate downloaded for host ${host.name}`)
@@ -1635,11 +1639,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     let key: Buffer
 
     try {
-      cert = readFileSync(certPath)
-      key = readFileSync(keyPath)
-    } catch (err) {
-      request.log.error(err, 'Failed to read panel certificate files')
-      return reply.code(500).send({ error: '面板证书文件读取失败，请检查服务器配置' })
+      const pair = readPanelCertificatePair(certPath, keyPath)
+      cert = pair.cert
+      key = pair.key
+    } catch {
+      request.log.error('Panel Incus certificate pair validation failed')
+      return reply.code(500).send({ error: PANEL_CERTIFICATE_ERROR, code: 'PANEL_CERTIFICATE_INVALID' })
     }
 
     // 创建 undici Agent（携带面板的 Client 证书）

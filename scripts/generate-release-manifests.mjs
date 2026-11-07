@@ -53,6 +53,8 @@ outputs.set('release-manifest.json', json({
     artifact: `xpayincus-dashboard-${version}-compose.tar.gz`,
     projectName: 'incudal-panel',
     override: 'XPayincus/deploy/compose/compose.release.yaml',
+    defaultMode: 'pull',
+    buildOverride: 'XPayincus/deploy/compose/compose.build.yaml',
     images: composeImages(version)
   },
   zfs: {

@@ -12,6 +12,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { normalizeCountryName } from '@/utils/countryDisplay'
 import { instancesPath } from '@/utils/app-paths'
+import { CUSTOMER_BASE_URL } from '@/utils/runtime-config'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -166,7 +167,7 @@ const linkedAccountsExpandedEmail = ref(new Set())
 const linkedAccountsExpandedUsername = ref(new Set())
 
 const customerBaseUrl = computed(() => {
-  const configuredUrl = import.meta.env.VITE_CUSTOMER_BASE_URL?.trim()
+  const configuredUrl = CUSTOMER_BASE_URL
   return (configuredUrl || window.location.origin).replace(/\/+$/, '')
 })
 

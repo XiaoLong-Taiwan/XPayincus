@@ -15,7 +15,8 @@ usage() {
   printf '%s\n' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
-    'bash deploy/compose/panel.sh up|down|status' \
+    'bash deploy/compose/panel.sh up [pull|build]  (預設 pull)' \
+    'bash deploy/compose/panel.sh down|status' \
     'bash deploy/compose/panel.sh logs [init|db|api|user|admin|nginx|tunnel-origin|cloudflared]' \
     'bash deploy/compose/panel.sh export [/absolute/path/panel.dump]  (預設 ./backups)' \
     'bash deploy/compose/panel.sh import /absolute/path/panel.dump --confirm-replace-incudal'
@@ -29,7 +30,7 @@ esac
 
 source_root="$(cd -- "$base/../.." && pwd -P)"
 if [[ -d "$base/source" ]]; then source_root="$base/source"; fi
-required_files=(package.json pnpm-lock.yaml pnpm-workspace.yaml client/package.json client/index.html client/vite.config.ts server/package.json server/tsconfig.json server/src/app.ts server/prisma.config.ts server/prisma/schema.prisma server/prisma/migrations/migration_lock.toml server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template)
+required_files=(package.json pnpm-lock.yaml pnpm-workspace.yaml client/package.json client/index.html client/vite.config.ts client/public/runtime-config.js client/src/utils/runtime-config.ts server/package.json server/tsconfig.json server/src/app.ts server/prisma.config.ts server/prisma/schema.prisma server/prisma/migrations/migration_lock.toml server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template deploy/compose/web-entrypoint.sh)
 check_sources() {
   local required_file
   for required_file in "${required_files[@]}"; do
@@ -53,7 +54,7 @@ if [[ "$command_name" == install ]]; then
     --exclude=.git --exclude='*.log' --exclude='*.dump' \
     -C "$source_root" -cf - package.json pnpm-lock.yaml pnpm-workspace.yaml client server deploy/compose \
     | tar -C "$destination/source" -xf -
-  for deployment_file in docker-compose.yml compose.yaml panel.sh README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
+  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
     cp -- "$base/$deployment_file" "$destination/$deployment_file"
   done
   if [[ -f "$base/.env.example" ]]; then cp -- "$base/.env.example" "$destination/.env.example"; fi
@@ -110,6 +111,7 @@ fi
 command -v docker >/dev/null || die '需要 Docker 與 Compose v2.20.0 以上。'
 compose_entry="$base/docker-compose.yml"
 if [[ -f "$base/compose.release.yaml" ]]; then compose_entry="$base/compose.yaml"; fi
+if [[ "$command_name" == up && "${1:-pull}" == build ]]; then compose_entry="$base/compose.yaml"; fi
 compose=(docker compose --project-name incudal-panel --project-directory "$base" --env-file "$base/.env" --file "$compose_entry")
 if [[ "$source_root" == "$base/source" ]]; then
   export BUILD_CONTEXT=./source
@@ -157,8 +159,16 @@ export_database() {
 
 case "$command_name" in
   up)
-    (($# == 0)) || die 'up 不接受額外參數。'
-    check_sources
+    (($# <= 1)) || die 'up 最多接受 pull 或 build。'
+    deployment_mode="${1:-pull}"
+    case "$deployment_mode" in
+      pull) ;;
+      build)
+        check_sources
+        compose+=(--file "$base/compose.build.yaml")
+        ;;
+      *) die 'up 模式必須為 pull 或 build。' ;;
+    esac
     check_secrets
     "${compose[@]}" config --quiet
     configured_profiles="$(awk -F= '$1 == "COMPOSE_PROFILES" { print substr($0, index($0, "=") + 1) }' "$base/.env" | tr -d '\r')"
@@ -176,10 +186,15 @@ case "$command_name" in
       '') ;;
       *) die 'COMPOSE_PROFILES 僅接受 nginx、cloudflare 或空值；不可同時啟用兩種入口。' ;;
     esac
-    "${compose[@]}" build
+    if [[ "$deployment_mode" == build ]]; then
+      "${compose[@]}" build api user admin
+      "${compose[@]}" pull --ignore-buildable
+    else
+      "${compose[@]}" pull --policy always
+    fi
     "${compose[@]}" stop user admin api
     "${compose[@]}" --profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared
-    "${compose[@]}" up -d --wait --wait-timeout 300
+    "${compose[@]}" up -d --no-build --pull never --wait --wait-timeout 300
     printf '%s\n' '面板已依 COMPOSE_PROFILES 啟動；請依 README 完成 HTTPS 與來源 IP 驗收。'
     ;;
   down)

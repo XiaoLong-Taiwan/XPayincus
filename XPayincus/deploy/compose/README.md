@@ -7,7 +7,7 @@
 ## 前置條件
 
 - Linux 主機，Bash、OpenSSL、util-linux `flock`、GNU coreutils／tar／find／awk、Docker Engine 與 Compose v2.20.0 以上外掛；需要 `include`、`up --wait --wait-timeout`、`service_completed_successfully` 與 bind mount 的 `create_host_path: false`，不支援舊版 `docker-compose` v1。操作帳號須能存取 Docker daemon 並讀寫部署目錄，初始化與後續操作請使用同一帳號。
-- 完整面板原始碼與既有 pnpm lockfile；建置需存取容器 registry、Debian 套件來源、npm registry 與 Prisma engine 下載來源。建置階段使用 Node 22、pnpm 9.14.2，執行既有前後端 build；宿主機不必安裝 Node、pnpm 或 PostgreSQL。
+- 預設 pull 模式需能存取 GHCR 與基底映像 registry；不需要本機 Node、pnpm 或完整來源。選用 build 模式才需要完整面板原始碼、pnpm lockfile，以及 Debian、npm 與 Prisma 下載來源；建置使用 Node 22、pnpm 9.14.2。
 - 兩個不同 hostname 的 HTTPS origin 與 DNS。選擇自搭 Nginx 時準備 TLS 憑證；選擇 Cloudflare Tunnel 時準備 remotely-managed tunnel。Dashboard／管理端預設為 `127.0.0.1:3000`／`127.0.0.1:3001`，API 的容器內部 3001 不發布至宿主機。
 - 僅部署一套 `incudal-panel`。API 固定容器名稱，禁止 `--scale api=2`、額外 Compose project 或與舊 systemd 後端同時連線至同一 DB。API 的程序內狀態要求單實例。
 
@@ -15,9 +15,9 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 ### 原始碼與必要檔案
 
-可使用完整倉庫，或解壓 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。包內須保留 `XPayincus/` 的相對目錄；**只複製 `deploy/compose/` 無法建置**。`compose.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，不是統一倉庫根目錄；安裝模式改用 `BUILD_CONTEXT=./source`。這是原始碼建置部署，並非下載預先發布的面板映像。
+可使用完整倉庫，或解壓 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。也可只複製完整 `deploy/compose/` 目錄，直接執行 init 與預設 pull 部署。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本 `scripts/package-dashboard-release.sh` 會透過 `prepare-compose-release.mjs` 在包內產生 `deploy/compose/compose.release.yaml`，為 `api`、`user`、`admin` 指定版本映像名稱與 `org.opencontainers.image.version` 建置標籤。此 override 保留原有 build 設定，`panel.sh up` 仍從包內原始碼建置映像。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。API 固定使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。映像必須由發行方事先發布且支援目標架構；本次未改 workflows，也未發布映像。若 GHCR 尚無此 tag 或無權限，pull 會失敗並保留舊服務；可明確選擇 build。私有映像請先用安全方式登入 GHCR。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -81,13 +81,18 @@ bash panel.sh up
 bash panel.sh status
 ```
 
-`up` 先檢查必要原始碼、部署檔及五個 secret 檔是否可讀且非空，再以 `docker compose config --quiet` 解析設定；檢查不輸出展開後的配置。接著建置映像，建置成功才停止既有面板與 API，再依序啟動 Compose `init`、DB、API、雙前端。Compose `init` 與 CLI 的 `init` 命令不同：容器服務建立資料目錄並設定權限，不產生密鑰、不執行 migration；PostgreSQL 目錄歸容器內 postgres、`certs/` 與 `config/` 歸 UID 1000、`backups/` 歸 `.env` 擁有者。API 先執行 `prisma migrate deploy`，成功後以非 root 的單一 Node 程序啟動。Dockerfile 會檢查雙前端首頁、後端入口及三份宿主模板均已存在。
+`up`（同 `up pull`）先檢查五個 secret、Compose 設定與所選入口的憑證／token，再執行 `pull --policy always`，全部成功後才停止既有前端、API 與舊入口。啟動使用 `--no-build --pull never`，避免停機後才下載或意外建置。pull 失敗立即退出，舊服務繼續運作。`up build` 額外檢查完整來源，先建置 api／user／admin 並拉取其餘所需映像，全部成功後才停舊服務。Compose `init` 容器只初始化權限；API 保留憑證生成／驗證流程，驗證成功後執行 migration，再以 UID 1000 啟動單一 Node 程序。
+
+```bash
+bash panel.sh up pull
+bash panel.sh up build
+```
 
 Compose 啟動等待最長 300 秒，包含 DB／API 健康檢查及兩套 Nginx 的 `/index.html` HTTP 檢查；這不代表已完成 TLS、登入或瀏覽器端驗收。Migration 失敗時前端不會重新開放；修正原因後再執行 `up`。Migration 可能修改資料，升級前請先匯出備份。超時或 unhealthy 不會自動回滾或停止整套服務，先查看 `status`、`logs init` 與 `logs api`，勿直接清除 `data/postgres/`。
 
 ### HTTPS 與容器網路
 
-`init` 的第四個參數可選 `nginx`（預設）、`cloudflare` 或 `external`；它分別寫入 `.env` 的 `COMPOSE_PROFILES=nginx`、`COMPOSE_PROFILES=cloudflare` 或空值。也可初始化後編輯 `.env`。CLI 僅接受這三種值；`up` 建置完成後停止舊入口，再按所選 profile 啟動，`down` 會涵蓋兩種 profile。直接使用 Compose 切換模式時，先以兩種 profile 執行 `down` 再啟動，避免舊服務留在運行中。
+`init` 的第四個參數可選 `nginx`（預設）、`cloudflare` 或 `external`；它分別寫入 `.env` 的 `COMPOSE_PROFILES=nginx`、`COMPOSE_PROFILES=cloudflare` 或空值。也可初始化後編輯 `.env`。CLI 僅接受這三種值；`up` 映像準備完成後停止舊入口，再按所選 profile 啟動，`down` 會涵蓋兩種 profile。直接使用 Compose 切換模式時，須自行停止舊入口，避免舊服務留在運行中。
 
 | 模式 | 啟動的選用服務 | 前置設定 |
 | --- | --- | --- |
@@ -113,18 +118,18 @@ Compose 的 DB 與 API 不發布宿主機埠；DB 使用 internal network，API 
 
 Nginx 範例的 upstream 為 HTTP，不能改成容器的 HTTPS 埠；若公開 origin 使用非預設埠，也須同步調整宿主 `listen`。在部署主機完成設定後執行 `sudo nginx -t`，確認成功再執行 `sudo systemctl reload nginx`。這兩個命令由操作人員在目標主機執行，CLI 不修改宿主代理。
 
-本配置固定 HTTPS cookies、host-only cookies 與同源 `/api`，包含 WebSocket upgrade；不要直接透過 HTTP localhost 登入。若更改 `.env` 中的公開 URL，執行 `up` 重建前端，因跨面板連結是建置時注入。
+本配置固定 HTTPS cookies、host-only cookies 與同源 `/api`，包含 WebSocket upgrade；不要直接透過 HTTP localhost 登入。雙前端啟動時以驗證過的 HTTPS origin 原子產生 `runtime-config.js`，在入口模組之前載入；僅包含公開的 apiBaseUrl（固定 `/api`）、customerBaseUrl、adminBaseUrl。API clients、WebSocket URL 與管理端客戶連結共用設定；原生／開發環境保留 VITE 變數回退。此檔使用 `Cache-Control: no-store`，Service Worker 不快取。修改 `.env` 的公開 URL 後執行 `up` 重建容器即可，不需重建映像；也須同步調整 DNS／代理與 TLS。
 
 ### 設定欄位與日常操作
 
 | `.env` 欄位 | 說明 |
 | --- | --- |
-| `FRONTEND_URL`、`ADMIN_FRONTEND_URL` | 不同的 HTTPS origin，無路徑或尾斜線；用於 CORS、公開 URL 及建置時跨面板連結 |
+| `FRONTEND_URL`、`ADMIN_FRONTEND_URL` | 不同的 HTTPS origin，無路徑或尾斜線；用於 CORS、公開 URL 及前端執行期連結 |
 | `ADMIN_EMAIL` | 首次建立 `admin` 的電子郵件；改值不會覆蓋既有管理員資料 |
 | `USER_PORT`、`ADMIN_PORT` | 不同且未占用的宿主 loopback TCP 埠，預設 3000／3001 |
 | `COMPOSE_PROFILES` | `nginx`、`cloudflare` 或空值；不要同時啟用兩種入口 |
 | `COMPOSE_FILE` | 預設 `docker-compose.yml`；發行 override 存在時為 `compose.yaml:compose.release.yaml`（Linux） |
-| `BUILD_CONTEXT` | 倉庫模式 `../..`、安裝模式 `./source`，由 init 自動填入 |
+| `BUILD_CONTEXT` | 僅 build 模式使用；倉庫模式 `../..`、安裝模式 `./source`，由 init 自動填入 |
 | `HTTPS_PORT` | 自搭 Nginx 對外 HTTPS 埠，預設 443 |
 | `INCUDAL_RELEASE_REPOSITORY`、`INCUDAL_AGENT_RELEASE_REPOSITORY` | 可選的 Agent 資產來源 `owner/repo`；依既有 Agent 來源解析規則使用，不啟用面板 OTA |
 
@@ -144,7 +149,8 @@ bash panel.sh down
 
 ```bash
 docker compose --profile nginx --profile cloudflare ps --all
-docker compose up -d --build --wait --wait-timeout 300
+docker compose pull --policy always
+docker compose up -d --no-build --pull never --wait --wait-timeout 300
 ```
 
 建議使用 `panel.sh up`，其包含 secret／憑證檢查、互斥 profile 限制及停止舊入口。直接 Compose 不提供 CLI 操作鎖與這些前置保護。從舊配置升級時保留原 `.env`／secrets，補上 `COMPOSE_PROFILES`、`COMPOSE_FILE` 與 `BUILD_CONTEXT`；未設定 profile 時維持原有宿主代理模式。既有 USER_PORT／ADMIN_PORT 值繼續生效，不會自動改寫。
@@ -166,14 +172,15 @@ curl --fail --silent --show-error https://admin.example.org/api/health
 | build 缺檔或 lockfile 不符 | 使用完整原始碼及同版本 lockfile，保留 `Dockerfile.dockerignore`；檢查 registry／Prisma 下載連線 |
 | API restart／migration 錯誤 | `panel.sh logs api`、`logs db`、`logs init`；確認 DB 密碼與既有資料相符及完整 migration 歷史，不跳過 migration |
 | 健康檢查超時 | `status` 查看含退出容器的狀態；Nginx 看 `logs user`／`logs admin`，API 看 migration 及啟動訊息 |
-| HTTPS 502／登入失敗 | 核對宿主 upstream 埠、DNS／憑證、兩個 origin 與 secure cookie，確認已重建前端 |
+| HTTPS 502／登入失敗 | 核對 upstream、DNS／憑證、origin 與 secure cookie，確認已重建容器及 runtime-config.js 是目前網址 |
+| GHCR pull 失敗 | 確認 tag、架構、權限及 registry 連線；舊服務保留運行，可明確選擇 up build |
 | Incus 連線或憑證失敗 | 檢查容器到宿主的可路由位址、防火牆、`certs/` 內容與 UID 1000 讀取權限 |
 
 不要用 `prisma db push --accept-data-loss`、刪除 migration 紀錄或清除 volume 來繞過啟動錯誤。若已有 DB migration 失敗，須先備份並診斷該 migration，再按 Prisma 的既有資料庫修復流程處理。
 
 ## 更新與移機
 
-更新前記錄目前來源版本，安全保存 `.env`、整個 `secrets/`、`certs/`、`config/`，並執行下一節的 DB 匯出。`install` 不覆蓋既有部署；可將目標版本安裝到另一個空目錄，停止舊服務後安全搬移原設定與資料，或由操作人員在停機備份後更新原目錄的 `source/` 與部署入口。保留資料目錄及原密鑰，再執行 `panel.sh up`。同機更換部署目錄時先對舊部署執行 `down`，避免相同 project 的容器仍掛載舊路徑。只有在同一部署目錄原地更新時，建置期間舊 API 才可繼續運作，建置成功後進入停機更新。
+更新前安全保存 `.env`、整個 `secrets/`、`certs/`、`config/` 並匯出 DB。`install` 不覆蓋既有部署；更新同一部署目錄的入口與目標版本 override 後執行 `panel.sh up`。同目錄更新在 pull／build 與其餘映像下載全部成功後才停舊服務。同機更換部署目錄時須先停止舊部署，避免同名 project 仍掛載舊路徑；此情況應事先準備映像。
 
 使用發行包更新時保留目標包附帶的 `compose.release.yaml`，不要從舊版本複製該檔，避免將新原始碼標成舊版映像。它不含私人設定，不需由 `init` 產生。
 
@@ -247,10 +254,78 @@ CLI 停止的範圍僅限本 Compose 面板；操作人員須另外停止外部�
 - 面板對 Incus 使用的 `client.crt`／`client.key` 位於宿主 `./certs/`，掛入容器 `/opt/incudal/server/certs`。既有部署搬遷須保留原憑證及私鑰並確保 UID 1000 可讀；新憑證須依既有流程重新建立 Incus 信任，DB 還原不會自動恢復該信任。
 - PostgreSQL 密碼採 hex 以安全組合連線 URL；既有 PGDATA／實體 volume 搬遷必須保留相符的原 `postgres_password`，修改 secret 不會更新角色密碼。若僅將邏輯 dump 匯入全新 DB，可使用新 `init` 產生的 DB 密碼，因 dump 不含角色密碼；這不影響仍須保留原 `encryption_key` 的要求。
 - Compose 固定向 API 注入 `INCUDAL_CONTAINER_DEPLOYMENT: 'true'`，禁止容器呼叫宿主 systemd／sudo OTA 更新或回滾；不要移除或覆寫此旗標。`GET /api/admin/system-update/version` 保留版本查詢，`GET /api/admin/system-update/check` 保留目前版本與 release 資訊，但回傳 `repositoryAvailable: false` 及 `repositoryError` 說明容器不可 OTA 與備份後重建方式，管理權限欄位仍按既有規則判定。
-- 通過既有管理權限檢查後，`POST /api/admin/system-update/start` 與 `POST /api/admin/system-update/tasks/:id/rollback` 會回傳 HTTP 409、`CONTAINER_OTA_UNSUPPORTED`，在建立／修改任務、建立日誌目錄或啟動 worker 之前拒絕。更新請選定原始碼版本、先備份，再執行 `bash deploy/compose/panel.sh up` 重建；不提供自動 migration 回滾。
+- 通過既有管理權限檢查後，`POST /api/admin/system-update/start` 與 `POST /api/admin/system-update/tasks/:id/rollback` 會回傳 HTTP 409、`CONTAINER_OTA_UNSUPPORTED`，在建立／修改任務、建立日誌目錄或啟動 worker 之前拒絕。更新請先備份、選定部署版本，再執行 `bash deploy/compose/panel.sh up` 拉取映像並重建容器；來源建置使用 `up build`。不提供自動 migration 回滾。
 - Docker 建置使用專屬 allowlist ignore，排除本地依賴、環境檔、憑證及備份；runtime 保留 Prisma CLI 與建置依賴以沿用現有 workspace，尚未進行映像精簡與供應鏈掃描。基底映像固定主要版本標籤但未鎖 digest。
 - Docker 管理員及主機 root 能讀取 Compose file secrets 與容器環境；這些檔案不是外部 secrets manager。勿上傳 secrets、備份或展開後的含密鑰環境。
 
 ## CI 與實機驗收
 
 GitHub CI 執行版本核對、面板型別檢查與守衛、前後端建置、Agent 測試與跨架構建置，以及 Compose 映像建置；結果以對應 commit 的 Actions 紀錄為準。CI 建置成功不代表目標環境已完成部署驗收。安裝、權限初始化、容器啟動、首次還原、實際匯出／匯入及舊 volume 遷移須在隔離 Linux 環境驗證，TLS、登入、付款回呼與 Incus 連線另按目標主機設定驗收。
+
+## Incus 客戶端憑證故障修復
+
+這裡的 `certs/client.crt`／`client.key` 是面板連線 Incus 的 mTLS 身分，與 Nginx／Cloudflare 的 `tls/` 網站憑證不同。原始 v1.0.2 Compose 僅初始化目錄與權限，未生成這組憑證；原生 `scripts/install-panel.sh` 才有生成步驟，因此全新 Compose 部署可能回報「面板证书文件读取失败」。
+
+本次修正後，API entrypoint 僅在兩檔皆不存在（也不是符號連結）時，以 UID 1000 在掛載目錄的私有暫存目錄生成 RSA 4096／3650 天自簽配對，再以不覆寫的 hard link 建立正式檔案。既有完整配對保留原內容；只有一檔、空檔、無法讀取、格式損壞或不匹配時停止啟動，不補造或忽略半套。若中斷導致半套，須還原原配對。目錄設為 700、一般檔案設為 600 並歸 node 所有；隨後以 node 身分驗證讀取、私鑰配對及 TLS 載入，成功才執行 migration 與單一 API。掛載檔案系統須支援 hard link。
+
+路由在既有 token／所有權檢查後驗證同一配對；明確設定 PANEL 路徑時必須同時提供兩項，穩定目錄若有任一檔案就不會逐檔回退混用 release 憑證。下載只輸出重新序列化的公開 X.509 憑證，不回傳私鑰或原始 crypto 錯誤；驗證失敗回傳 `PANEL_CERTIFICATE_INVALID` 及路徑、掛載、權限、還原配對與 Incus trust 指引。
+
+### 現有 v1.0.2 不升版立即處理
+
+在 Linux 主機的**實際 Compose 部署目錄**操作（具有 `.env`、`certs/` 與 `docker-compose.yml`），先確認並安全備份既有憑證。若是移機／還原或曾連線過節點，即使兩檔皆缺也應先找回舊配對，避免變更身分。只有一檔時請停止並從備份還原匹配的另一檔，勿刪掉剩餘檔案再生成。完整配對僅需修正 UID 1000 所有權及 700／600 權限；不要以 `chmod 777` 解決。
+
+以下命令供**確認為首次部署，兩檔確實皆缺**時使用，沿用現有 API 映像的 OpenSSL，不啟動第二個後端、不執行 migration。可直接用於尚未包含本次修正的 v1.0.2：
+
+```bash
+docker compose stop api
+docker compose run --rm --no-deps --user 0:0 --entrypoint sh api -eu -c '
+set +x
+umask 077
+d=/opt/incudal/server/certs
+mkdir -p "$d"
+for f in "$d/client.crt" "$d/client.key"; do
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    printf "%s\n" "Existing cert/key found; restore or validate the original pair instead." >&2
+    exit 1
+  fi
+done
+chown 1000:1000 "$d"
+chmod 700 "$d"
+t=$(gosu node mktemp -d "$d/.client-XXXXXX")
+trap '\''rm -rf "$t"'\'' EXIT
+trap '\''exit 1'\'' HUP INT TERM
+gosu node openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+  -subj /CN=incudal-panel/O=XPayincus \
+  -keyout "$t/client.key" -out "$t/client.crt" >/dev/null 2>&1
+chmod 600 "$t/client.crt" "$t/client.key"
+ln "$t/client.key" "$d/client.key"
+ln "$t/client.crt" "$d/client.crt"
+'
+```
+
+放回舊配對或生成完成後，先修正這兩檔的權限並以 API 使用者檢查可讀性、配對與 TLS 載入。以下驗證只顯示成功／失敗，不輸出私鑰；失敗時不要啟動 API，先檢查掛載與備份：
+
+```bash
+docker compose run --rm --no-deps --user 0:0 --entrypoint sh api -eu -c '
+chown 1000:1000 /opt/incudal/server/certs /opt/incudal/server/certs/client.crt /opt/incudal/server/certs/client.key
+chmod 700 /opt/incudal/server/certs
+chmod 600 /opt/incudal/server/certs/client.crt /opt/incudal/server/certs/client.key
+'
+docker compose run --rm --no-deps --user 1000:1000 --entrypoint node api --input-type=module -e '
+import { readFileSync, statSync } from "node:fs";
+import { X509Certificate, createPrivateKey } from "node:crypto";
+import { createSecureContext } from "node:tls";
+try {
+  const c = process.env.PANEL_CRT_PATH, k = process.env.PANEL_KEY_PATH;
+  if (!statSync(c).isFile() || !statSync(k).isFile() || (statSync(k).mode & 0o077)) throw new Error();
+  const cert = readFileSync(c), key = readFileSync(k);
+  if (!new X509Certificate(cert).checkPrivateKey(createPrivateKey({ key, passphrase: "" }))) throw new Error();
+  createSecureContext({ cert, key });
+  console.log("Incus client certificate pair OK");
+} catch { console.error("Invalid or unreadable Incus client certificate pair; restore the original pair and check mount/permissions."); process.exit(1); }
+'
+```
+
+驗證成功後執行 `docker compose up -d --no-deps api`。若保留原配對，既有 Incus trust 可繼續使用；若生成新配對，請在面板重新產生節點安裝／重裝命令，於真正的 Incus 宿主機執行匯入目前公開憑證，再回面板驗證。不要將 `client.key` 複製到 Incus 宿主機或貼進工單。網站憑證更新或 API 重啟不會自動修復 Incus trust。
+
+相關守衛入口為 `pnpm --filter server test:host-install-script-guards`（包含生成條件、不覆寫、半套拒絕、配對檢查、公開憑證輸出與錯誤遮蔽的結構斷言），另需 `pnpm --filter server test:host-route-id-guards`、`pnpm --filter server type-check` 及 `sh -n deploy/compose/api-entrypoint.sh`。Linux 實機須覆蓋全新生成／重啟保留指紋、半套／空檔／錯配拒絕、node 權限及節點信任流程。本次依要求未執行本機測試，這些項目為待驗收項目。

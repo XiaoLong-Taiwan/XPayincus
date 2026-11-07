@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { buildApiUrl } from '@/utils/api-url'
+import { API_BASE_URL } from '@/utils/runtime-config'
 import type { LoginRequest, LoginResponse, UpdateUserResponse, GenerateInviteRequest, InviteListResponse, User, BadgeCatalogItem, BadgeSeriesItem, UserQuota, UpdateUserRequest, Instance, InstanceWithDetails, InstanceStats, CreateInstanceRequest, CreateInstanceResponse, UpdateInstanceRequest, ChangeHostOptionsResponse, PortMapping, CreatePortMappingRequest, IpAddress, Ipv6Subnet, HostAgentStatusResponse, HostAgentInstallCommandResponse, HostAgentUpgradeRequestResponse, Snapshot, Backup, CreateSnapshotRequest, CreateBackupRequest, SnapshotPolicy, BackupPolicy, UpdateSnapshotPolicyRequest, UpdateBackupPolicyRequest, Host, HostWithDetails, AvailableHost, CreateHostRequest, UpdateHostRequest, Package, CreatePackageRequest, UpdatePackageRequest, SshKey, CreateSshKeyRequest, NotificationChannel, CreateNotificationChannelRequest, UpdateNotificationChannelRequest, OAuthConfig, UserOAuthBinding, UpdateOAuthConfigRequest, OAuthClientApp, AdminOAuthAuthorization, UpsertOAuthClientAppRequest, HelpArticle, CreateHelpArticleRequest, UpdateHelpArticleRequest, HostImagePolicy, SystemImage, CreateSystemImageRequest, UpdateSystemImageRequest, Log, PaginatedResponse, Ticket, TicketMessage, TicketStatus, TicketObjectLink, TicketObjectLinkType, TicketSupportContext, TicketInternalNote, CreateTicketRequest, PaginatedTickets, PaginatedTicketMessages, TerminalSavedCommand, CreateTerminalSavedCommandRequest, UpdateTerminalSavedCommandRequest, TelegramBindingStatus, TelegramBindTokenResponse, TelegramAdminBindingsResponse, TelegramWebhookDeleteResponse, TelegramWebhookInfoResponse, TelegramWebhookSetupResponse, VersionMetadata, SystemUpdateCheckResult, SystemUpdateTask, PublicApiScopeMetadata, CreateGiftCardBatchRequest, CreateGiftCardRequest, GiftCardListResponse, GiftCardRecord, GiftCardStats } from '@/types/api.js'
 
 export type VipRuleType = 'user' | 'hosting'
@@ -263,7 +264,6 @@ function buildTicketFormData(
   return formData
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 // 创建 axios 实例
 const http: AxiosInstance = axios.create({

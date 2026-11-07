@@ -14,6 +14,8 @@ const zhTwLocale = readFileSync(resolve(__dirname, '../../client/src/locales/zh-
 const enLocale = readFileSync(resolve(__dirname, '../../client/src/locales/en.ts'), 'utf8')
 const installPanel = readFileSync(resolve(__dirname, '../../scripts/install-panel.sh'), 'utf8')
 const systemctlWrapper = readFileSync(resolve(__dirname, '../../deploy/incudal-systemctl-wrapper.sh.example'), 'utf8')
+const apiEntrypoint = readFileSync(resolve(__dirname, '../../deploy/compose/api-entrypoint.sh'), 'utf8')
+const panelCertificate = readFileSync(resolve(__dirname, '../src/lib/incus/panel-certificate.ts'), 'utf8')
 
 assert.ok(
   installPanel.includes('install_verified_root_helpers_from_archive') &&
@@ -89,6 +91,49 @@ assert.ok(
     hostRoutes.includes('existsSync(stableCertPath)') &&
     hostRoutes.includes('existsSync(stableKeyPath)'),
   'host routes must prefer stable install-level panel client certificate paths over release-local paths'
+)
+
+assert.ok(
+  hostRoutes.includes('if (process.env.PANEL_CRT_PATH || process.env.PANEL_KEY_PATH)') &&
+    hostRoutes.includes('(existsSync(stableCertPath) || existsSync(stableKeyPath))') &&
+    !hostRoutes.includes('existsSync(stableCertPath) ? stableCertPath : fallbackCertPath'),
+  'host certificate paths must select pairs together and must not hide a partial explicit or stable pair'
+)
+assert.equal((hostRoutes.match(/readPanelCertificatePair\(certPath, keyPath\)/g) ?? []).length, 2,
+  'certificate download and host verification must validate the same readable pair')
+assert.ok(
+  panelCertificate.includes('statSync(certPath).isFile()') &&
+    panelCertificate.includes('statSync(keyPath).isFile()') &&
+    panelCertificate.includes('statSync(keyPath).mode & 0o077') &&
+    panelCertificate.includes('certificate.checkPrivateKey(privateKey)') &&
+    panelCertificate.includes('createSecureContext({ cert, key })') &&
+    panelCertificate.includes('cert: Buffer.from(certificate.toString())') &&
+    panelCertificate.includes('throw new Error(PANEL_CERTIFICATE_ERROR)'),
+  'pair reader must validate regular readable files, private key permissions and TLS compatibility, export only X.509 and redact parser errors'
+)
+assert.ok(
+  hostRoutes.includes("code: 'PANEL_CERTIFICATE_INVALID'") &&
+    hostRoutes.includes('send(`# Error: ${PANEL_CERTIFICATE_ERROR}`)') &&
+    !hostRoutes.includes("request.log.error(err, 'Failed to read panel certificate files')") &&
+    !hostRoutes.includes("request.log.error(err, 'Failed to read certificate file')"),
+  'certificate failures must return actionable guidance without logging raw key or crypto errors'
+)
+assert.ok(
+  apiEntrypoint.includes('[ ! -e "$cert_file" ] && [ ! -L "$cert_file" ] && [ ! -e "$key_file" ] && [ ! -L "$key_file" ]') &&
+    apiEntrypoint.includes('gosu node openssl req -x509 -newkey rsa:4096 -nodes -days 3650') &&
+    apiEntrypoint.includes('ln "$cert_tmp/client.key" "$key_file"') &&
+    apiEntrypoint.includes('ln "$cert_tmp/client.crt" "$cert_file"') &&
+    !apiEntrypoint.includes('ln -f') &&
+    apiEntrypoint.includes('trap \'rm -rf "$cert_tmp"\' EXIT'),
+  'Compose must generate only an entirely absent pair in a private temporary directory and publish without overwriting existing files'
+)
+assert.ok(
+  apiEntrypoint.includes('if ! gosu node node --input-type=module') &&
+    apiEntrypoint.includes('checkPrivateKey(createPrivateKey({ key, passphrase: \'\' }))') &&
+    apiEntrypoint.includes('createSecureContext({ cert, key })') &&
+    apiEntrypoint.includes('Never delete a partial pair to regenerate') &&
+    apiEntrypoint.indexOf('if ! gosu node node') < apiEntrypoint.indexOf('pnpm exec prisma migrate deploy'),
+  'Compose must reject missing, unreadable and invalid pairs as the API user before migrations and app startup'
 )
 
 assert.ok(

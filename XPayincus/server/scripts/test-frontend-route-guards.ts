@@ -8,7 +8,7 @@ const __dirname = dirname(__filename)
 const repoRoot = resolve(__dirname, '../..')
 
 function readRepoFile(path: string): string {
-  return readFileSync(resolve(repoRoot, path), 'utf8')
+  return readFileSync(resolve(repoRoot, path), 'utf8').replace(/\r\n/g, '\n')
 }
 
 function sectionBetween(source: string, startMarker: string, endMarker: string): string {
@@ -601,7 +601,7 @@ assert.ok(
   'TurnstileWidget must show a fixed verification status row so users can distinguish unverified and verified states'
 )
 assert.ok(
-  adminUsersViewSource.includes('import.meta.env.VITE_CUSTOMER_BASE_URL') &&
+  adminUsersViewSource.includes("import { CUSTOMER_BASE_URL } from '@/utils/runtime-config'") &&
     adminUsersViewSource.includes('window.location.origin') &&
     adminUsersViewSource.includes('return `${customerBaseUrl.value}/register/${newInviteCode.value}`') &&
     !adminUsersViewSource.includes('return `${window.location.origin}/register/${newInviteCode.value}`'),

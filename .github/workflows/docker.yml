@@ -1,0 +1,140 @@
+name: Publish Docker Images
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: xpayincus-ghcr-publish
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate publication source and version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          test "${REPOSITORY,,}" = xiaolong-taiwan/xpayincus
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            test "$REF" = refs/heads/main
+          else
+            test "$GITHUB_REF_TYPE" = tag
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          import { validateVersions, composeImageTag } from './scripts/release-contract.mjs'
+          const version = validateVersions()
+          if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== version) throw new Error('Tag must match root VERSION')
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${composeImageTag(version)}\n`)
+          NODE
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check both image tags before building
+        env:
+          IMAGE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/docker-release.mjs check
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [api, web]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ghcr.io/xiaolong-taiwan/xpayincus-${{ matrix.target }}
+          tags: type=raw,value=${{ needs.prepare.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=XPayincus ${{ matrix.target }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: XPayincus
+          file: XPayincus/deploy/compose/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          outputs: type=image,name=ghcr.io/xiaolong-taiwan/xpayincus-${{ matrix.target }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=docker-${{ matrix.target }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.target }}-${{ matrix.arch }}
+      - name: Save architecture digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/${{ matrix.target }}-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.target }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+  merge:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-digest-*
+          path: digests
+          merge-multiple: true
+      - name: Merge and verify immutable SHA and version indexes
+        env:
+          IMAGE_TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node scripts/docker-release.mjs publish
