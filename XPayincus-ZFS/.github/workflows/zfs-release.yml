@@ -1,0 +1,112 @@
+name: Build and Release ZFS Modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version_base:
+        description: Debian kernel version without architecture suffix, for example 6.1.0-37, or latest
+        required: true
+        default: latest
+      release_tag:
+        description: GitHub Release tag used by XPayincus install.sh
+        required: true
+        default: Debian-ZFS
+
+jobs:
+  build:
+    name: Build ZFS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    container: debian:12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            kernel_suffix: cloud-amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            kernel_suffix: arm64
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y ca-certificates bash coreutils grep
+
+      - name: Build selected kernel package
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUESTED_KERNEL_VERSION="${{ inputs.kernel_version_base }}"
+          if [[ "${REQUESTED_KERNEL_VERSION}" == "latest" ]]; then
+            KERNEL_VERSION="$(apt-cache search '^linux-headers-[0-9].*-${{ matrix.kernel_suffix }}$' | awk '{print $1}' | sed 's/^linux-headers-//' | grep -v -- '-rt-' | sort -V | tail -n1)"
+          else
+            KERNEL_VERSION="${REQUESTED_KERNEL_VERSION}-${{ matrix.kernel_suffix }}"
+          fi
+          test -n "${KERNEL_VERSION}"
+          apt-get install -y --dry-run "linux-headers-${KERNEL_VERSION}"
+          echo "KERNEL_VERSION=${KERNEL_VERSION}" >> "${GITHUB_ENV}"
+          printf 'y\n' | bash zfs-builder.sh --kernel "${KERNEL_VERSION}"
+          test -n "$(find output -maxdepth 1 -name "xpayincus-zfs-*-linux-${{ matrix.arch }}-${KERNEL_VERSION}.tar.gz" -print -quit)"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd output
+          sha256sum xpayincus-zfs-*-linux-${{ matrix.arch }}-${KERNEL_VERSION}.tar.gz > checksums-${{ matrix.arch }}.txt
+
+      - name: Upload ZFS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xpayincus-zfs-${{ matrix.arch }}
+          path: |
+            output/xpayincus-zfs-*-linux-${{ matrix.arch }}-*.tar.gz
+            output/checksums-${{ matrix.arch }}.txt
+          retention-days: 30
+
+  release:
+    name: Publish ZFS Release
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download ZFS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: zfs-artifacts
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find zfs-artifacts -type f -name 'xpayincus-zfs-*.tar.gz' -exec mv {} release/ \;
+          find zfs-artifacts -type f -name 'checksums-*.txt' -exec cat {} \; > release/checksums.txt
+          test -n "$(find release -maxdepth 1 -name 'xpayincus-zfs-*.tar.gz' -print -quit)"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: XPayincus ZFS ${{ inputs.release_tag }}
+          files: |
+            release/xpayincus-zfs-*.tar.gz
+            release/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          overwrite_files: true

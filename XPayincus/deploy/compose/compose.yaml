@@ -1,0 +1,150 @@
+name: incudal-panel
+
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: incudal
+      POSTGRES_USER: incudal
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U incudal -d incudal']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  api:
+    container_name: incudal-panel-api
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+      target: api
+      args:
+        VITE_CUSTOMER_BASE_URL: ${FRONTEND_URL}
+        VITE_ADMIN_BASE_URL: ${ADMIN_FRONTEND_URL}
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: '3001'
+      TRUST_PROXY: 'true'
+      SERVE_STATIC_CLIENT: 'false'
+      FRONTEND_URL: ${FRONTEND_URL:?Run panel.sh init first}
+      ADMIN_FRONTEND_URL: ${ADMIN_FRONTEND_URL:?Run panel.sh init first}
+      SITE_URL: ${FRONTEND_URL}
+      PAYMENT_CALLBACK_BASE_URL: ${FRONTEND_URL}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL}
+      COOKIE_SECURE: 'true'
+      COOKIE_SAME_SITE: lax
+      COOKIE_DOMAIN: ''
+      PAYMENT_CALLBACK_IP_WHITELIST_REQUIRED: 'true'
+      PAYMENT_CALLBACK_SKIP_IP_WHITELIST: 'false'
+      DISABLE_REQUEST_LOG: 'true'
+      INCUDAL_APP_DIR: /opt/incudal/app
+      INCUDAL_INSTALL_DIR: /opt/incudal
+      INSTALL_DIR: /opt/incudal
+      PANEL_CRT_PATH: /opt/incudal/server/certs/client.crt
+      PANEL_KEY_PATH: /opt/incudal/server/certs/client.key
+      INCUDAL_RELEASE_REPOSITORY: ${INCUDAL_RELEASE_REPOSITORY:-}
+      INCUDAL_AGENT_RELEASE_REPOSITORY: ${INCUDAL_AGENT_RELEASE_REPOSITORY:-}
+    secrets:
+      - postgres_password
+      - jwt_secret
+      - cookie_secret
+      - encryption_key
+      - admin_password
+    volumes:
+      - panel_certs:/opt/incudal/server/certs
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - database
+      - panel
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 120s
+      retries: 12
+    stop_grace_period: 45s
+    logging: *logging
+
+  user:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+      target: web
+      args:
+        VITE_CUSTOMER_BASE_URL: ${FRONTEND_URL}
+        VITE_ADMIN_BASE_URL: ${ADMIN_FRONTEND_URL}
+    restart: unless-stopped
+    environment:
+      PANEL_ENTRY: user
+    ports:
+      - '127.0.0.1:${USER_PORT:-8080}:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - panel
+    logging: *logging
+
+  admin:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+      target: web
+      args:
+        VITE_CUSTOMER_BASE_URL: ${FRONTEND_URL}
+        VITE_ADMIN_BASE_URL: ${ADMIN_FRONTEND_URL}
+    restart: unless-stopped
+    environment:
+      PANEL_ENTRY: admin
+    ports:
+      - '127.0.0.1:${ADMIN_PORT:-8081}:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - panel
+    logging: *logging
+
+networks:
+  database:
+    internal: true
+  panel:
+
+volumes:
+  postgres_data:
+  panel_certs:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  cookie_secret:
+    file: ./secrets/cookie_secret
+  encryption_key:
+    file: ./secrets/encryption_key
+  admin_password:
+    file: ./secrets/admin_password
