@@ -97,7 +97,11 @@ jobs:
           rustup default stable
           rustup toolchain install nightly --profile minimal --component rust-src
           rustup target add "$RUST_TARGET"
-          cargo install bpf-linker --locked
+          curl --fail --location --retry 3 "https://github.com/aya-rs/bpf-linker/releases/download/v0.13.0/bpf-linker-${RUST_TARGET}.tar.zst" -o "$RUNNER_TEMP/bpf-linker.tar.zst"
+          mkdir -p "$RUNNER_TEMP/bpf-linker"
+          tar --zstd -xf "$RUNNER_TEMP/bpf-linker.tar.zst" -C "$RUNNER_TEMP/bpf-linker"
+          install -m 0755 "$RUNNER_TEMP/bpf-linker/bpf-linker" "$HOME/.cargo/bin/bpf-linker"
+          bpf-linker --version
         env:
           RUST_TARGET: ${{ matrix.target }}
       - run: bash scripts/build-rfw-release.sh

@@ -12,6 +12,8 @@ permissions:
 jobs:
   panel:
     runs-on: ubuntu-24.04
+    env:
+      DATABASE_URL: postgresql://test:test@127.0.0.1:5432/xpayincus_test
     defaults:
       run:
         working-directory: XPayincus
@@ -30,8 +32,6 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm rebuild esbuild
       - run: pnpm --filter server exec prisma generate
-        env:
-          DATABASE_URL: postgresql://user:pass@localhost:5432/db
       - run: pnpm test
       - run: bash scripts/test-install-panel-guards.sh
       - run: pnpm build
