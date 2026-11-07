@@ -127,3 +127,20 @@ ADMIN_FRONTEND_URL=https://admin.example.com \
 BACKEND_URL=http://127.0.0.1:3001 \
 pnpm verify:production
 ```
+
+宿主部署可先執行僅檢查設定的模式；此模式不提供 DB 或線上驗收證據：
+
+```bash
+RUN_LIVE_CHECKS=0 pnpm verify:production
+```
+
+最終驗收使用以下入口，會強制開啟生產預檢、登入／權限 smoke、Agent release smoke 與日誌／標頭檢查，並要求 `REQUIRE_LIVE_PROOF_REFS=1`：
+
+```bash
+LIVE_ACCEPTANCE_REPORT=/srv/private-reports/live-acceptance.md \
+LIVE_PAYMENT_PROOF_REF='<真實支付證據引用>' \
+LIVE_LOG_HEADER_PROOF_REF='<日誌與標頭證據引用>' \
+pnpm verify:final-acceptance
+```
+
+佔位文字必須替換為實際證據，並依腳本要求補齊其餘 `LIVE_*_PROOF_REF`；只有自動檢查通過不代表完成正式驗收。上述命令適用既有宿主部署，不能直接套用於 Compose；執行前須準備受控測試帳號、可寫報告目錄與變更窗口。本次未執行這些命令。

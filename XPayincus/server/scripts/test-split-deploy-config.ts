@@ -54,6 +54,12 @@ function assertIncludesAll(source: string, expected: string[], message: string):
 
 const envExample = readRepoFile('.env.example')
 const readme = readRepoFile('README.md')
+const architectureDoc = readRepoFile('docs-site/docs/guide/architecture.md')
+const environmentDoc = readRepoFile('docs-site/docs/deployment/environment.md')
+const manualInstallDoc = readRepoFile('docs-site/docs/deployment/manual-install.md')
+const nginxDoc = readRepoFile('docs-site/docs/deployment/nginx.md')
+const releaseDoc = readRepoFile('../RELEASE.md')
+const agentRoute = readRepoFile('server/src/routes/agent.ts')
 const nginxExample = readRepoFile('deploy/nginx-split-intranet.conf.example')
 const backendServiceExample = readRepoFile('deploy/incudal-backend.service.example')
 const installPanel = readRepoFile('scripts/install-panel.sh')
@@ -74,7 +80,8 @@ const serverEnvConfig = readRepoFile('server/src/config/env.ts')
 const originConfig = readRepoFile('server/src/lib/origin-config.ts')
 const prismaConfig = readRepoFile('server/prisma.config.ts')
 const verifyProductionDbReadiness = readRepoFile('server/src/scripts/verify-production-db-readiness.ts')
-const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+const releaseWorkflow = readRepoFile('../.github/workflows/release.yml')
+const buildServerRelease = readRepoFile('../scripts/build-server-release.sh')
 const splitAuthSmokeWrapper = readRepoFile('server/scripts/smoke-split-auth.ts')
 const splitAuthSmoke = readRepoFile('server/src/scripts/smoke-split-auth.ts')
 const agentReleaseSmoke = readRepoFile('server/scripts/smoke-agent-release.ts')
@@ -327,7 +334,25 @@ assert.ok(
     agentReleaseSmoke.includes('INVALID_AGENT_BINARY_NAME'),
   'Agent release smoke must cover install script serving and deterministic binary download rejection paths'
 )
-assert.ok(readme.includes('INCUDAL_AGENT_RELEASE_REPOSITORY=XiaoLong-Taiwan/XPayincus-Agent'), 'README must document the current Agent release repository')
+assertIncludesAll(readme, [
+  'INCUDAL_RELEASE_REPOSITORY=owner/unified-repository',
+  'INCUDAL_AGENT_RELEASE_REPOSITORY=',
+  'INCUDAL_AGENT_RELEASE_TAG_PREFIX=',
+  '舊 Agent repository 非空時優先',
+  '舊來源使用 `agent-`，統一來源使用空前綴',
+  '明確空值代表 `v*` tag',
+  'SYSTEM_UPDATE_RELEASE_REPOSITORY=owner/unified-repository'
+], 'README must document unified Agent releases, legacy override priority, tag prefixes, and independent panel OTA configuration')
+assert.ok(
+  agentRoute.includes("const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus-Agent'") &&
+    agentRoute.includes('configured || process.env.INCUDAL_RELEASE_REPOSITORY?.trim() || defaultAgentReleaseRepository') &&
+    agentRoute.includes("? '' : 'agent-'") &&
+    agentRoute.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(version), assetName)') &&
+    agentRoute.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(input.version), assetName)') &&
+    !agentRoute.includes('getAgentReleaseAssetUrl(`agent-${') &&
+    releaseDoc.includes('兩者皆未設定時仍使用原獨立倉庫'),
+  'Agent releases must preserve the independent repository fallback and use the configured tag prefix for listing and fallback downloads'
+)
 assert.ok(backendServiceExample.includes('Documentation=https://github.com/XiaoLong-Taiwan/XPayincus'), 'systemd backend example must point documentation to the current repository')
 assert.ok(
   installPanel.includes('readonly GITHUB_REPO="XiaoLong-Taiwan/XPayincus"') &&
@@ -466,28 +491,33 @@ assert.ok(
   'server package must keep the Prisma CLI in production dependencies because release startup/migration uses prisma migrate deploy'
 )
 assert.ok(
-  releaseWorkflow.includes('cp pnpm-lock.yaml release/') &&
-    releaseWorkflow.includes('pnpm install --prod --frozen-lockfile --ignore-scripts --filter server') &&
-    releaseWorkflow.includes('pnpm --filter server exec prisma generate') &&
-    !releaseWorkflow.includes('npm install --omit=dev') &&
-    !releaseWorkflow.includes('npx prisma') &&
-    releaseWorkflow.includes('cp scripts/verify-production-readiness.sh release/scripts/') &&
-    releaseWorkflow.includes('cp scripts/verify-log-header-exposure.sh release/scripts/') &&
-    releaseWorkflow.includes('cp scripts/verify-live-acceptance.sh release/scripts/') &&
-    releaseWorkflow.includes('cp scripts/verify-split-host.sh release/scripts/'),
-  'release workflow must package production verification scripts and install server production dependencies through the pnpm lockfile'
+  releaseWorkflow.includes('run: bash scripts/build-server-release.sh') &&
+    buildServerRelease.includes('cd "$ROOT_DIR/XPayincus"') &&
+    buildServerRelease.includes('cp package.json pnpm-lock.yaml pnpm-workspace.yaml .env.example "$STAGING/"') &&
+    buildServerRelease.includes('pnpm install --prod --frozen-lockfile --ignore-scripts --filter server') &&
+    buildServerRelease.includes('pnpm --filter server exec prisma generate') &&
+    !buildServerRelease.includes('npm install --omit=dev') &&
+    !buildServerRelease.includes('npx prisma') &&
+    buildServerRelease.includes('cp "scripts/$entry" "$STAGING/scripts/"'),
+  'root release workflow must invoke the unified server builder and package locked production dependencies'
 )
+assertIncludesAll(buildServerRelease, [
+  'verify-production-readiness.sh',
+  'verify-log-header-exposure.sh',
+  'verify-live-acceptance.sh',
+  'verify-split-host.sh'
+], 'unified server builder must package all production verification scripts')
 assert.ok(
-  readme.includes('pnpm verify:production') &&
-    readme.includes('RUN_LIVE_CHECKS=0 pnpm verify:production') &&
-    readme.includes('pnpm verify:final-acceptance') &&
-    readme.includes('REQUIRE_LIVE_PROOF_REFS=1') &&
-    readme.includes('强制开启生产预检') &&
-    readme.includes('登录/权限 smoke') &&
-    readme.includes('占位文字必须替换') &&
-    readme.includes('LIVE_PAYMENT_PROOF_REF') &&
-    readme.includes('LIVE_LOG_HEADER_PROOF_REF'),
-  'README must document production readiness verification, config-only mode, live acceptance wrapper, and live proof references'
+  environmentDoc.includes('pnpm verify:production') &&
+    environmentDoc.includes('RUN_LIVE_CHECKS=0 pnpm verify:production') &&
+    environmentDoc.includes('pnpm verify:final-acceptance') &&
+    environmentDoc.includes('REQUIRE_LIVE_PROOF_REFS=1') &&
+    environmentDoc.includes('強制開啟生產預檢') &&
+    environmentDoc.includes('登入／權限 smoke') &&
+    environmentDoc.includes('佔位文字必須替換') &&
+    environmentDoc.includes('LIVE_PAYMENT_PROOF_REF') &&
+    environmentDoc.includes('LIVE_LOG_HEADER_PROOF_REF'),
+  'environment guide must document production readiness verification, config-only mode, live acceptance wrapper, and live proof references'
 )
 assert.ok(
   installPanel.includes('XPayincus 面板一键部署脚本') &&
@@ -553,10 +583,12 @@ assert.ok(
 )
 assert.ok(
   verifyProductionReadiness.includes('AGENT_RELEASE_DIR_VALUE="$(config_value INCUDAL_AGENT_RELEASE_DIR)"') &&
+    verifyProductionReadiness.includes('AGENT_RELEASE_REPOSITORY_VALUE="$(config_value INCUDAL_AGENT_RELEASE_REPOSITORY)"') &&
+    /if \[\[ -z "\$AGENT_RELEASE_REPOSITORY_VALUE" \]\]; then\s+AGENT_RELEASE_REPOSITORY_VALUE="\$\(config_value INCUDAL_RELEASE_REPOSITORY\)"\s+fi/.test(verifyProductionReadiness) &&
     verifyProductionReadiness.includes('INCUDAL_AGENT_RELEASE_DIR must be an absolute path') &&
     verifyProductionReadiness.includes('INCUDAL_AGENT_RELEASE_REPOSITORY or INCUDAL_AGENT_RELEASE_DIR is required unless INCUDAL_AGENT_BINARY_URL and INCUDAL_AGENT_BINARY_SHA256 are configured') &&
     verifyProductionReadiness.includes('require_sha256 INCUDAL_AGENT_BINARY_SHA256 "$AGENT_BINARY_SHA256_VALUE"'),
-  'production readiness verifier must require a GitHub Agent release path, local release directory, or checksum-pinned custom binary'
+  'production readiness verifier must accept unified Agent releases only when the legacy override is empty, a local release directory, or a checksum-pinned custom binary'
 )
 assert.ok(
   verifyProductionReadiness.includes('FRONTEND_URL="$FRONTEND_URL_VALUE" ADMIN_FRONTEND_URL="$ADMIN_FRONTEND_URL_VALUE" BACKEND_URL="$BACKEND_URL_VALUE" bash scripts/verify-split-host.sh') &&
@@ -702,21 +734,23 @@ assert.ok(clientApiUrl.includes('export function buildApiWebSocketUrl') && clien
 assert.ok(terminalCore.includes("buildApiWebSocketUrl(`/ws/instances/${instanceId}/terminal?ticket=${encodeURIComponent(ticket)}`)"), 'terminal WebSocket path must stay under /api/ws via buildApiWebSocketUrl')
 
 assert.ok(
-  readme.includes('用户浏览器') &&
-    readme.includes('管理员浏览器') &&
-    readme.includes('/api, /api/ws -> http://10.0.0.12:3001'),
-  'README architecture must document separate user/admin frontends and backend port 3001'
+  architectureDoc.includes('用户浏览器') &&
+    architectureDoc.includes('管理员浏览器') &&
+    architectureDoc.includes('/api 和 /api/ws 反代到后端 127.0.0.1:3001') &&
+    architectureDoc.includes('/api 和 /api/ws 反代到同一个后端 127.0.0.1:3001'),
+  'architecture guide must document separate user/admin frontends and backend port 3001'
 )
-assert.ok(readme.includes('ADMIN_FRONTEND_URL=https://demoadmin.xpayincus.com') && readme.includes('/opt/incudal/current/client/dist/admin'), 'README architecture must document the separate admin frontend')
-assert.ok(readme.includes('VITE_CUSTOMER_BASE_URL=https://demo.xpayincus.com'), 'README env example must document admin-generated customer links')
-assert.ok(readme.includes('PORT=3001'), 'README env example must use backend port 3001')
+assert.ok(environmentDoc.includes('ADMIN_FRONTEND_URL=https://admin.example.com') && architectureDoc.includes('/opt/incudal/current/client/dist/admin'), 'deployment guides must document the separate admin frontend')
+assert.ok(environmentDoc.includes('VITE_CUSTOMER_BASE_URL=https://panel.example.com'), 'environment guide must document admin-generated customer links')
+assert.ok(environmentDoc.includes('PORT=3001'), 'environment guide must use backend port 3001')
 assert.ok(
-  readme.includes('PORT=3001') &&
-    readme.includes('SERVE_STATIC_CLIENT=false') &&
-    readme.includes('node server/dist/app.js'),
-  'README production start command must use backend port 3001'
+  manualInstallDoc.includes('PORT=3001') &&
+    manualInstallDoc.includes('SERVE_STATIC_CLIENT=false') &&
+    manualInstallDoc.includes('systemctl is-active incudal-backend') &&
+    manualInstallDoc.includes('http://127.0.0.1:3001/api/health'),
+  'manual deployment guide must use the systemd backend on port 3001 with static serving disabled'
 )
-assert.ok(readme.includes('BACKEND_URL=http://10.0.0.12:3001'), 'README split verification command must use backend port 3001')
+assert.ok(nginxDoc.includes('BACKEND_URL=http://127.0.0.1:3001') && nginxDoc.includes('pnpm verify:split:host'), 'Nginx guide split verification command must use backend port 3001')
 
 assert.ok(nginxExample.includes('10.0.0.12:3001'), 'Nginx split example must document backend port 3001')
 assert.ok(nginxExample.includes('server_name pay.xpayincus.com') && nginxExample.includes('server_name admin.xpayincus.com'), 'Nginx split example must define customer and admin frontend server names')
@@ -778,6 +812,14 @@ assert.ok(
 assert.ok(!nginxExample.includes('10.0.0.12:3000'), 'Nginx split example must not point backend traffic at frontend port 3000')
 assert.ok(!readme.includes('10.0.0.12:3000'), 'README production split docs must not point backend traffic at frontend port 3000')
 assert.ok(!readme.includes('127.0.0.1:3000` 即可'), 'README same-host backend proxy example must not point to frontend port 3000')
+for (const [name, source] of [
+  ['architecture', architectureDoc],
+  ['environment', environmentDoc],
+  ['manual deployment', manualInstallDoc],
+  ['Nginx', nginxDoc]
+] as const) {
+  assert.ok(!/10\.0\.0\.12:3000|BACKEND_URL=http:\/\/127\.0\.0\.1:3000/.test(source), `${name} guide must not point backend traffic at frontend port 3000`)
+}
 
 const retiredDockerDeploymentFiles = [
   '.dockerignore',
@@ -786,9 +828,12 @@ const retiredDockerDeploymentFiles = [
   'docker-compose.dev.yml',
   '.github/workflows/docker.yml'
 ]
-const repoFiles = new Set(listRepoFilesRecursively(repoRoot).map(file => file.slice(repoRoot.length + 1)))
+const repoFiles = new Set(listRepoFilesRecursively(repoRoot).map(file => file.slice(repoRoot.length + 1).replace(/\\/g, '/')))
 for (const file of retiredDockerDeploymentFiles) {
   assert.ok(!repoFiles.has(file), `${file} must stay removed from the host-process split deployment`)
+}
+for (const file of ['Dockerfile', 'compose.yaml', 'panel.sh', 'api-entrypoint.sh', 'nginx.conf.template', 'README.md']) {
+  assert.ok(repoFiles.has(`deploy/compose/${file}`), `panel-only Compose deployment must retain deploy/compose/${file}`)
 }
 
 for (const [name, source] of [
