@@ -36,6 +36,7 @@ const buildTime = new Date().toISOString()
 const ota = {
   schemaVersion: 1,
   product: 'xpayincus',
+  releaseChannel: 'unified-v1',
   version,
   gitTag: version,
   gitCommit: (process.env.SOURCE_COMMIT || process.env.GITHUB_SHA || '').slice(0, 12),
@@ -51,7 +52,7 @@ const json = value => JSON.stringify(value, null, 2) + '\n'
 outputs.set('ota-manifest.json', json(ota))
 outputs.set(`xpayincus-panel-${version}-ota-manifest.json`, json(ota))
 outputs.set('release-manifest.json', json({
-  schemaVersion: 1, version, buildTime, artifacts: records,
+  schemaVersion: 1, product: 'xpayincus', releaseChannel: 'unified-v1', version, buildTime, artifacts: records,
   zfs: {
     status: 'source-only',
     kernelModulesBuilt: false,

@@ -8,6 +8,7 @@ import { tryMarkSystemUpdateTaskRunning } from '../db/system-update-tasks.js'
 
 const taskId = Number(process.argv[2])
 const appDir = resolve(process.env.INCUDAL_APP_DIR || process.cwd())
+let activeAppDir = appDir
 const installDir = resolve(process.env.INSTALL_DIR || deriveInstallDir(appDir))
 const serviceName = process.env.SERVICE_NAME || 'incudal-backend'
 const frontendUrl = process.env.FRONTEND_URL || 'https://pay.xpayincus.com'
@@ -40,7 +41,7 @@ async function run(command: string, args: string[], options: { timeoutMs?: numbe
   await log(`$ ${command} ${args.join(' ')}`)
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(command, args, {
-      cwd: options.cwd || installDir,
+      cwd: options.cwd || activeAppDir,
       env: { ...process.env, PATH: executionPath, ...options.env },
       stdio: ['ignore', 'pipe', 'pipe']
     })
@@ -120,6 +121,7 @@ async function switchCurrentRelease(targetDir: string): Promise<void> {
   await rm(nextLink, { force: true })
   await symlink(targetDir, nextLink)
   await rename(nextLink, currentLink)
+  activeAppDir = targetDir
   await log(`Switched current release to ${targetDir}`)
 }
 
@@ -179,6 +181,7 @@ async function main(): Promise<void> {
         await rm(installDir, { recursive: true, force: true })
       }
       await cp(backupPath, installDir, { recursive: true, preserveTimestamps: true })
+      activeAppDir = installDir
     }
     await mkdir(join(installDir, '.npm'), { recursive: true })
     await mkdir(join(installDir, '.cache'), { recursive: true })

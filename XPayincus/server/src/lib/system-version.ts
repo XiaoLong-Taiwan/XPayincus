@@ -31,7 +31,7 @@ export interface UpdateCheckResult {
   repositoryError: string | null
 }
 
-const tagPattern = /^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+const tagPattern = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 
 export interface OtaArtifactInfo {
   name: string
@@ -70,7 +70,41 @@ export function getProjectRoot(): string {
 }
 
 export function isValidReleaseTag(value: string): boolean {
-  return tagPattern.test(value.trim())
+  if (!tagPattern.test(value)) return false
+  const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(value)
+  return match !== null && [match[4], match[5]].every((part, index) => part === undefined ||
+    part.split('.').every(identifier => identifier.length > 0 &&
+      (index === 1 || !/^\d+$/.test(identifier) || identifier === '0' || !identifier.startsWith('0'))))
+}
+
+export function compareReleaseTags(left: string, right: string): number {
+  if (!isValidReleaseTag(left) || !isValidReleaseTag(right)) throw new Error('Invalid release tag')
+  const parse = (tag: string) => tag.slice(1).split('+')[0]!.split(/-(.*)/s)
+  const [leftCore, leftPre] = parse(left)
+  const [rightCore, rightPre] = parse(right)
+  const compareNumber = (a: string, b: string) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0)
+  const leftParts = leftCore!.split('.')
+  const rightParts = rightCore!.split('.')
+  for (let index = 0; index < 3; index++) {
+    const result = compareNumber(leftParts[index]!, rightParts[index]!)
+    if (result) return result
+  }
+  if (leftPre === rightPre) return 0
+  if (leftPre === undefined) return 1
+  if (rightPre === undefined) return -1
+  const a = leftPre.split('.')
+  const b = rightPre.split('.')
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    if (a[index] === undefined) return -1
+    if (b[index] === undefined) return 1
+    const x = a[index]!
+    const y = b[index]!
+    if (x === y) continue
+    const nx = /^\d+$/.test(x)
+    const ny = /^\d+$/.test(y)
+    return nx && ny ? compareNumber(x, y) : nx !== ny ? nx ? -1 : 1 : x < y ? -1 : 1
+  }
+  return 0
 }
 
 async function readJsonFile<T>(path: string): Promise<T | null> {
@@ -162,12 +196,16 @@ export async function getOtaReleaseInfo(tag: string): Promise<OtaReleaseInfo> {
   const releaseApiUrl = `https://api.github.com/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`
 
   try {
+    if (!isValidReleaseTag(tag)) throw new Error('Invalid release tag')
     const release = await fetchJson<GitHubReleaseResponse>(releaseApiUrl)
+    if (release.tag_name !== tag || release.draft || release.prerelease) {
+      throw new Error('Release tag/status mismatch')
+    }
     const assets = Array.isArray(release.assets) ? release.assets : []
-    const manifestAsset = assets.find(asset =>
-      asset.name === 'ota-manifest.json' ||
-      asset.name === `xpayincus-panel-${tag}-ota-manifest.json`
-    )
+    const namedManifests = assets.filter(asset => asset.name === `xpayincus-panel-${tag}-ota-manifest.json`)
+    const manifests = namedManifests.length > 0 ? namedManifests : assets.filter(asset => asset.name === 'ota-manifest.json')
+    if (manifests.length > 1) throw new Error('Ambiguous OTA manifest assets')
+    const manifestAsset = manifests[0]
     const manifestUrl = manifestAsset?.browser_download_url || null
     if (!manifestUrl) {
       return {
@@ -178,10 +216,41 @@ export async function getOtaReleaseInfo(tag: string): Promise<OtaReleaseInfo> {
       }
     }
 
-    const manifest = await fetchJson<{ artifacts?: unknown[] }>(manifestUrl)
-    const artifacts = (Array.isArray(manifest.artifacts) ? manifest.artifacts : [])
+    const manifest = await fetchJson<{
+      schemaVersion?: unknown
+      product?: unknown
+      releaseChannel?: unknown
+      version?: unknown
+      gitTag?: unknown
+      artifacts?: unknown
+    } | null>(manifestUrl)
+    if (!manifest || manifest.schemaVersion !== 1 || manifest.product !== 'xpayincus' ||
+      manifest.releaseChannel !== 'unified-v1' || manifest.version !== tag || manifest.gitTag !== tag ||
+      !Array.isArray(manifest.artifacts)) {
+      throw new Error('OTA manifest schema/product/channel/version/tag mismatch')
+    }
+    const panelEntries = manifest.artifacts.filter(input => {
+      if (!input || typeof input !== 'object') return false
+      const name = (input as { name?: unknown }).name
+      return typeof name === 'string' && name.startsWith('xpayincus-panel-')
+    })
+    const artifacts = panelEntries
       .map(normalizeOtaArtifact)
       .filter((artifact): artifact is OtaArtifactInfo => artifact !== null)
+      .filter(artifact => artifact.name === `xpayincus-panel-${tag}-${artifact.platform}-${artifact.arch}.tar.gz` &&
+        artifact.platform === 'linux' && ['amd64', 'arm64'].includes(artifact.arch))
+    if (artifacts.length === 0 || artifacts.length !== panelEntries.length ||
+      new Set(artifacts.map(artifact => artifact.name)).size !== artifacts.length) {
+      throw new Error('Missing or ambiguous panel tar artifacts')
+    }
+    for (const artifact of artifacts) {
+      const matchingAssets = assets.filter(asset => asset.name === artifact.name)
+      const expectedUrl = `https://github.com/${repository}/releases/download/${tag}/${artifact.name}`
+      if (matchingAssets.length !== 1 || artifact.url !== expectedUrl ||
+        matchingAssets[0]?.browser_download_url !== artifact.url) {
+        throw new Error('Panel artifact does not match release asset')
+      }
+    }
 
     return {
       manifestAvailable: artifacts.length > 0,
@@ -214,28 +283,39 @@ export function getRuntimeArch(): string {
   return process.arch
 }
 
-export function selectRuntimeArtifact(artifacts: OtaArtifactInfo[]): OtaArtifactInfo | null {
+export function selectRuntimeArtifact(artifacts: OtaArtifactInfo[], tag?: string): OtaArtifactInfo | null {
   const platform = getRuntimePlatform()
   const arch = getRuntimeArch()
-  return artifacts.find(artifact => artifact.platform === platform && artifact.arch === arch) || null
+  const matches = artifacts.filter(artifact => {
+    if (artifact.platform !== platform || artifact.arch !== arch) return false
+    const prefix = 'xpayincus-panel-'
+    const suffix = `-${platform}-${arch}.tar.gz`
+    if (!artifact.name.startsWith(prefix) || !artifact.name.endsWith(suffix)) return false
+    const artifactTag = artifact.name.slice(prefix.length, -suffix.length)
+    return isValidReleaseTag(artifactTag) && (tag === undefined || artifactTag === tag)
+  })
+  return matches.length === 1 ? matches[0]! : null
 }
 
-// OTA 的 artifact 路径（下载 release tar 包 + 校验 sha256 + 原子发布）完全不需要 Git —— Git 只是
-// 拿不到 artifact 时「在机器上从源码构建」的回退路径。因此只要目标版本有本机可用的 artifact，
-// 用 release 包部署（一键脚本的默认形态）的机器就应当允许在线更新。
 export async function hasUsableOtaArtifact(tag: string): Promise<boolean> {
   if (!isValidReleaseTag(tag)) return false
   try {
     const ota = await getOtaReleaseInfo(tag)
-    return selectRuntimeArtifact(ota.artifacts) !== null
+    return ota.manifestAvailable && selectRuntimeArtifact(ota.artifacts, tag) !== null
   } catch {
     return false
   }
 }
 
 export async function canApplyUpdate(tag: string, root = getProjectRoot()): Promise<boolean> {
+  if (!isValidReleaseTag(tag)) return false
+  const current = await getCurrentVersionMetadata(root)
+  if (!isValidReleaseTag(current.version) || compareReleaseTags(tag, current.version) <= 0) return false
+  if (process.env.SYSTEM_UPDATE_APPLY_MODE?.trim().toLowerCase() === 'git') {
+    return await isGitRepository(root)
+  }
   if (await hasUsableOtaArtifact(tag)) return true
-  return await isGitRepository(root)
+  return false
 }
 
 // 非 Git 部署下的版本发现：改用 GitHub Releases API，语义与 `git tag --list` 一致（只取正式 release tag）。
@@ -250,6 +330,7 @@ async function listReleaseTagsFromGitHub(): Promise<string[] | null> {
       .filter(release => !release.draft && !release.prerelease)
       .map(release => String(release.tag_name || '').trim())
       .filter(tag => isValidReleaseTag(tag))
+      .sort((left, right) => compareReleaseTags(right, left))
   } catch {
     return null
   }
@@ -319,8 +400,6 @@ async function getTagCommit(tag: string, root: string): Promise<string | null> {
   return await runGit(['rev-list', '-n', '1', '--abbrev-commit', '--abbrev=12', tag], root)
 }
 
-// 用 release tar 包部署（一键脚本的默认形态）时目录不是 Git 工作区，此时靠 GitHub Releases API
-// 发现版本、靠 artifact 完成更新，全程不需要 Git。只有当 Releases API 也拉不到时才算真的不可更新。
 async function checkForUpdatesWithoutGit(current: VersionMetadata): Promise<UpdateCheckResult> {
   const tags = await listReleaseTagsFromGitHub()
   if (!tags) {
@@ -330,11 +409,10 @@ async function checkForUpdatesWithoutGit(current: VersionMetadata): Promise<Upda
       updates: [],
       updateAvailable: false,
       repositoryAvailable: false,
-      repositoryError: '当前部署目录不是 Git 工作区，且无法访问 GitHub Releases（网络不通或仓库不可达），暂时无法在线更新。请检查服务器到 api.github.com 的网络后重试。'
+      repositoryError: '無法存取 GitHub Releases，暫時無法檢查 OTA 更新。請檢查伺服器到 api.github.com 的網路與倉庫授權後重試。'
     }
   }
 
-  const currentTag = current.gitTag || current.version
   const buildAvailableUpdate = async (tag: string): Promise<AvailableUpdate> => ({
     version: tag,
     commit: null,
@@ -342,12 +420,16 @@ async function checkForUpdatesWithoutGit(current: VersionMetadata): Promise<Upda
     changelog: [],
     ota: await getOtaReleaseInfo(tag)
   })
-  const latest = tags[0] ? await buildAvailableUpdate(tags[0]) : null
+  const candidates = [...new Set(tags)].sort((left, right) => compareReleaseTags(right, left))
+  let latest: AvailableUpdate | null = null
   const updates: AvailableUpdate[] = []
 
-  for (const tag of tags) {
-    if (tag === currentTag || tag === current.version) break
-    updates.push(latest?.version === tag ? latest : await buildAvailableUpdate(tag))
+  for (const tag of candidates) {
+    if (!isValidReleaseTag(current.version) || compareReleaseTags(tag, current.version) < 0) continue
+    const update = await buildAvailableUpdate(tag)
+    if (!update.ota.manifestAvailable) continue
+    latest ??= update
+    if (compareReleaseTags(tag, current.version) > 0) updates.push(update)
   }
 
   return {
@@ -362,7 +444,7 @@ async function checkForUpdatesWithoutGit(current: VersionMetadata): Promise<Upda
 
 export async function checkForUpdates(root = getProjectRoot()): Promise<UpdateCheckResult> {
   const current = await getCurrentVersionMetadata(root)
-  if (!(await isGitRepository(root))) {
+  if (process.env.SYSTEM_UPDATE_APPLY_MODE?.trim().toLowerCase() !== 'git' || !(await isGitRepository(root))) {
     return await checkForUpdatesWithoutGit(current)
   }
 
@@ -372,9 +454,9 @@ export async function checkForUpdates(root = getProjectRoot()): Promise<UpdateCh
     .split(/\r?\n/)
     .map(tag => tag.trim())
     .filter(tag => isValidReleaseTag(tag))
+    .sort((left, right) => compareReleaseTags(right, left))
     .slice(0, 30)
 
-  const currentTag = current.gitTag || current.version
   const buildAvailableUpdate = async (tag: string): Promise<AvailableUpdate> => ({
     version: tag,
     commit: await getTagCommit(tag, root),
@@ -382,12 +464,14 @@ export async function checkForUpdates(root = getProjectRoot()): Promise<UpdateCh
     changelog: await getTagChangelog(tag, root),
     ota: await getOtaReleaseInfo(tag)
   })
-  const latest = tags[0] ? await buildAvailableUpdate(tags[0]) : null
+  let latest: AvailableUpdate | null = null
   const updates: AvailableUpdate[] = []
 
   for (const tag of tags) {
-    if (tag === currentTag || tag === current.version) break
-    updates.push(latest?.version === tag ? latest : await buildAvailableUpdate(tag))
+    if (!isValidReleaseTag(current.version) || compareReleaseTags(tag, current.version) < 0) continue
+    const update = await buildAvailableUpdate(tag)
+    latest ??= update
+    if (compareReleaseTags(tag, current.version) > 0) updates.push(update)
   }
 
   return {

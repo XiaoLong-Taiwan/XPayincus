@@ -1,6 +1,6 @@
 import '../config/env.js'
 import { createHash } from 'crypto'
-import { appendFile, mkdir, cp, rm, writeFile, readdir, stat, lstat, readlink, symlink, rename, statfs, access } from 'fs/promises'
+import { appendFile, mkdir, cp, rm, readFile, writeFile, readdir, stat, lstat, readlink, symlink, rename, statfs, access } from 'fs/promises'
 import { constants, createReadStream, createWriteStream, existsSync } from 'fs'
 import { dirname, join, resolve, sep } from 'path'
 import { spawn } from 'child_process'
@@ -23,6 +23,7 @@ import {
 const taskId = Number(process.argv[2])
 let targetVersion = String(process.argv[3] || '').trim()
 const appDir = resolve(process.env.INCUDAL_APP_DIR || process.cwd())
+let activeAppDir = appDir
 const installDir = resolve(process.env.INSTALL_DIR || deriveInstallDir(appDir))
 const serviceName = process.env.SERVICE_NAME || 'incudal-backend'
 const frontendUrl = process.env.FRONTEND_URL || 'https://pay.xpayincus.com'
@@ -78,7 +79,7 @@ async function run(command: string, args: string[], options: { timeoutMs?: numbe
   await log(`$ ${command} ${args.join(' ')}`)
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(command, args, {
-      cwd: options.cwd || appDir,
+      cwd: options.cwd || activeAppDir,
       env: {
         ...process.env,
         PATH: executionPath,
@@ -117,7 +118,7 @@ async function runCapture(command: string, args: string[], options: { timeoutMs?
   await log(`$ ${command} ${args.join(' ')}`)
   return await new Promise<string>((resolvePromise, reject) => {
     const child = spawn(command, args, {
-      cwd: options.cwd || appDir,
+      cwd: options.cwd || activeAppDir,
       env: {
         ...process.env,
         PATH: executionPath,
@@ -172,7 +173,7 @@ async function commandExists(command: string): Promise<boolean> {
 }
 
 async function assertRequiredCommands(): Promise<void> {
-  const requiredCommands = ['bash', 'corepack', 'curl', 'git', 'pg_dump', 'systemctl', 'tar']
+  const requiredCommands = ['bash', 'corepack', 'curl', 'pg_dump', 'systemctl', 'tar']
   if (process.platform === 'linux') {
     requiredCommands.push('chown', 'id')
   }
@@ -244,7 +245,7 @@ async function deployDatabaseMigrations(): Promise<void> {
   await log('Deploying database migrations from the new release before backend restart')
   await run('pnpm', ['--filter', 'server', 'exec', 'prisma', 'migrate', 'deploy'], {
     timeoutMs: 300000,
-    cwd: appDir
+    cwd: activeAppDir
   })
 }
 
@@ -442,6 +443,7 @@ async function switchCurrentRelease(targetDir: string): Promise<void> {
   await rm(nextLink, { force: true })
   await symlink(targetDir, nextLink)
   await rename(nextLink, currentLink)
+  activeAppDir = targetDir
   await log(`Switched current release to ${targetDir}`)
 }
 
@@ -501,6 +503,17 @@ async function assertArtifactStaging(stagingDir: string): Promise<void> {
   for (const relativePath of requiredPaths) {
     if (!existsSync(join(stagingDir, relativePath))) {
       throw new Error(`OTA artifact is missing required path: ${relativePath}`)
+    }
+  }
+
+  const metadata = JSON.parse(await readFile(join(stagingDir, 'version.json'), 'utf8'))
+  if (metadata?.version !== targetVersion || (metadata.gitTag != null && metadata.gitTag !== targetVersion)) {
+    throw new Error('OTA artifact version.json does not match target version')
+  }
+  for (const relativePath of ['package.json', 'server/package.json']) {
+    const packageMetadata = JSON.parse(await readFile(join(stagingDir, relativePath), 'utf8'))
+    if (packageMetadata?.version !== targetVersion.slice(1)) {
+      throw new Error(`OTA artifact package version does not match target version: ${relativePath}`)
     }
   }
 }
@@ -663,6 +676,10 @@ async function applyArtifactUpdate(artifact: OtaArtifactInfo, backupDir: string,
 }
 
 async function applyGitUpdate(backupDir: string): Promise<string> {
+  if (!(await commandExists('git'))) {
+    throw new Error('OTA Git build mode requires git')
+  }
+  await configureGitSafeDirectory()
   await run('git', ['fetch', '--tags', '--quiet'], { timeoutMs: 120000 })
   await run('git', ['rev-parse', '--verify', `${targetVersion}^{commit}`], { timeoutMs: 30000 })
 
@@ -773,6 +790,7 @@ async function autoRollbackFromBackup(backupDir: string, timestamp: string): Pro
 
   await clearInstallDirPreserving(['update-logs'])
   await cp(backupDir, installDir, { recursive: true, preserveTimestamps: true })
+  activeAppDir = installDir
   await mkdir(join(installDir, '.npm'), { recursive: true })
   await mkdir(join(installDir, '.cache'), { recursive: true })
   await mkdir(join(installDir, 'server/certs'), { recursive: true })
@@ -817,7 +835,6 @@ async function main(): Promise<void> {
   await assertRequiredCommands()
   await cleanupUpdateDownloadDir('更新开始前')
   await assertEnoughDiskSpace('更新开始前', minimumDiskFreeMb)
-  await configureGitSafeDirectory()
 
   const currentVersion = await getCurrentVersionMetadata(appDir)
   await updateTask({ fromVersion: currentVersion.version })

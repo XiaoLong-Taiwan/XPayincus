@@ -203,7 +203,9 @@ run_task() {
 
   apply_secure_ownership
   verify_manifest
-  verify_git_control
+  if [[ -e "${INSTALL_DIR}/.git" || -L "${INSTALL_DIR}/.git" ]]; then
+    verify_git_control
+  fi
 
   local app_dir script
   app_dir="$(resolve_app_dir)"

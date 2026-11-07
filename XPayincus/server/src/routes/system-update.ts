@@ -109,6 +109,21 @@ async function requireUpdateManager(request: FastifyRequest, reply: FastifyReply
   return true
 }
 
+function getContainerUpdateError(): string | null {
+  return process.env.INCUDAL_CONTAINER_DEPLOYMENT === 'true'
+    ? 'Container deployments do not support host system OTA updates or rollback. Back up the database and rebuild with deploy/compose/panel.sh up.'
+    : null
+}
+
+function requireHostSystemUpdate(reply: FastifyReply): boolean {
+  const error = getContainerUpdateError()
+  if (error) {
+    reply.code(409).send({ error, code: 'CONTAINER_OTA_UNSUPPORTED' })
+    return false
+  }
+  return true
+}
+
 export default async function systemUpdateRoutes(fastify: FastifyInstance) {
   fastify.get('/version', {
     onRequest: [fastify.authenticateAdmin]
@@ -120,8 +135,10 @@ export default async function systemUpdateRoutes(fastify: FastifyInstance) {
     onRequest: [fastify.authenticateAdmin]
   }, async (request: FastifyRequest) => {
     const result = await checkForUpdates()
+    const containerUpdateError = getContainerUpdateError()
     return {
       ...result,
+      ...(containerUpdateError ? { repositoryAvailable: false, repositoryError: containerUpdateError } : {}),
       canManageUpdates: await canManageSystemUpdates(getRequestUser(request))
     }
   })
@@ -183,6 +200,7 @@ export default async function systemUpdateRoutes(fastify: FastifyInstance) {
     }
   }, async (request: FastifyRequest<{ Body: StartUpdateBody }>, reply: FastifyReply) => {
     if (!(await requireUpdateManager(request, reply))) return
+    if (!requireHostSystemUpdate(reply)) return
     const targetVersion = request.body.targetVersion.trim()
     if (!isValidReleaseTag(targetVersion)) {
       return reply.code(400).send({ error: 'Target version must be a release tag like v1.2.3', code: 'INVALID_TARGET_VERSION' })
@@ -238,6 +256,7 @@ export default async function systemUpdateRoutes(fastify: FastifyInstance) {
     onRequest: [fastify.authenticateAdmin]
   }, async (request: FastifyRequest<{ Params: TaskParams }>, reply: FastifyReply) => {
     if (!(await requireUpdateManager(request, reply))) return
+    if (!requireHostSystemUpdate(reply)) return
     const id = parsePositiveId(request.params.id)
     if (!id) return reply.code(400).send({ error: 'Invalid task id', code: 'INVALID_TASK_ID' })
     const task = await getSystemUpdateTask(id)

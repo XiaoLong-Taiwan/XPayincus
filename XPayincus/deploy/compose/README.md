@@ -72,7 +72,8 @@ CLI 停止的範圍僅限本 Compose 面板；操作人員須另外停止外部�
 - DB archive 不含 `secrets/`、`.env`、`panel_certs` volume、Incus 實例資料、ZFS、RFW 或任何外部儲存檔案。請另外安全備份配置及憑證。移機還原時必須保留原 `ENCRYPTION_KEY`，否則已加密的資料無法解密；JWT／cookie 密鑰變動會使既有登入失效。
 - 面板對 Incus 使用的 `client.crt`／`client.key` 存放於 `/opt/incudal/server/certs` named volume。既有部署搬遷須以安全離線流程保留原憑證，並確保 Node UID 1000 能讀取；新憑證須依既有流程建立信任。
 - PostgreSQL 密碼採 hex 以安全組合連線 URL；請勿隨意更換其 secret。既有 PostgreSQL volume 不會因修改 `POSTGRES_PASSWORD_FILE` 而更新角色密碼。
-- 不支援容器內 systemd／sudo OTA；面板中的舊線上更新功能不適用。更新請選定原始碼版本、先備份，再執行 `up` 重建；不提供自動 migration 回滾。
+- Compose 固定向 API 注入 `INCUDAL_CONTAINER_DEPLOYMENT: 'true'`，禁止容器呼叫宿主 systemd／sudo OTA 更新或回滾；不要移除或覆寫此旗標。`GET /api/admin/system-update/version` 保留版本查詢，`GET /api/admin/system-update/check` 保留目前版本與 release 資訊，但回傳 `repositoryAvailable: false` 及 `repositoryError` 說明容器不可 OTA 與備份後重建方式，管理權限欄位仍按既有規則判定。
+- 通過既有管理權限檢查後，`POST /api/admin/system-update/start` 與 `POST /api/admin/system-update/tasks/:id/rollback` 會回傳 HTTP 409、`CONTAINER_OTA_UNSUPPORTED`，在建立／修改任務、建立日誌目錄或啟動 worker 之前拒絕。更新請選定原始碼版本、先備份，再執行 `bash deploy/compose/panel.sh up` 重建；不提供自動 migration 回滾。
 - Docker 建置使用專屬 allowlist ignore，排除本地依賴、環境檔、憑證及備份；runtime 保留 Prisma CLI 與建置依賴以沿用現有 workspace，尚未進行映像精簡與供應鏈掃描。基底映像固定主要版本標籤但未鎖 digest。
 - Docker 管理員及主機 root 能讀取 Compose file secrets 與容器環境；這些檔案不是外部 secrets manager。勿上傳 secrets、備份或展開後的含密鑰環境。
 

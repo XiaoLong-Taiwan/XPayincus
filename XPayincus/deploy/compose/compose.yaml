@@ -39,6 +39,7 @@ services:
     init: true
     environment:
       NODE_ENV: production
+      INCUDAL_CONTAINER_DEPLOYMENT: 'true'
       HOST: 0.0.0.0
       PORT: '3001'
       TRUST_PROXY: 'true'

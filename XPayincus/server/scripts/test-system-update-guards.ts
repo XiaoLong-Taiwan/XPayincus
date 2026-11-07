@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import {
+  canApplyUpdate,
+  checkForUpdates,
+  compareReleaseTags,
+  getOtaReleaseInfo,
+  getRuntimeArch,
+  getRuntimePlatform,
+  isValidReleaseTag,
+  selectRuntimeArtifact
+} from '../src/lib/system-version.js'
 
 const repoRoot = resolve(import.meta.dirname, '../..')
 
@@ -62,15 +74,13 @@ assert.ok(
   'system update must only accept controlled release tags, keep the Git working-tree probe available, expose OTA manifest metadata, and reject extra input'
 )
 
-// OTA 的 artifact 模式（下载 release 包 + 校验 sha256 + 原子发布）不需要 Git —— Git 只是拿不到
-// artifact 时「在机器上从源码构建」的回退路径。用 release 包部署（一键脚本的默认形态）的机器
-// 曾被入口处的硬性 Git 检查整个挡在门外，无法在线更新。因此判定必须是「有本机可用 artifact
-// 或 是 Git 工作区」，且这个判定必须在所有入口保持一致，绝不能退回成无条件要求 Git。
 assert.ok(
   versionLib.includes('export async function hasUsableOtaArtifact') &&
     versionLib.includes('export async function canApplyUpdate') &&
     versionLib.includes('if (await hasUsableOtaArtifact(tag)) return true') &&
     versionLib.includes('return await isGitRepository(root)') &&
+    versionLib.includes("SYSTEM_UPDATE_APPLY_MODE?.trim().toLowerCase() === 'git'") &&
+    versionLib.includes('compareReleaseTags(tag, current.version) <= 0') &&
     versionLib.includes('async function listReleaseTagsFromGitHub') &&
     versionLib.includes('/releases?per_page=30') &&
     versionLib.includes('async function checkForUpdatesWithoutGit') &&
@@ -79,18 +89,19 @@ assert.ok(
     !route.includes('if (!(await isGitRepository()))') &&
     !startTask.includes('if (!(await isGitRepository(appDir)))') &&
     !onlineScript.includes('在线更新需要 /opt/incudal 是包含 release tag 的 Git checkout'),
-  'online updates must be allowed whenever a usable OTA artifact exists, falling back to requiring a Git checkout only for source-build mode; no entry point may hard-require Git again'
+  'online update entry points must reject downgrades and require a usable OTA artifact unless Git source-build mode is explicitly selected'
 )
 
 assert.ok(
-  versionLib.includes('const latest = tags[0] ? await buildAvailableUpdate(tags[0]) : null') &&
-    versionLib.includes('updates.push(latest?.version === tag ? latest : await buildAvailableUpdate(tag))') &&
+  versionLib.includes('compareReleaseTags(right, left)') &&
+    versionLib.includes('if (!update.ota.manifestAvailable) continue') &&
+    versionLib.includes('if (compareReleaseTags(tag, current.version) > 0) updates.push(update)') &&
     versionLib.includes('latest,') &&
     versionLib.includes('updateAvailable: updates.length > 0') &&
     route.includes('canManageUpdates: await canManageSystemUpdates(getRequestUser(request))') &&
     route.includes("fastify.post<{ Body: StartUpdateBody }>('/start'") &&
     route.includes('if (!(await requireUpdateManager(request, reply))) return'),
-  'system update checks must always expose the newest release tag while keeping updateAvailable and mutation permissions separate'
+  'system update checks must order versions, exclude invalid OTA releases and older tags, and keep mutation permissions separate'
 )
 
 assert.ok(
@@ -201,7 +212,7 @@ assert.ok(
 )
 
 assert.ok(
-  runTask.includes("const requiredCommands = ['bash', 'corepack', 'curl', 'git', 'pg_dump', 'systemctl', 'tar']") &&
+  runTask.includes("const requiredCommands = ['bash', 'corepack', 'curl', 'pg_dump', 'systemctl', 'tar']") &&
     runTask.includes('async function backupDatabase') &&
     runTask.includes('db-pre-migrate-${targetVersion}-${timestamp}.sql') &&
     runTask.includes("run('pg_dump', ['--format=plain', '--no-owner', '--no-privileges', '--file', temporaryPath]") &&
@@ -273,6 +284,56 @@ assert.ok(
   'root helpers must verify sealed releases, preserve root ownership, and reject broadened systemctl/chown arguments'
 )
 
+for (const worker of [runTask, rollbackTask]) {
+  assert.ok(
+    worker.includes('let activeAppDir = appDir') &&
+      worker.includes('cwd: options.cwd || activeAppDir') &&
+      !worker.includes('cwd: options.cwd || appDir') &&
+      !worker.includes('cwd: options.cwd || installDir') &&
+      /await rename\(nextLink, currentLink\)\s+activeAppDir = targetDir/.test(worker) &&
+      /await cp\(backup(?:Dir|Path), installDir, \{ recursive: true, preserveTimestamps: true \}\)\s+activeAppDir = installDir/.test(worker),
+    'update and rollback commands must follow the successfully switched release or restored legacy install'
+  )
+}
+
+const migrationTask = runTask.slice(runTask.indexOf('async function deployDatabaseMigrations'), runTask.indexOf('async function waitForBackendHealth'))
+const artifactStaging = runTask.slice(runTask.indexOf('async function assertArtifactStaging'), runTask.indexOf('async function clearInstallDirPreserving'))
+const artifactApply = runTask.slice(runTask.indexOf('async function applyArtifactUpdate'), runTask.indexOf('async function applyGitUpdate'))
+const gitApply = runTask.slice(runTask.indexOf('async function applyGitUpdate'), runTask.indexOf('async function verifyUpdatedRuntime'))
+const helperTask = onlineTaskHelper.slice(onlineTaskHelper.indexOf('run_task()'), onlineTaskHelper.indexOf('case "${1:-}"'))
+
+assert.ok(
+  migrationTask.includes('cwd: activeAppDir') && !migrationTask.includes('cwd: appDir') &&
+    runTask.includes('await switchCurrentRelease(releaseDir)') &&
+    runTask.includes('await switchCurrentRelease(backupDir)') &&
+    rollbackTask.includes('await switchCurrentRelease(backupPath)'),
+  'migrations and acceptance commands must use the applied release, including automatic and manual rollback'
+)
+
+assert.ok(
+  artifactStaging.includes("JSON.parse(await readFile(join(stagingDir, 'version.json'), 'utf8'))") &&
+    artifactStaging.includes('metadata?.version !== targetVersion') &&
+    artifactStaging.includes('metadata.gitTag != null && metadata.gitTag !== targetVersion') &&
+    artifactStaging.includes("['package.json', 'server/package.json']") &&
+    artifactStaging.includes("JSON.parse(await readFile(join(stagingDir, relativePath), 'utf8'))") &&
+    artifactStaging.includes('packageMetadata?.version !== targetVersion.slice(1)') &&
+    artifactApply.indexOf("await run('tar'") < artifactApply.indexOf('await assertArtifactStaging(stagingDir)') &&
+    artifactApply.indexOf('await assertArtifactStaging(stagingDir)') < artifactApply.indexOf('return await applyArtifactAtomic') &&
+    artifactApply.indexOf('await assertArtifactStaging(stagingDir)') < artifactApply.indexOf('return await applyArtifactLegacy'),
+  'extracted artifacts must match the requested version in version.json and root/server packages before either apply path'
+)
+
+assert.ok(
+  (runTask.match(/await configureGitSafeDirectory\(\)/g) ?? []).length === 1 &&
+    gitApply.includes("if (!(await commandExists('git')))") &&
+    gitApply.includes('await configureGitSafeDirectory()') &&
+    gitApply.indexOf('await configureGitSafeDirectory()') < gitApply.indexOf("await run('git', ['fetch'") &&
+    /apply_secure_ownership\s+verify_manifest\s+if \[\[ -e "\$\{INSTALL_DIR\}\/\.git" \|\| -L "\$\{INSTALL_DIR\}\/\.git" \]\]; then\s+verify_git_control\s+fi/.test(helperTask) &&
+    helperTask.indexOf('verify_manifest') < helperTask.indexOf('/usr/bin/node') &&
+    helperTask.includes('if [[ "$status" -eq 0 ]]; then\n    write_manifest\n  fi'),
+  'artifact workers must not require Git while all root tasks still verify the seal and existing Git metadata before execution'
+)
+
 assert.ok(
   runTask.includes("pnpm', ['install', '--frozen-lockfile', '--prod=false']") &&
     runTask.includes("NODE_ENV: 'development'") &&
@@ -330,5 +391,162 @@ assert.ok(
     atomicMigrationScript.includes('bash "$current_link/scripts/verify-split-host.sh"'),
   'atomic OTA migration script must create current/releases layout, rewrite systemd units, and verify the split host'
 )
+
+const originalFetch = globalThis.fetch
+const savedEnvironment = new Map(['SYSTEM_UPDATE_RELEASE_REPOSITORY', 'SYSTEM_UPDATE_APPLY_MODE']
+  .map(key => [key, process.env[key]] as const))
+const fixtureRoot = await mkdtemp(resolve(tmpdir(), 'xpayincus-version-'))
+
+try {
+  process.env.SYSTEM_UPDATE_RELEASE_REPOSITORY = 'fixture/unified'
+  process.env.SYSTEM_UPDATE_APPLY_MODE = 'auto'
+  const tag = 'v1.1.0'
+  const base = `https://github.com/fixture/unified/releases/download/${tag}`
+  const panel = {
+    name: `xpayincus-panel-${tag}-linux-amd64.tar.gz`,
+    platform: 'linux', arch: 'amd64', url: `${base}/xpayincus-panel-${tag}-linux-amd64.tar.gz`,
+    sha256: 'a'.repeat(64), size: 1024
+  }
+  const validManifest = {
+    schemaVersion: 1, product: 'xpayincus', releaseChannel: 'unified-v1',
+    version: tag, gitTag: tag, artifacts: [panel]
+  }
+  const validRelease = {
+    tag_name: tag, draft: false, prerelease: false,
+    assets: [
+      { name: `xpayincus-panel-${tag}-ota-manifest.json`, browser_download_url: `${base}/named.json` },
+      { name: 'ota-manifest.json', browser_download_url: `${base}/generic.json` },
+      { name: panel.name, browser_download_url: panel.url }
+    ]
+  }
+  let manifest: unknown = validManifest
+  let release: unknown = validRelease
+  const requests: string[] = []
+  globalThis.fetch = (async input => {
+    const url = String(input)
+    requests.push(url)
+    return new Response(JSON.stringify(url.startsWith('https://api.github.com/') ? release : manifest))
+  }) as typeof fetch
+
+  assert.equal((await getOtaReleaseInfo(tag)).manifestAvailable, true)
+  assert.ok(requests.includes(`${base}/named.json`))
+  assert.ok(!requests.includes(`${base}/generic.json`))
+  for (const invalid of [
+    null, {}, { ...validManifest, schemaVersion: '1' }, { ...validManifest, schemaVersion: 2 },
+    { ...validManifest, product: 'agent' }, { ...validManifest, releaseChannel: undefined },
+    { ...validManifest, releaseChannel: 'legacy' }, { ...validManifest, version: 'v1.5.9' },
+    { ...validManifest, gitTag: 'v1.5.9' }, { ...validManifest, artifacts: {} },
+    { ...validManifest, artifacts: [panel, panel] },
+    { ...validManifest, artifacts: [panel, { ...panel, sha256: 'invalid' }] },
+    { ...validManifest, artifacts: [panel, { ...panel, name: panel.name.replace(tag, 'v1.5.9') }] },
+    { ...validManifest, artifacts: [{ ...panel, name: panel.name.replace(tag, 'v1.5.9') }] },
+    { ...validManifest, artifacts: [{ ...panel, sha256: 'invalid' }] },
+    { ...validManifest, artifacts: [{ ...panel, url: panel.url.replace(tag, 'v1.5.9') }] },
+    { ...validManifest, artifacts: [{ ...panel, name: 'xpayincus-agent-v1.1.0-linux-amd64' }] },
+    { ...validManifest, artifacts: [{ ...panel, name: 'xpayincus-dashboard-v1.1.0-compose.tar.gz' }] }
+  ]) {
+    manifest = invalid
+    const result = await getOtaReleaseInfo(tag)
+    assert.equal(result.manifestAvailable, false)
+    assert.deepEqual(result.artifacts, [])
+  }
+  manifest = { ...validManifest, artifacts: [{ ...panel, name: 'xpayincus-rfw-v1.1.0-linux-amd64' }, panel] }
+  assert.deepEqual((await getOtaReleaseInfo(tag)).artifacts, [panel])
+  manifest = validManifest
+  for (const invalid of [
+    { ...validRelease, tag_name: 'v1.5.9' }, { ...validRelease, draft: true },
+    { ...validRelease, prerelease: true }, { ...validRelease, assets: [] },
+    { ...validRelease, assets: [...validRelease.assets, validRelease.assets[0]] },
+    { ...validRelease, assets: [...validRelease.assets, validRelease.assets[2]] },
+    { ...validRelease, assets: validRelease.assets.slice(0, 2) }
+  ]) {
+    release = invalid
+    assert.equal((await getOtaReleaseInfo(tag)).manifestAvailable, false)
+  }
+  release = validRelease
+  const requestCount = requests.length
+  assert.equal((await getOtaReleaseInfo('../v1.1.0')).manifestAvailable, false)
+  assert.equal(requests.length, requestCount)
+
+  const runtimePanel = {
+    ...panel, platform: getRuntimePlatform(), arch: getRuntimeArch(),
+    name: `xpayincus-panel-${tag}-${getRuntimePlatform()}-${getRuntimeArch()}.tar.gz`
+  }
+  const agent = { ...runtimePanel, name: runtimePanel.name.replace('panel', 'agent') }
+  assert.equal(selectRuntimeArtifact([agent, runtimePanel], tag), runtimePanel)
+  assert.equal(selectRuntimeArtifact([runtimePanel, runtimePanel], tag), null)
+  assert.equal(selectRuntimeArtifact([agent], tag), null)
+  assert.equal(selectRuntimeArtifact([runtimePanel], 'v1.5.9'), null)
+  assert.equal(selectRuntimeArtifact([{ ...runtimePanel, name: `${runtimePanel.name}.sha256` }]), null)
+
+  for (const invalid of ['v01.0.0', 'v1.0.0-01', 'v1.0.0-a..b', 'v1.0.0 ', 'v1.0', '../v1.0.0']) {
+    assert.equal(isValidReleaseTag(invalid), false)
+  }
+  assert.ok(compareReleaseTags('v1.10.0', 'v1.9.0') > 0)
+  assert.ok(compareReleaseTags('v1.0.0', 'v1.0.0-rc.10') > 0)
+  assert.ok(compareReleaseTags('v1.0.0-rc.10', 'v1.0.0-rc.2') > 0)
+  assert.ok(compareReleaseTags('v1.0.0-2', 'v1.0.0-alpha') < 0)
+  assert.equal(compareReleaseTags('v1.0.0+one', 'v1.0.0+two'), 0)
+  assert.equal(isValidReleaseTag('v1.0.0-rc.1+build.2'), true)
+  assert.equal(compareReleaseTags('v1.0.0-rc.1+build.2', 'v1.0.0-rc.1+build.3'), 0)
+
+  const rootManifestGenerator = read('../scripts/generate-release-manifests.mjs')
+  assert.ok(rootManifestGenerator.includes("releaseChannel: 'unified-v1'"))
+  let listedTags = ['v1.0.1', 'v1.5.9', 'v1.10.0', 'v1.9.0', 'v0.9.0', 'v1.10.0']
+  globalThis.fetch = (async input => {
+    const url = String(input)
+    if (url.endsWith('/releases?per_page=30')) {
+      return new Response(JSON.stringify(listedTags.map(tag_name => ({ tag_name }))))
+    }
+    const match = /\/releases\/tags\/([^/]+)$/.exec(url)
+    if (match) {
+      const version = decodeURIComponent(match[1]!)
+      const name = `xpayincus-panel-${version}-linux-amd64.tar.gz`
+      const downloadBase = `https://github.com/fixture/unified/releases/download/${version}`
+      return new Response(JSON.stringify({ tag_name: version, assets: [
+        { name: 'ota-manifest.json', browser_download_url: `${downloadBase}/ota-manifest.json` },
+        { name, browser_download_url: `${downloadBase}/${name}` }
+      ] }))
+    }
+    const version = url.split('/').at(-2)!
+    const name = `xpayincus-panel-${version}-linux-amd64.tar.gz`
+    return new Response(JSON.stringify({
+      ...validManifest, version, gitTag: version,
+      releaseChannel: version === 'v1.5.9' ? undefined : 'unified-v1',
+      artifacts: [{ ...panel, name, url: url.replace('ota-manifest.json', name) }]
+    }))
+  }) as typeof fetch
+  await writeFile(resolve(fixtureRoot, 'version.json'), JSON.stringify({ version: 'v1.2.0', gitTag: 'v0.1.0' }))
+  const result = await checkForUpdates(fixtureRoot)
+  assert.equal(result.latest?.version, 'v1.10.0')
+  assert.deepEqual(result.updates.map(update => update.version), ['v1.10.0', 'v1.9.0'])
+  await writeFile(resolve(fixtureRoot, 'version.json'), JSON.stringify({ version: 'v1.10.0' }))
+  const currentRelease = await checkForUpdates(fixtureRoot)
+  assert.equal(currentRelease.latest?.version, 'v1.10.0')
+  assert.equal(currentRelease.updateAvailable, false)
+  listedTags = ['v1.0.0', 'v0.9.0']
+  await writeFile(resolve(fixtureRoot, 'version.json'), JSON.stringify({ version: 'v1.5.9' }))
+  const legacy = await checkForUpdates(fixtureRoot)
+  assert.equal(legacy.latest, null)
+  assert.equal(legacy.updateAvailable, false)
+  assert.equal(await canApplyUpdate('v1.0.0', fixtureRoot), false)
+  assert.equal(await canApplyUpdate('v1.5.9', fixtureRoot), false)
+
+  globalThis.fetch = (async () => new Response('{}', { status: 404 })) as typeof fetch
+  assert.equal((await checkForUpdates(fixtureRoot)).repositoryAvailable, false)
+  assert.equal(await canApplyUpdate('v9.0.0', repoRoot), false)
+  process.env.SYSTEM_UPDATE_APPLY_MODE = 'artifact'
+  assert.equal(await canApplyUpdate('v9.0.0', repoRoot), false)
+  process.env.SYSTEM_UPDATE_APPLY_MODE = 'git'
+  assert.equal(await canApplyUpdate('v1.0.0', fixtureRoot), false)
+  assert.equal(await canApplyUpdate('v9.0.0', fixtureRoot), false)
+} finally {
+  globalThis.fetch = originalFetch
+  for (const [key, value] of savedEnvironment) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  await rm(fixtureRoot, { recursive: true, force: true })
+}
 
 console.log('system update guard tests passed')
