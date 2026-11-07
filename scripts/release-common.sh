@@ -2,15 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="$(tr -d '\r\n' < "$ROOT_DIR/VERSION")"
+VERSION="$(node "$ROOT_DIR/scripts/release-contract.mjs")"
 export VERSION
 DIST_DIR="${DIST_DIR:-${ROOT_DIR}/dist/unified}"
-[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { printf 'Invalid root VERSION\n' >&2; exit 1; }
 mkdir -p "$DIST_DIR"
 DIST_DIR="$(cd "$DIST_DIR" && pwd)"
 
 require_new() {
   [[ ! -e "$1" && ! -L "$1" ]] || { printf 'Refusing to overwrite: %s\n' "$1" >&2; exit 1; }
+}
+
+publish_file() {
+  require_new "$2"
+  ln -T -- "$1" "$2"
 }
 
 native_arch() {

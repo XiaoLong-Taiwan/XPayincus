@@ -107,6 +107,12 @@ services:
         condition: service_healthy
     networks:
       - panel
+    healthcheck: &web-healthcheck
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/index.html]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 6
     logging: *logging
 
   admin:
@@ -127,6 +133,7 @@ services:
         condition: service_healthy
     networks:
       - panel
+    healthcheck: *web-healthcheck
     logging: *logging
 
 networks:

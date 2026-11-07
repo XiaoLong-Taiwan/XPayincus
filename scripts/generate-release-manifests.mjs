@@ -1,30 +1,26 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { fileURLToPath } from 'node:url'
+import { artifactNames, assertArtifacts, composeImages, validateVersions } from './release-contract.mjs'
 
-const version = fs.readFileSync(fileURLToPath(new URL('../VERSION', import.meta.url)), 'utf8').trim()
+const version = validateVersions()
 const directory = path.resolve(process.argv[2] || 'dist/unified')
 const repository = process.env.RELEASE_REPOSITORY || process.env.GITHUB_REPOSITORY
-if (!/^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid root VERSION')
 if (!/^[\w.-]+\/[\w.-]+$/.test(repository || '')) throw new Error('Set RELEASE_REPOSITORY=owner/repository')
-const base = `https://github.com/${repository}/releases/download/${version}`
-const names = ['manifest.json', `xpayincus-zfs-builder-${version}-source.tar.gz`, `xpayincus-dashboard-${version}-compose.tar.gz`]
-for (const arch of ['amd64', 'arm64']) {
-  names.push(`xpayincus-panel-${version}-linux-${arch}.tar.gz`)
-  names.push(`xpayincus-agent-${version}-linux-${arch}`, `xpayincus-agent-${version}-linux-${arch}.gz`)
-  names.push(`xpayincus-rfw-${version}-linux-${arch}`)
-}
+const base = `https://github.com/${repository}/releases/download/${encodeURIComponent(version)}`
+const names = artifactNames(version)
+assertArtifacts(directory, names)
 const records = []
 for (const name of names.sort()) {
   const file = path.join(directory, name)
   if (!fs.lstatSync(file).isFile()) throw new Error(`Not a regular artifact: ${name}`)
   const hash = crypto.createHash('sha256')
   for await (const chunk of fs.createReadStream(file)) hash.update(chunk)
-  records.push({ name, sha256: hash.digest('hex'), size: fs.statSync(file).size, url: `${base}/${name}` })
+  records.push({ name, sha256: hash.digest('hex'), size: fs.statSync(file).size, url: `${base}/${encodeURIComponent(name)}` })
 }
 const agent = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
 if (agent.version !== version) throw new Error('Agent manifest version mismatch')
+if (Object.keys(agent.files || {}).sort().join(',') !== 'linux-amd64,linux-arm64') throw new Error('Agent manifest architecture set mismatch')
 for (const arch of ['amd64', 'arm64']) {
   const record = records.find(item => item.name === `xpayincus-agent-${version}-linux-${arch}.gz`)
   const entry = agent.files?.[`linux-${arch}`]
@@ -53,6 +49,12 @@ outputs.set('ota-manifest.json', json(ota))
 outputs.set(`xpayincus-panel-${version}-ota-manifest.json`, json(ota))
 outputs.set('release-manifest.json', json({
   schemaVersion: 1, product: 'xpayincus', releaseChannel: 'unified-v1', version, buildTime, artifacts: records,
+  compose: {
+    artifact: `xpayincus-dashboard-${version}-compose.tar.gz`,
+    projectName: 'incudal-panel',
+    override: 'XPayincus/deploy/compose/compose.release.yaml',
+    images: composeImages(version)
+  },
   zfs: {
     status: 'source-only',
     kernelModulesBuilt: false,
@@ -71,3 +73,4 @@ for (const name of outputs.keys()) {
   if (fs.existsSync(path.join(directory, name))) throw new Error(`Refusing to overwrite: ${name}`)
 }
 for (const [name, content] of outputs) fs.writeFileSync(path.join(directory, name), content, { flag: 'wx' })
+assertArtifacts(directory, [...names, ...outputs.keys()])

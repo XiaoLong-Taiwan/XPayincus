@@ -12,5 +12,8 @@ require_new "$OUTPUT"
 cd "$ROOT_DIR/XPayincus-RFW"
 CC=musl-gcc CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
   cargo build --locked --package rfw --release --target "$TARGET"
-cp "target/$TARGET/release/rfw" "$OUTPUT"
-chmod +x "$OUTPUT"
+STAGING="$(mktemp -d "$DIST_DIR/.rfw.XXXXXXXX")"
+trap 'rm -rf -- "$STAGING"' EXIT
+cp "target/$TARGET/release/rfw" "$STAGING/rfw"
+chmod +x "$STAGING/rfw"
+publish_file "$STAGING/rfw" "$OUTPUT"

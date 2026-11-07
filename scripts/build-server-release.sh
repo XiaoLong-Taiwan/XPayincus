@@ -6,7 +6,6 @@ ARCH="$(native_arch)"
 OUTPUT="$DIST_DIR/xpayincus-panel-${VERSION}-linux-${ARCH}.tar.gz"
 require_new "$OUTPUT"
 cd "$ROOT_DIR/XPayincus"
-node --input-type=module -e 'import fs from "node:fs"; for (const p of ["package.json", "server/package.json", "client/package.json"]) { if (`v${JSON.parse(fs.readFileSync(p)).version}` !== process.env.VERSION) throw new Error(`Version mismatch with root VERSION: ${p}`) }'
 export CI=1
 export DATABASE_URL="${DATABASE_URL:-postgresql://user:pass@localhost:5432/db}"
 pnpm install --frozen-lockfile --ignore-scripts
@@ -14,8 +13,9 @@ pnpm rebuild esbuild
 pnpm --filter server exec prisma generate
 pnpm --filter client build
 pnpm --filter server build
-STAGING="$(mktemp -d)"
-trap 'rm -rf -- "$STAGING"' EXIT
+STAGING="$(mktemp -d "$DIST_DIR/.server.XXXXXXXX")"
+ARCHIVE="$(mktemp "$DIST_DIR/.server-archive.XXXXXXXX")"
+trap 'rm -rf -- "$STAGING"; rm -f -- "$ARCHIVE"' EXIT
 mkdir -p "$STAGING/client/dist" "$STAGING/server" "$STAGING/deploy" "$STAGING/scripts"
 cp -a client/dist/. "$STAGING/client/dist/"
 for entry in dist prisma prisma.config.ts package.json templates; do
@@ -47,4 +47,5 @@ NODE
   pnpm install --prod --frozen-lockfile --ignore-scripts --filter server
   pnpm --filter server exec prisma generate
 )
-tar -czf "$OUTPUT" -C "$STAGING" .
+tar -czf "$ARCHIVE" -C "$STAGING" .
+publish_file "$ARCHIVE" "$OUTPUT"

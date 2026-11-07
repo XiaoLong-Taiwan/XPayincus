@@ -15,13 +15,14 @@ usage() {
   printf '%s\n' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain' \
     'bash deploy/compose/panel.sh up|down|status' \
+    'bash deploy/compose/panel.sh logs [db|api|user|admin]' \
     'bash deploy/compose/panel.sh export /absolute/path/panel.dump' \
     'bash deploy/compose/panel.sh import /absolute/path/panel.dump --confirm-replace-incudal'
 }
 
 case "$command_name" in
   help|-h|--help) usage; exit 0 ;;
-  init|up|down|status|export|import) ;;
+  init|up|down|status|logs|export|import) ;;
   *) usage; exit 2 ;;
 esac
 
@@ -41,8 +42,10 @@ if [[ "$command_name" == init ]]; then
   mkdir -m 700 -- "$base/secrets"
   openssl rand -hex 32 >"$base/secrets/postgres_password"
   for secret_name in jwt_secret cookie_secret encryption_key admin_password; do
-    printf 'Aa1!%s\n' "$(openssl rand -base64 48 | tr -d '\n')" >"$base/secrets/$secret_name"
+    secret_value="$(openssl rand -base64 48 | tr -d '\n')"
+    printf 'Aa1!%s\n' "$secret_value" >"$base/secrets/$secret_name"
   done
+  unset secret_value
   printf 'FRONTEND_URL=%s\nADMIN_FRONTEND_URL=%s\nADMIN_EMAIL=%s\nUSER_PORT=8080\nADMIN_PORT=8081\n' "$1" "$2" "$3" >"$base/.env"
   printf '%s\n' '設定與獨立密鑰已建立。管理員帳號：admin；密碼存於 deploy/compose/secrets/admin_password。請用安全方式讀取。'
   exit 0
@@ -51,6 +54,10 @@ fi
 [[ -f "$base/.env" ]] || die '請先執行 init。'
 command -v docker >/dev/null || die '需要 Docker 與 Compose v2。'
 compose=(docker compose --project-name incudal-panel --env-file "$base/.env" --file "$base/compose.yaml")
+if [[ -e "$base/compose.release.yaml" || -L "$base/compose.release.yaml" ]]; then
+  [[ -f "$base/compose.release.yaml" && -r "$base/compose.release.yaml" && -s "$base/compose.release.yaml" ]] || die 'compose.release.yaml 必須是可讀、非空的一般檔案。'
+  compose+=(--file "$base/compose.release.yaml")
+fi
 scratch=''
 cleanup() {
   if [[ -n "$scratch" ]]; then rm -rf -- "$scratch"; fi
@@ -84,6 +91,13 @@ export_database() {
 case "$command_name" in
   up)
     (($# == 0)) || die 'up 不接受額外參數。'
+    for required_file in package.json pnpm-lock.yaml pnpm-workspace.yaml client/package.json client/index.html client/vite.config.ts server/package.json server/tsconfig.json server/src/app.ts server/prisma.config.ts server/prisma/schema.prisma server/prisma/migrations/migration_lock.toml server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template; do
+      [[ -r "$base/../../$required_file" && -s "$base/../../$required_file" ]] || die "缺少或無法讀取必要檔案：$required_file；請使用完整面板原始碼。"
+    done
+    for secret_name in postgres_password jwt_secret cookie_secret encryption_key admin_password; do
+      [[ -r "$base/secrets/$secret_name" && -s "$base/secrets/$secret_name" ]] || die "缺少、無法讀取或為空的 secret：$secret_name；請檢查原有配置，勿重新產生既有密鑰。"
+    done
+    "${compose[@]}" config --quiet
     "${compose[@]}" build
     "${compose[@]}" stop user admin api
     "${compose[@]}" up -d --wait --wait-timeout 300
@@ -95,7 +109,14 @@ case "$command_name" in
     ;;
   status)
     (($# == 0)) || die 'status 不接受額外參數。'
-    "${compose[@]}" ps
+    "${compose[@]}" ps --all
+    ;;
+  logs)
+    (($# <= 1)) || die 'logs 最多接受一個服務名稱。'
+    if (($#)); then
+      case "$1" in db|api|user|admin) ;; *) die '服務名稱必須是 db、api、user 或 admin。' ;; esac
+    fi
+    "${compose[@]}" logs --tail 100 "$@"
     ;;
   export)
     (($# == 1)) || die 'export 需要一個備份絕對路徑。'
