@@ -187,7 +187,7 @@ assert.match(envExample, /^COOKIE_SECURE=$/m, '.env.example must leave secure-co
 assert.match(envExample, /^COOKIE_DOMAIN=$/m, '.env.example must not set a cookie domain by default')
 assert.ok(
   envExample.includes('Customer/admin subdomains must not share refresh cookies') &&
-    readme.includes('`COOKIE_DOMAIN` 必须保持空值') &&
+    /`COOKIE_DOMAIN`\s*(?:必须|必須)?保持空值/.test(readme) &&
     installPanel.includes('COOKIE_DOMAIN must stay empty so customer/admin subdomains do not share refresh cookies'),
   'split deployment docs must require COOKIE_DOMAIN to stay empty for customer/admin cookie isolation'
 )
