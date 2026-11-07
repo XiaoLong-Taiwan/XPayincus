@@ -82,7 +82,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/xiaolong-taiwan/xpayincus-${{ matrix.target }}
+          images: ghcr.io/xiaolong-taiwan/xpayincus-${{ matrix.target == 'web' && 'panel-web' || 'api' }}
           tags: type=raw,value=${{ needs.prepare.outputs.tag }}
           labels: |
             org.opencontainers.image.title=XPayincus ${{ matrix.target }}
@@ -97,7 +97,7 @@ jobs:
           target: ${{ matrix.target }}
           platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.metadata.outputs.labels }}
-          outputs: type=image,name=ghcr.io/xiaolong-taiwan/xpayincus-${{ matrix.target }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/xiaolong-taiwan/xpayincus-${{ matrix.target == 'web' && 'panel-web' || 'api' }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=docker-${{ matrix.target }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=docker-${{ matrix.target }}-${{ matrix.arch }}
       - name: Save architecture digest

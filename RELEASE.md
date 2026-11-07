@@ -25,7 +25,7 @@ GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent �
 
 `.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（目前 `v1.0.2`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
 
-API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,web}:sha-<完整 commit SHA>` 及版本標籤。目前版本標籤為 `:v1.0.2`。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
+API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。目前版本標籤為 `:v1.0.2`。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
 
 發布前同時核對 API／web：既有版本 index 的 revision、version、source 與兩種架構必須符合，且內容必須與該 commit 的 SHA index 完全一致，缺少 SHA 證據或不同 commit 一律失敗。所有 Docker workflow 共用 concurrency group 且不取消執行中的發布；重跑保留既有 SHA index，不以新建置覆寫它，再補上尚未發布的版本標籤。手動發布後，之後同版本 Git tag 必須指向相同 commit；若 main 已新增 commit，須升版，不能重新指定舊版映像。兩個 GHCR package 的標籤更新不是跨 package 原子交易，失敗可能留下部分完成標籤，可在同 commit 重跑補齊。
 
@@ -54,7 +54,7 @@ Agent 宿主元件以 [bundle／管理文件](XPayincus-Agent/components/README.
 
 產物固定為 `xpayincus-dashboard-${VERSION}-compose.tar.gz`，與 OTA 的 `xpayincus-panel-*` 分開。保留根 `VERSION`、`XPayincus/package.json`、pnpm lock/workspace、完整 client/server 原始碼與 `XPayincus/deploy/compose`。封裝時另產生 `XPayincus/deploy/compose/compose.release.yaml`，並核對封裝來源的根／panel／client／server 版本。原有 `../..` build context、`incudal-panel` 專案名稱與單一 API 限制不變。
 
-發行 override 僅釘選 `ghcr.io/xiaolong-taiwan/xpayincus-api:${IMAGE_TAG}` 與雙前端共用的 `ghcr.io/xiaolong-taiwan/xpayincus-web:${IMAGE_TAG}`，不加入 build。`IMAGE_TAG` 為根版本，僅將 Docker tag 不接受的 `+` 轉成 `_`；例如 `v1.0.2+build.1` 對應 `v1.0.2_build.1`。不截斷、不使用 `latest`，超過 128 字元即拒絕；原始版本與包名維持完整 SemVer。預設 `panel.sh up` 拉取全部所需映像，成功才停舊服務；`up build` 疊加 `compose.build.yaml`、加入版本建置標籤並從完整來源建置，另先下載其餘映像。兩者啟動時均禁止臨時 build／pull。前端以啟動時產生的公開 runtime-config.js 設定網址。根 Docker workflow 負責發布兩種架構映像，Release 彙整前必須成功；來源包或 manifest 本身不代表 registry 已有映像。
+發行 override 僅釘選 `ghcr.io/xiaolong-taiwan/xpayincus-api:${IMAGE_TAG}` 與雙前端共用的 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:${IMAGE_TAG}`，不加入 build。`IMAGE_TAG` 為根版本，僅將 Docker tag 不接受的 `+` 轉成 `_`；例如 `v1.0.2+build.1` 對應 `v1.0.2_build.1`。不截斷、不使用 `latest`，超過 128 字元即拒絕；原始版本與包名維持完整 SemVer。預設 `panel.sh up` 拉取全部所需映像，成功才停舊服務；`up build` 疊加 `compose.build.yaml`、加入版本建置標籤並從完整來源建置，另先下載其餘映像。兩者啟動時均禁止臨時 build／pull。前端以啟動時產生的公開 runtime-config.js 設定網址。根 Docker workflow 負責發布兩種架構映像，Release 彙整前必須成功；來源包或 manifest 本身不代表 registry 已有映像。
 
 `panel.sh` 預設使用 `docker-compose.yml` 引用 `compose.yaml`；若有 `compose.release.yaml`，則改載入 `compose.yaml` 再疊加 override，避免 include 與 override 同名服務衝突。安裝模式透過 `BUILD_CONTEXT=./source` 定位來源，不產生 `.state/build-context.yaml`。發行 override 必須可讀且非空；`up`、`down`、`status`、`logs`、`export`、`import` 共用相同設定，不需手動補上 `--file`。在解壓後的來源包可直接執行（預設 Nginx，啟動前須準備兩站 TLS 憑證；其他模式見 Compose 文件）：
 

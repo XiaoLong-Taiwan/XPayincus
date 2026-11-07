@@ -126,7 +126,7 @@ services:
     logging: *logging
 
   user:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2
     restart: unless-stopped
     environment:
       PANEL_ENTRY: user
@@ -148,7 +148,7 @@ services:
     logging: *logging
 
   admin:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2
     restart: unless-stopped
     environment:
       PANEL_ENTRY: admin

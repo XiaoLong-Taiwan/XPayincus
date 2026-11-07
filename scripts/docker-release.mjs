@@ -37,7 +37,7 @@ export function publication(env = process.env, invoke = docker, read = file => f
     if (JSON.stringify(runtime) !== JSON.stringify(['linux/amd64', 'linux/arm64'])) throw new Error('Expected exactly amd64 and arm64 images')
   }
   const check = () => ['api', 'web'].map(target => {
-    const image = `ghcr.io/xiaolong-taiwan/xpayincus-${target}`
+    const image = `ghcr.io/xiaolong-taiwan/xpayincus-${target === 'web' ? 'panel-web' : 'api'}`
     const immutable = inspect(`${image}:sha-${sha}`)
     const existing = inspect(`${image}:${tag}`)
     if (immutable) verify(immutable)

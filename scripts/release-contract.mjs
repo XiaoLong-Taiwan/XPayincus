@@ -59,7 +59,7 @@ export const composeImageTag = version => {
   if (tag.length > 128) throw new Error('Version exceeds Docker image tag length limit')
   return tag
 }
-export const composeImages = version => Object.fromEntries(['api', 'user', 'admin'].map(service => [service, `ghcr.io/xiaolong-taiwan/xpayincus-${service === 'api' ? 'api' : 'web'}:${composeImageTag(version)}`]))
+export const composeImages = version => Object.fromEntries(['api', 'user', 'admin'].map(service => [service, `ghcr.io/xiaolong-taiwan/xpayincus-${service === 'api' ? 'api' : 'panel-web'}:${composeImageTag(version)}`]))
 
 export function artifactNames(version) {
   const names = ['manifest.json', `xpayincus-zfs-builder-${version}-source.tar.gz`, `xpayincus-dashboard-${version}-compose.tar.gz`]

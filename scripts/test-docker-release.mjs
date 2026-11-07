@@ -39,9 +39,9 @@ test('different commit, missing SHA evidence, and changed version index are reje
   for (const mutation of ['commit', 'missing', 'changed', 'platform']) {
     const { run, registry, writes } = fixture()
     run.publish()
-    const ref = 'ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2'
+    const ref = 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2'
     if (mutation === 'commit') registry.get(ref).annotations['org.opencontainers.image.revision'] = 'c'.repeat(40)
-    if (mutation === 'missing') registry.delete(`ghcr.io/xiaolong-taiwan/xpayincus-web:sha-${sha}`)
+    if (mutation === 'missing') registry.delete(`ghcr.io/xiaolong-taiwan/xpayincus-panel-web:sha-${sha}`)
     if (mutation === 'changed') registry.get(ref).manifests[0].digest = 'sha256:changed'
     if (mutation === 'platform') registry.get(ref).manifests.pop()
     assert.throws(() => run.publish())
@@ -52,7 +52,7 @@ test('different commit, missing SHA evidence, and changed version index are reje
 test('partial publication can resume using existing SHA evidence', () => {
   const { run, registry, writes } = fixture()
   run.publish()
-  registry.delete('ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2')
+  registry.delete('ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2')
   run.publish()
   assert.equal(writes.length, 5)
 })

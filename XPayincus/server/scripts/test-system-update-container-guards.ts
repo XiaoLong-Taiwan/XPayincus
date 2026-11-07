@@ -50,7 +50,7 @@ assert.ok(cli.includes('--profile nginx --profile cloudflare stop nginx tunnel-o
 
 assert.ok(!/^    build:/m.test(compose), 'Default deployment must only pull published images')
 assert.ok(api.includes('image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2'))
-assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-web:v1\.0\.2/g) || []).length, 2)
+assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-panel-web:v1\.0\.2/g) || []).length, 2)
 const up = section(cli, '\n  up)', '\n  down)')
 assert.ok(up.includes('deployment_mode="${1:-pull}"') && up.includes('compose.build.yaml'))
 const stop = up.indexOf('"${compose[@]}" stop user admin api')

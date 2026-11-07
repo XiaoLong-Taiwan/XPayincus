@@ -11,8 +11,8 @@ assert.equal(version, 'v1.0.2')
 const images = composeImages(version)
 assert.deepEqual(images, {
   api: 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.2',
-  user: 'ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2',
-  admin: 'ghcr.io/xiaolong-taiwan/xpayincus-web:v1.0.2'
+  user: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2',
+  admin: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.2'
 })
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'xpayincus-compose-'))
 function run(script, directory, success = true) {

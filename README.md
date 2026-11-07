@@ -23,7 +23,7 @@ bash deploy/compose/panel.sh up
 
 部署包含 PostgreSQL 16、一個 Node API 程序及使用者／管理端前端。前端預設只發布本機 3000／3001，由選定 HTTPS 入口對外提供服務。主要入口 `docker-compose.yml` 引用 `compose.yaml`。後端依賴程序內鎖、防重放與快取狀態，禁止多副本，也不能與舊 systemd 後端同時寫入同一資料庫。Agent、Incus、RFW、ZFS 與宿主網路服務不容器化。
 
-完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。預設 `panel.sh up` 從 GHCR 拉取 `xiaolong-taiwan/xpayincus-api:v1.0.2` 與共用的 `xpayincus-web:v1.0.2`，全部拉取成功才停舊服務。`panel.sh up build` 可使用完整來源建置。前端公開網址在容器啟動時產生，改網址不需重建映像。發行包的 `compose.release.yaml` 只釘選映像；不支援容器內 systemd／sudo OTA。映像由根 Docker workflow 發布，部署前須確認對應 Actions 成功、GHCR 權限及兩種架構均可拉取。
+完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。預設 `panel.sh up` 從 GHCR 拉取 `xiaolong-taiwan/xpayincus-api:v1.0.2` 與共用的 `xpayincus-panel-web:v1.0.2`，全部拉取成功才停舊服務。`panel.sh up build` 可使用完整來源建置。前端公開網址在容器啟動時產生，改網址不需重建映像。發行包的 `compose.release.yaml` 只釘選映像；不支援容器內 systemd／sudo OTA。映像由根 Docker workflow 發布，部署前須確認對應 Actions 成功、GHCR 權限及兩種架構均可拉取。
 
 ## 資料庫匯出與匯入
 
@@ -46,7 +46,7 @@ v1.0.2 新增 [舊宿主匯出與首次匯入指南](XPayincus/server/scripts/LE
 
 根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，先等待統一 CI 與版本檢查，再呼叫可重用的 `.github/workflows/docker.yml`，使用原生 amd64／arm64 runner 發布 API 與 web 多架構映像。彙整與 GitHub Release 發布均等待映像成功，再逐一附加完整 26 件資產；手動執行 release workflow 須選 `main`，會發布映像與 Actions artifacts，但不建立 GitHub Release。Release 發布不會自動部署或執行正式 OTA。
 
-可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,web}:v1.0.2`，不等待完整 release 建置，也不建立 Git tag。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
+可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.2`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
 
 版本同步、產物命名、SHA256 manifests、Agent 來源與舊 OTA 格式見 [RELEASE.md](RELEASE.md)。ZFS 僅提供 builder 原始碼包，並非已建置的核心模組。宿主安裝器仍可能使用明示釘選的歷史 RFW／ZFS 資產或 DKMS 回退，統一來源版本不代表二進位已重新發布。
 
