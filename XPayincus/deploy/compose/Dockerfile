@@ -28,7 +28,7 @@ COPY --from=build /opt/incudal/app/package.json /opt/incudal/app/pnpm-lock.yaml 
 COPY --from=build /opt/incudal/app/node_modules ./node_modules
 COPY --from=build /opt/incudal/app/server ./server
 COPY deploy/compose/api-entrypoint.sh /usr/local/bin/panel-api
-RUN mkdir -p /opt/incudal/server/certs && chown node:node /opt/incudal/server/certs
+RUN install -d -m 700 -o node -g node /opt/incudal/server/certs /opt/incudal/config /opt/incudal/backups
 WORKDIR /opt/incudal/app/server
 ENTRYPOINT ["sh", "/usr/local/bin/panel-api"]
 

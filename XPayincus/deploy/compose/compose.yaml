@@ -1,6 +1,41 @@
 name: incudal-panel
 
 services:
+  init:
+    image: postgres:16-bookworm
+    restart: 'no'
+    network_mode: none
+    entrypoint: [sh, -eu, -c]
+    command:
+      - |
+        umask 077
+        mkdir -p /var/lib/postgresql/data /deployment/certs /deployment/backups /deployment/config
+        chown postgres:postgres /var/lib/postgresql/data
+        chown 1000:1000 /deployment/certs /deployment/config
+        chown "$$(stat -c '%u:%g' /deployment/.env)" /deployment/backups
+        chmod 700 /var/lib/postgresql/data /deployment/certs /deployment/backups /deployment/config /deployment/secrets
+        for secret_name in postgres_password jwt_secret cookie_secret encryption_key admin_password; do
+          test -f "/deployment/secrets/$$secret_name"
+          test -s "/deployment/secrets/$$secret_name"
+          chmod 600 "/deployment/secrets/$$secret_name"
+        done
+        chmod 600 /deployment/.env
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./certs:/deployment/certs
+      - ./backups:/deployment/backups
+      - ./config:/deployment/config
+      - type: bind
+        source: ./secrets
+        target: /deployment/secrets
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.env
+        target: /deployment/.env
+        bind:
+          create_host_path: false
+
   db:
     image: postgres:16-bookworm
     restart: unless-stopped
@@ -12,7 +47,10 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
+    depends_on:
+      init:
+        condition: service_completed_successfully
     networks:
       - database
     healthcheck:
@@ -69,8 +107,12 @@ services:
       - encryption_key
       - admin_password
     volumes:
-      - panel_certs:/opt/incudal/server/certs
+      - ./certs:/opt/incudal/server/certs
+      - ./config:/opt/incudal/config
+      - ./backups:/opt/incudal/backups:ro
     depends_on:
+      init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     networks:
@@ -140,10 +182,6 @@ networks:
   database:
     internal: true
   panel:
-
-volumes:
-  postgres_data:
-  panel_certs:
 
 secrets:
   postgres_password:

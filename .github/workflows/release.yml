@@ -9,7 +9,10 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
   version:
+    needs: validate
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -144,3 +147,25 @@ jobs:
           path: dist/unified/*
           if-no-files-found: error
           retention-days: 30
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [version, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: xpayincus-unified-${{ needs.version.outputs.version }}
+          path: release-assets
+      - name: Verify and publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd release-assets
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 26
+          sha256sum --check SHA256SUMS
+          gh release create "$VERSION" ./* --verify-tag --title "XPayincus $VERSION" --generate-notes --latest

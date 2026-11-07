@@ -1,6 +1,6 @@
 # XPayincus
 
-統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，目前為 `v1.0.0`；歷史子專案發行紀錄保留原版本，不代表目前部署版本。
+統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，目前為 `v1.0.1`；歷史子專案發行紀錄保留原版本，不代表目前部署版本。
 
 | 邏輯端 | 來源目錄 | 部署方式 |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ bash deploy/compose/panel.sh up
 
 部署包含 PostgreSQL 16、一個 Node API 程序及使用者／管理端前端。前端預設只發布本機 8080／8081，由 HTTPS 代理對外提供服務。後端依賴程序內鎖、防重放與快取狀態，禁止多副本，也不能與舊 systemd 後端同時寫入同一資料庫。Agent、Incus、RFW、ZFS 與宿主網路服務不容器化。
 
-完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。Compose 更新使用指定版本原始碼重建，不支援容器內 systemd／sudo OTA。
+完整設定、來源 IP 信任及更新限制見 [Compose 操作說明](XPayincus/deploy/compose/README.md)。發行包附帶 `compose.release.yaml`，`panel.sh` 會自動載入並套用版本映像名稱與建置標籤。Compose 更新使用指定版本原始碼重建，不支援容器內 systemd／sudo OTA。
 
 ## 資料庫匯出與匯入
 
@@ -40,7 +40,9 @@ DB 備份未加密，也不含 `.env`、secrets、Incus 客戶端憑證或實例
 
 ## 版本與發行
 
-根 `.github/workflows` 是 GitHub Actions 入口；子目錄 workflow 僅保留歷史參考。根 release workflow 在手動觸發或相符 `v*` tag 時建置並上傳 Actions artifacts，**不會自動建立 GitHub Release 或部署**。上傳來源碼到 GitHub、產生 artifacts、發布 Release 與正式 OTA 是不同步驟。
+根 `.github/workflows` 是 GitHub Actions 入口；子目錄 workflow 僅保留歷史參考。GitHub 執行統一 CI，涵蓋版本核對、面板型別檢查與守衛、前後端建置、Agent 測試與跨架構建置，以及 Compose 映像建置。
+
+根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，建置、彙整並自動發布 GitHub Release，逐一附加完整 26 件資產；手動觸發僅上傳 Actions artifacts。Release 發布不會自動部署或執行正式 OTA。
 
 版本同步、產物命名、SHA256 manifests、Agent 來源與舊 OTA 格式見 [RELEASE.md](RELEASE.md)。ZFS 僅提供 builder 原始碼包，並非已建置的核心模組。宿主安裝器仍可能使用明示釘選的歷史 RFW／ZFS 資產或 DKMS 回退，統一來源版本不代表二進位已重新發布。
 
@@ -51,4 +53,4 @@ DB 備份未加密，也不含 `.env`、secrets、Incus 客戶端憑證或實例
 - [Agent 安裝與來源設定](XPayincus/docs-site/docs/agent/install.md)
 - [OTA 適用範圍](XPayincus/docs-site/docs/guide/ota-update.md)
 
-歷史 release notes、交接及稽核紀錄保留作為當時證據，不用來宣稱統一版本已通過驗收。這次文件整理未執行測試、建置、容器啟動、資料庫還原或正式部署；實際可用性仍需隔離環境與目標主機驗收。
+歷史 release notes、交接及稽核紀錄保留作為當時證據，不用來宣稱統一版本已通過驗收。CI 結果以對應 commit 的 GitHub Actions 紀錄為準；容器啟動、資料庫還原、舊版遷移與實際可用性仍需隔離環境及目標主機驗收。歷史面板 v1.5.9 遷移至統一版 v1.0.x 必須受控處理，不自動降版，詳見發行文件。

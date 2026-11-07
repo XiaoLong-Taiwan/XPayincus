@@ -1,5 +1,6 @@
 set -eu
 set +x
+umask 077
 
 for secret_name in postgres_password jwt_secret cookie_secret encryption_key admin_password; do
   if [ ! -r "/run/secrets/$secret_name" ] || [ ! -s "/run/secrets/$secret_name" ]; then
@@ -18,6 +19,11 @@ case "$db_password" in
 esac
 export DATABASE_URL="postgresql://incudal:${db_password}@db:5432/incudal"
 unset db_password
-chown node:node /opt/incudal/server/certs
-chmod 700 /opt/incudal/server/certs
+for directory in /opt/incudal/server/certs /opt/incudal/config; do
+  mkdir -p "$directory"
+  chown node:node "$directory"
+  chmod 700 "$directory"
+done
+find /opt/incudal/server/certs -type d -exec chown node:node {} + -exec chmod 700 {} +
+find /opt/incudal/server/certs -type f -exec chown node:node {} + -exec chmod 600 {} +
 exec gosu node sh -eu -c 'pnpm exec prisma migrate deploy; exec node dist/app.js'

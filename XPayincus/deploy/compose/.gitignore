@@ -1,4 +1,7 @@
 .env
+data/
+certs/
+config/
 secrets/
 backups/
 .state/
