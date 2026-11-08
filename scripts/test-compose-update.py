@@ -131,13 +131,16 @@ class UpdateTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 0, json.dumps([reference + '@' + digest] if matching else []))
 
             with patch.object(update, 'run', side_effect=run), \
-                    patch.object(update.subprocess, 'run', side_effect=inspect), \
+                    patch.object(update.subprocess, 'run', side_effect=inspect) as inspect_mock, \
                     patch.object(update, 'fetch') as fetch, patch.dict(os.environ, {}, clear=True):
                 update.resolve_images(self.base, self.base / 'compose.yaml')
                 fetch.assert_not_called()
-            self.assertEqual(len(commands), 1)
-            self.assertIn('xpayincus-api:v1.0.5', commands[0][4])
-            self.assertEqual(inspect.call_count, 1)
+            images = ['ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.5',
+                      'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.5']
+            self.assertEqual(commands, [
+                ['docker', 'buildx', 'imagetools', 'inspect', image, '--format', '{{json .Manifest}}']
+                for image in images])
+            self.assertEqual(inspect_mock.call_count, len(images))
             self.assertEqual((self.base / '.state/pull-required').exists(), not matching)
 
     def test_resolve_rejects_custom_images_and_invalid_digest(self):
