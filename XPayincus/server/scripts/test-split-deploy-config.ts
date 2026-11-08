@@ -861,6 +861,7 @@ const allowedClientNetworkPrimitiveLines = new Map<string, string[]>([
   ['client/src/api/index.ts', ["fetch(buildApiUrl('/auth/refresh'), {"]],
   ['client/src/api/admin.ts', ["fetch(buildApiUrl('/auth/refresh'), {"]],
   ['client/src/components/TermsOfServiceModal.vue', ['fetch(`/tos/${lang}.md`)']],
+  ['client/src/components/instance/PurchaseNetworkProbe.vue', ["const response = await fetch(`${prepared.httpsUrl}?nonce=${crypto.randomUUID()}`, { method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal })"]],
   ['client/src/components/instance/TerminalModal.vue', ['new WebSocket(wsUrl)']],
   ['client/src/composables/useTerminal.ts', ['new WebSocket(wsUrl)']],
   ['client/src/views/TerminalView.vue', ['new WebSocket(wsUrl)']]
