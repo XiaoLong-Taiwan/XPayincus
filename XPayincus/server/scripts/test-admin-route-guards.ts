@@ -296,6 +296,10 @@ function isAllowedPublicOrTokenRoute(route: RouteInfo): boolean {
   if (file === 'network-probe.ts') return path === '/targets' || path === '/prepare'
   if (file === 'help.ts') return !path.startsWith('/admin')
   if (file === 'agent.ts') {
+    if (path === '/panel-trust/:phase') {
+      return route.method === 'POST'
+        && /const agent = await authenticateAgentRequest\(request, reply\)\s+if \(!agent\) return/.test(route.handler)
+    }
     return [
       '/install.sh',
       '/manifest.json',
