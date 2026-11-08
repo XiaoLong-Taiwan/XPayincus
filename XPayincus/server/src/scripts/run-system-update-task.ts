@@ -10,11 +10,11 @@ import { prisma, closePrismaDatabase } from '../db/prisma.js'
 import { tryMarkSystemUpdateTaskRunning } from '../db/system-update-tasks.js'
 import {
   getCurrentVersionMetadata,
+  compareReleaseTags,
+  fetchRelease,
   getOtaReleaseInfo,
-  getReleaseToken,
   getRuntimeArch,
   getRuntimePlatform,
-  isTrustedReleaseHost,
   isValidReleaseTag,
   selectRuntimeArtifact,
   type OtaArtifactInfo
@@ -458,32 +458,39 @@ async function downloadArtifact(artifact: OtaArtifactInfo): Promise<string> {
   const artifactPath = join(updateDownloadDir, `${taskId}-${artifact.name}`)
   await log(`Downloading OTA artifact ${artifact.name} (${artifact.size ?? 'unknown'} bytes)`)
 
-  const headers: Record<string, string> = {
-    'user-agent': 'xpayincus-online-update'
-  }
-  const token = getReleaseToken()
-  // 仅对可信 GitHub 主机附带 release token，避免被构造的 artifact.url 把凭证泄露到攻击者主机
-  if (token && isTrustedReleaseHost(artifact.url)) headers.authorization = `Bearer ${token}`
-
-  const response = await fetch(artifact.url, { headers })
+  const response = await fetchRelease(artifact.url)
   if (!response.ok || !response.body) {
     throw new Error(`Failed to download OTA artifact: HTTP ${response.status}`)
   }
 
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(artifactPath))
-
-  const fileStat = await stat(artifactPath)
-  if (artifact.size !== null && fileStat.size !== artifact.size) {
-    throw new Error(`OTA artifact size mismatch: expected ${artifact.size}, got ${fileStat.size}`)
+  const limit = Math.min(artifact.size ?? Infinity, 2 * 1024 * 1024 * 1024)
+  async function* boundedBody() {
+    let total = 0
+    for await (const chunk of response.body!) {
+      total += chunk.byteLength
+      if (total > limit) throw new Error('OTA artifact exceeds download limit')
+      yield chunk
+    }
   }
+  try {
+    await pipeline(Readable.from(boundedBody()), createWriteStream(artifactPath, { flags: 'wx' }))
 
-  const actualSha256 = await sha256File(artifactPath)
-  if (actualSha256 !== artifact.sha256) {
-    throw new Error(`OTA artifact sha256 mismatch: expected ${artifact.sha256}, got ${actualSha256}`)
+    const fileStat = await stat(artifactPath)
+    if (artifact.size !== null && fileStat.size !== artifact.size) {
+      throw new Error(`OTA artifact size mismatch: expected ${artifact.size}, got ${fileStat.size}`)
+    }
+
+    const actualSha256 = await sha256File(artifactPath)
+    if (actualSha256 !== artifact.sha256) {
+      throw new Error(`OTA artifact sha256 mismatch: expected ${artifact.sha256}, got ${actualSha256}`)
+    }
+
+    await log(`OTA artifact verified: sha256=${actualSha256}`)
+    return artifactPath
+  } catch (error) {
+    await rm(artifactPath, { force: true })
+    throw error
   }
-
-  await log(`OTA artifact verified: sha256=${actualSha256}`)
-  return artifactPath
 }
 
 async function assertArtifactStaging(stagingDir: string): Promise<void> {
@@ -600,11 +607,7 @@ async function getRuntimeArtifact(targetVersion: string): Promise<OtaArtifactInf
   }
 
   const reason = ota.error || `no artifact for ${getRuntimePlatform()}/${getRuntimeArch()}`
-  if (updateApplyMode === 'artifact') {
-    throw new Error(`OTA artifact mode requested but no usable artifact is available: ${reason}`)
-  }
-  await log(`No usable OTA artifact found; falling back to Git build mode: ${reason}`)
-  return null
+  throw new Error(`OTA update rejected; no usable artifact is available: ${reason}`)
 }
 
 async function copyStagingToRelease(stagingDir: string, releaseDir: string): Promise<void> {
@@ -846,6 +849,9 @@ async function main(): Promise<void> {
   let databaseMigrationAttempted = false
 
   try {
+    if (!isValidReleaseTag(currentVersion.version) || compareReleaseTags(targetVersion, currentVersion.version) <= 0) {
+      throw new Error('OTA update rejected: target must be newer than current version')
+    }
     const artifact = await getRuntimeArtifact(targetVersion)
     if (artifact) {
       const backupRequirementMb = (await isAtomicReleaseLayout()) ? 0 : (await getInstallDirectorySizeMb()) || 0

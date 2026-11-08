@@ -1,8 +1,8 @@
-# 面板 Compose v1.0.3 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.4 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-本文件描述統一版 v1.0.3 的 Compose 配置；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.4 的 Compose 配置；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
 
@@ -17,7 +17,7 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 可使用完整倉庫，或解壓 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。也可只複製完整 `deploy/compose/` 目錄，直接執行 init 與預設 pull 部署。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。API 固定使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3`；Web 的 Docker target 仍為 `web`，新 package 避開歷史套件寫入權限。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。映像必須由根 Docker workflow 事先發布且支援目標架構，成功狀態以對應 Actions 與 registry 驗證為準。若 GHCR 尚無此 tag 或無權限，pull 會失敗並保留舊服務；可明確選擇 build。私有映像請先用安全方式登入 GHCR。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。API 固定使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.4`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.4`；Web 的 Docker target 仍為 `web`，新 package 避開歷史套件寫入權限。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。映像必須由根 Docker workflow 事先發布且支援目標架構，成功狀態以對應 Actions 與 registry 驗證為準。若 GHCR 尚無此 tag 或無權限，pull 會失敗並保留舊服務；可明確選擇 build。私有映像請先用安全方式登入 GHCR。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -36,7 +36,9 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 API 映像保留根 `node_modules` 的 pnpm store、`server/node_modules` 連結、已產生的 Prisma client 與 Prisma CLI；不要只複製 `server/dist/`。建置用的 `DATABASE_URL` 為無實際資料庫的佔位 URL，供 Prisma generate 載入設定；建置不執行 migration、不需要正式 DB 密碼。
 
-公開網路測試由市場頁連至 `/network-test`，探測來源為 API 容器。API 使用 `iputils-ping`，以 node 的 GID 1000 搭配容器網路命名空間的 `net.ipv4.ping_group_range: '1000 1000'` 開啟非特權 ICMP echo socket，保留 `NET_RAW` 移除及 `no-new-privileges`。Docker 主機須支援此 namespaced sysctl；目標或上游防火牆封鎖 ICMP 仍會回報無回應。
+網路測試僅出現在登入後的商品購買畫面，顯示管理員核准且綁定該商品／host 的 DNS 目標。舊目標須在管理設定重新建立綁定，未綁定設定不會提供給客戶。瀏覽器直接請求目標的 `https://hostname/.well-known/network-probe`；節點須提供有效 TLS、小型 2xx 回應、`Cache-Control: no-store` 及允許使用者前端來源的 CORS，避免 CDN／反向代理至其他節點。此數字是瀏覽器 HTTPS 回應標頭耗時，非 TCP／ICMP RTT。瀏覽器自行解析 DNS，API 無法鎖定瀏覽器的解析結果；目標 DNS 必須由可信管理員維護，不能委託不受信任的租戶控制。
+
+TCP／ICMP 提供可複製的公開 IP 指令，請客戶於本機或自己已授權主機執行；目前 Agent 沒有遠端測試任務協定，平台不收集執行結果。原 API `/network-probe/test` 僅保留管理員診斷，來源仍標示 `panel-api`。API 使用 `iputils-ping`，以 node GID 1000 搭配 `net.ipv4.ping_group_range: '1000 1000'` 開啟非特權 ICMP socket，保留移除 `NET_RAW` 及 `no-new-privileges`；主機須支援此 namespaced sysctl。目標防火牆封鎖 ICMP 仍會回報無回應。
 
 ## 首次部署
 
@@ -45,7 +47,7 @@ API 映像保留根 `node_modules` 的 pnpm store、`server/node_modules` 連結
 Release 提供版本化的 `xpayincus-compose-vX.Y.Z.sh`（原始碼為 `download.sh`）；需要 Linux、Bash、Python 3、curl、sha256sum、flock、find 與 mktemp。來源固定為 `XiaoLong-Taiwan/XPayincus` 的固定版本 Release Dashboard Compose 資產，不接受 main、latest 或自訂下載 URL。先從可信發行紀錄取得入口腳本及 Dashboard archive 各自的 SHA256；必須由獨立可信管道確認預期值，不能下載後自行計算就視為驗證。不使用 `curl | bash`。Debian／Ubuntu 可先安裝 `sudo apt-get install bash python3 curl ca-certificates coreutils util-linux findutils openssl`。
 
 ```bash
-VERSION=v1.0.3
+VERSION=v1.0.4
 BOOTSTRAP_SHA256='填入可信的入口腳本64位小寫SHA256'
 ARCHIVE_SHA256='填入可信的Dashboard封裝64位小寫SHA256'
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
@@ -146,9 +148,9 @@ Compose 啟動等待最長 300 秒，包含 DB／API 健康檢查及兩套 Nginx
 | `cloudflare` | `tunnel-origin`、`cloudflared` | token file 與 Cloudflare 公開 hostname 路由；不發布額外宿主埠 |
 | 空值（`external`） | 無 | 自行管理宿主 Nginx，使用 loopback 3000／3001 |
 
-自搭 Nginx 使用兩個公開 hostname 分流，直接以 socket 來源覆寫 `X-Real-IP`。憑證簽發、續期由操作人員管理；更換憑證後重啟 `nginx`。若公開 origin 使用非預設 HTTPS 埠，將 `HTTPS_PORT` 設為相符埠。預設不開啟 HTTP 80。若使用既有宿主 Nginx，選 `external` 以免爭用 443。
+自搭 Nginx 使用 `.env` 的兩個公開 hostname 分流，直接以 socket 來源覆寫 `X-Real-IP`。憑證簽發、續期由操作人員管理；更換憑證後重啟 `nginx`。若公開 origin 使用非預設 HTTPS 埠，將 `HTTPS_PORT` 設為相符埠。預設不開啟 HTTP 80。若使用既有宿主 Nginx，選 `external` 以免爭用 443。
 
-Cloudflare 模式可使用：
+Cloudflare 模式可使用任意符合 `https://hostname[:port]` 格式的自有網域，並將相同 hostname 設為 Cloudflare Tunnel Public Hostname。網域在前端 runtime config、容器入口 Nginx 的 server name 與 API CORS 設定中於容器啟動時套用；不用改 Dockerfile 或重建 image。初次設定範例：
 
 ```bash
 bash panel.sh init https://pay.example.org https://admin.example.org admin@example.org cloudflare
@@ -156,15 +158,15 @@ bash panel.sh init https://pay.example.org https://admin.example.org admin@examp
 
 以安全編輯器建立 `./secrets/cloudflare_tunnel_token`，只寫入 token 本身，再執行 `chmod 600 ./secrets/cloudflare_tunnel_token`。CLI 不接受 token 引數、不讀出或列印其內容；Compose 使用 file secret 掛入 `/run/secrets/cloudflare_tunnel_token`，cloudflared 透過 `--token-file` 讀取。不要把 token 放入 `.env`、shell history 或日誌；不要開啟 shell trace 或 cloudflared debug。cloudflared 以 root 讀取 600 file secret，但 drop 全部 capabilities、禁止新增權限並使用唯讀 root filesystem。此映像使用 `latest`，正式部署可由操作人員鎖定已驗證 digest。
 
-在 Cloudflare 的 remotely-managed tunnel 設定兩筆 Public Hostname：`pay.example.org` 與 `admin.example.org`，兩者的 Service 都設為 `http://tunnel-origin:80`，保留原始 Host，不設定共同的 HTTP Host Header override；啟用公開 HTTPS 轉址及 WebSocket。不可指向 API。`tunnel-origin` 無宿主 ports，只在容器網路接收 cloudflared，依 hostname 分流至兩前端並使用 `CF-Connecting-IP` 覆寫來源 IP；不要將這個入口發布至不可信網路。首次連線、DNS／TLS 與來源 IP 仍需在目標環境驗收。
+在 Cloudflare 的 remotely-managed tunnel 設定兩筆 Public Hostname，必須與 `.env` 的 `FRONTEND_URL`、`ADMIN_FRONTEND_URL` hostname 完全一致；兩者的 Service 都設為 `http://tunnel-origin:80`，保留原始 Host，不設定共同的 HTTP Host Header override；啟用公開 HTTPS 轉址及 WebSocket。不可指向 API。`tunnel-origin` 無宿主 ports，只在容器網路接收 cloudflared，依 hostname 分流至兩前端並使用 `CF-Connecting-IP` 覆寫來源 IP；不要將這個入口發布至不可信網路。首次連線、DNS／TLS 與來源 IP 仍需在目標環境驗收。
 
 Compose 的 DB 與 API 不發布宿主機埠；DB 使用 internal network，API 另有對外網路以連線既有宿主機及第三方服務。只有雙前端 HTTP 埠發布至 loopback。Docker 網路及防火牆必須允許 API 到既有 Incus／Agent 相關端點，宿主機端點不可填容器內的 `127.0.0.1`。
 
-將 [https-proxy.conf.example](./https-proxy.conf.example) 的網域與憑證路徑替換後，整合至宿主機 Nginx。該檔案放在 Nginx `http` context；TLS 憑證簽發、續期、80→443 轉址及正式網域限制由宿主機管理。管理端可再加 VPN 或來源 IP 限制。必須由這層代理**覆寫** `X-Real-IP`，容器 Nginx 僅轉送該可信值，避免客戶端偽造付款白名單或限流所使用的 IP。若前方還有 CDN，先在宿主機按 CDN 官方網段設定 real-IP 信任範圍，不能直接信任任意來源 header。
+使用自訂／外部 Nginx 時，`init` 選 `external`，`.env` 中的 `FRONTEND_URL` 與 `ADMIN_FRONTEND_URL` 可設定為任意不同 HTTPS hostname（可含有效 port，不含路徑或尾斜線），並須與 DNS、TLS 憑證及 Nginx `server_name` 相符。前端容器只綁定 loopback，預設使用者端 `127.0.0.1:3000`、管理端 `127.0.0.1:3001`；自訂埠時同步設定 `.env` 的 `USER_PORT`／`ADMIN_PORT` 與 Nginx upstream。將 [https-proxy.conf.example](./https-proxy.conf.example) 的網域、憑證路徑及 upstream 埠替換後，整合至宿主機 Nginx。該檔案放在 Nginx `http` context；TLS 憑證簽發、續期、80→443 轉址及正式網域限制由宿主機管理。管理端可再加 VPN 或來源 IP 限制。必須由最外層可信代理**覆寫** `Host`、`X-Real-IP`、`X-Forwarded-For` 與 `X-Forwarded-Proto`；容器 Nginx 會轉送可信的 `X-Real-IP`，不能讓客戶端自行提供該 header，避免偽造付款白名單或限流所使用的 IP。若前方還有 CDN，先在宿主機按 CDN 官方網段設定 real-IP 信任範圍，不能直接信任任意來源 header。
 
 Nginx 範例的 upstream 為 HTTP，不能改成容器的 HTTPS 埠；若公開 origin 使用非預設埠，也須同步調整宿主 `listen`。在部署主機完成設定後執行 `sudo nginx -t`，確認成功再執行 `sudo systemctl reload nginx`。這兩個命令由操作人員在目標主機執行，CLI 不修改宿主代理。
 
-本配置固定 HTTPS cookies、host-only cookies 與同源 `/api`，包含 WebSocket upgrade；不要直接透過 HTTP localhost 登入。雙前端啟動時以驗證過的 HTTPS origin 原子產生 `runtime-config.js`，在入口模組之前載入；僅包含公開的 apiBaseUrl（固定 `/api`）、customerBaseUrl、adminBaseUrl。API clients、WebSocket URL 與管理端客戶連結共用設定；原生／開發環境保留 VITE 變數回退。此檔使用 `Cache-Control: no-store`，Service Worker 不快取。修改 `.env` 的公開 URL 後執行 `up` 重建容器即可，不需重建映像；也須同步調整 DNS／代理與 TLS。
+本配置固定 HTTPS cookies、host-only cookies 與同源 `/api`，包含 WebSocket upgrade；不要直接透過 HTTP localhost 登入。雙前端啟動時以驗證過的 HTTPS origin 原子產生 `runtime-config.js`，在入口模組之前載入；僅包含公開的 apiBaseUrl（固定 `/api`）、customerBaseUrl、adminBaseUrl。API clients、WebSocket URL 與管理端客戶連結共用設定；原生／開發環境保留 VITE 變數回退。此檔使用 `Cache-Control: no-store`，Service Worker 不快取。變更網域時編輯 `.env` 的兩個公開 URL，並同步更新 DNS、代理 hostname、TLS 及 Cloudflare Public Hostname（若使用）；接著執行 `bash panel.sh up` 重新建立容器即可，**不需重建 image**。該命令會重建前端 runtime config 和入口 Nginx hostname，不會重建程式碼映像。
 
 ### 設定欄位與日常操作
 

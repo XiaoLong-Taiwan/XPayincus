@@ -9,6 +9,7 @@ export const navMenuItems: MenuItem[] = [
   { name: 'admin-settings', path: '/admin/settings', icon: 'cog', label: 'nav.system' },
   { divider: true, label: 'nav.operations' },
   { name: 'admin-system-update', path: '/admin/system-update', icon: 'sparkles', label: 'nav.systemUpdate' },
+  { name: 'admin-panel-backups', path: '/admin/panel-backups', icon: 'database', label: '面板備份' },
   { name: 'admin-tickets', path: '/admin/tickets', icon: 'ticket', label: 'nav.tickets' },
   { name: 'admin-broadcast', path: '/admin/broadcast', icon: 'bell', label: 'nav.broadcast' },
   { name: 'admin-logs', path: '/admin/logs', icon: 'logs', label: 'nav.logs' },

@@ -25,7 +25,8 @@ const VALID_OPERATION_TYPES: OperationType[] = [
     'recreate_instance',
     'transfer_instance',
     'delete_snapshot',
-    'delete_backup'
+    'delete_backup',
+    'backup_panel'
 ]
 
 const POSITIVE_RESOURCE_ID_PATTERN = /^[1-9]\d*$/

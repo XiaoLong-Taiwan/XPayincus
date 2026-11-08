@@ -193,6 +193,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'nav.systemUpdate', title: '版本更新' }
   },
   {
+    path: '/admin/panel-backups',
+    name: 'admin-panel-backups',
+    component: () => import('@/views/admin/PanelBackupsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: '面板備份' }
+  },
+  {
     path: '/admin/images',
     name: 'admin-images',
     component: () => import('@/views/admin/ImagesView.vue'),

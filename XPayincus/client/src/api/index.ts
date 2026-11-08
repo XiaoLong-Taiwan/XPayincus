@@ -1964,8 +1964,8 @@ const api = {
   health: (): Promise<{ status: string; timestamp: string }> => http.get('/health'),
 
   networkProbe: {
-    targets: (): Promise<{ targets: Array<{ id: string; label: string; host: string; tcpPorts: number[]; icmp: boolean }> }> => http.get('/network-probe/targets'),
-    test: (targetId: string, method: 'tcp' | 'icmp', port?: number): Promise<{ source: 'panel-api'; results: Array<{ id: string; label: string; host: string; method: 'tcp' | 'icmp'; port?: number; success: boolean; latencyMs: number | null; error?: string }> }> => http.post('/network-probe/test', { targetId, method, ...(port ? { port } : {}) })
+    targets: (packageId: number, hostId: number): Promise<{ targets: import('@/types/network-probe').NetworkProbeTarget[] }> => http.get('/network-probe/targets', { params: { packageId, hostId } }),
+    prepare: (packageId: number, hostId: number, targetId: string): Promise<{ target: import('@/types/network-probe').NetworkProbeTarget; address: string; httpsUrl: string | null }> => http.post('/network-probe/prepare', { packageId, hostId, targetId })
   },
 
   // 系统配置（管理员）

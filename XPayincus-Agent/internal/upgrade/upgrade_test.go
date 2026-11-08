@@ -52,11 +52,11 @@ func TestApplyUpgradeReplacesBinaryAndRestarts(t *testing.T) {
 
 	err := runner.Apply(context.Background(), panel.UpgradeInstruction{
 		Available: true,
-		Version:   "v2",
+		Version:   "v1.0.1",
 		URL:       server.URL + "/xpayincus-agent-v1.0.1-linux-amd64.gz",
 		SHA256:    sha,
 		Gzip:      true,
-	}, "v1")
+	}, "v1.0.0")
 	if err != nil {
 		t.Fatalf("apply upgrade: %v", err)
 	}
@@ -110,11 +110,11 @@ func TestApplyUpgradeRejectsBadSHA(t *testing.T) {
 
 	err := runner.Apply(context.Background(), panel.UpgradeInstruction{
 		Available: true,
-		Version:   "v2",
+		Version:   "v1.0.1",
 		URL:       server.URL + "/xpayincus-agent-v1.0.1-linux-amd64.gz",
 		SHA256:    "0000000000000000000000000000000000000000000000000000000000000000",
 		Gzip:      true,
-	}, "v1")
+	}, "v1.0.0")
 	if err == nil {
 		t.Fatalf("expected sha mismatch")
 	}
@@ -162,11 +162,11 @@ func TestApplyUpgradeDoesNotRollbackWhenSelfRestartIsInterrupted(t *testing.T) {
 
 	err := runner.Apply(context.Background(), panel.UpgradeInstruction{
 		Available: true,
-		Version:   "v2",
+		Version:   "v1.0.1",
 		URL:       server.URL + "/xpayincus-agent-v1.0.1-linux-amd64.gz",
 		SHA256:    sha,
 		Gzip:      true,
-	}, "v1")
+	}, "v1.0.0")
 	if err == nil {
 		t.Fatalf("expected restart error")
 	}
@@ -200,11 +200,11 @@ func TestApplyUpgradeRejectsDifferentOrigin(t *testing.T) {
 
 	err := runner.Apply(context.Background(), panel.UpgradeInstruction{
 		Available: true,
-		Version:   "v2",
+		Version:   "v1.0.1",
 		URL:       "https://evil.example/xpayincus-agent-v1.0.1-linux-amd64.gz",
 		SHA256:    "0000000000000000000000000000000000000000000000000000000000000000",
 		Gzip:      true,
-	}, "v1")
+	}, "v1.0.0")
 	if err == nil {
 		t.Fatalf("expected origin validation error")
 	}

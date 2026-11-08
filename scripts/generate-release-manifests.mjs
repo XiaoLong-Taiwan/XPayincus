@@ -20,6 +20,7 @@ for (const name of names.sort()) {
 }
 const agent = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'))
 if (agent.version !== version) throw new Error('Agent manifest version mismatch')
+if (Object.hasOwn(agent, 'schemaVersion') && agent.schemaVersion !== 1) throw new Error('Unsupported Agent manifest schemaVersion')
 if (Object.keys(agent.files || {}).sort().join(',') !== 'linux-amd64,linux-arm64') throw new Error('Agent manifest architecture set mismatch')
 for (const arch of ['amd64', 'arm64']) {
   const record = records.find(item => item.name === `xpayincus-agent-${version}-linux-${arch}.gz`)
@@ -37,7 +38,7 @@ const ota = {
   gitTag: version,
   gitCommit: (process.env.SOURCE_COMMIT || process.env.GITHUB_SHA || '').slice(0, 12),
   buildTime,
-  minimumUpdaterVersion: 'v0.0.3',
+  minimumUpdaterVersion: 'v1.0.3',
   changelog: [`Unified Server/Agent ${version} build`],
   artifacts: records.filter(item => item.name.startsWith('xpayincus-panel-')).map(item => ({
     ...item, platform: 'linux', arch: item.name.includes('-amd64.') ? 'amd64' : 'arm64'

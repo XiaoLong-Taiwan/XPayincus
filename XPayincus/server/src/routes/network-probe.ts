@@ -6,17 +6,49 @@ import { apiError, ErrorCode } from '../lib/errors.js'
 import { logAdminAction } from '../lib/security.js'
 import { checkNetworkProbeRateLimit, getNetworkProbeTargets, NETWORK_PROBE_CONFIG_KEY, parseNetworkProbeTargets, resolvePublicTargetHost, runNetworkProbe } from '../lib/network-probe.js'
 
+const scopeProperties = { packageId: { type: 'integer', minimum: 1, maximum: 2147483647 }, hostId: { type: 'integer', minimum: 1, maximum: 2147483647 } }
+
+async function canAccessNode(userId: number, packageId: number, hostId: number) {
+  return !!(await prisma.package.findFirst({
+    where: { id: packageId, active: true, OR: [{ userId }, { globalShared: true }, { shares: { some: { sharedToId: userId } } }], packageHosts: { some: { hostId } } },
+    select: { id: true }
+  }))
+}
+
 export default async function networkProbeRoutes(fastify: FastifyInstance) {
-  fastify.get('/targets', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async () => {
+  fastify.get<{ Querystring: { packageId: number; hostId: number } }>('/targets', {
+    onRequest: [fastify.authenticateUser],
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    schema: { querystring: { type: 'object', additionalProperties: false, required: ['packageId', 'hostId'], properties: scopeProperties } }
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { packageId, hostId } = request.query
+    if (!(await canAccessNode(request.user.id, packageId, hostId))) return reply.code(404).send({ error: '商品節點不存在或未獲授權' })
     const configured = await getNetworkProbeTargets()
     const targets = []
     for (const target of configured) {
-      if (await resolvePublicTargetHost(target.host)) targets.push({ id: target.id, label: target.label, host: target.host, tcpPorts: target.tcpPorts, icmp: target.icmp })
+      if (target.packageId === packageId && target.hostId === hostId && await resolvePublicTargetHost(target.host)) targets.push(target)
     }
     return { targets }
   })
 
+  fastify.post<{ Body: { packageId: number; hostId: number; targetId: string } }>('/prepare', {
+    onRequest: [fastify.authenticateUser],
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    schema: { body: { type: 'object', additionalProperties: false, required: ['packageId', 'hostId', 'targetId'], properties: { ...scopeProperties, targetId: { type: 'string', pattern: '^[a-z0-9_-]{1,40}$' } } } }
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    if (!checkNetworkProbeRateLimit(`user:${request.user.id}`)) return reply.code(429).send({ error: '每位使用者每分鐘最多測試 5 次' })
+    const { packageId, hostId, targetId } = request.body
+    if (!(await canAccessNode(request.user.id, packageId, hostId))) return reply.code(404).send({ error: '商品節點不存在或未獲授權' })
+    const target = (await getNetworkProbeTargets()).find(item => item.id === targetId && item.packageId === packageId && item.hostId === hostId)
+    const address = target ? await resolvePublicTargetHost(target.host) : null
+    if (!target || !address) return reply.code(400).send({ error: '目標未獲核准或 DNS 非公開位址' })
+    return { target, address, httpsUrl: target.https ? `https://${target.host}/.well-known/network-probe` : null }
+  })
+
   fastify.post<{ Body: { targetId: string; method: 'tcp' | 'icmp'; port?: number } }>('/test', {
+    onRequest: [fastify.authenticateAdmin],
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
     schema: { body: { type: 'object', additionalProperties: false, required: ['targetId', 'method'], properties: { targetId: { type: 'string', pattern: '^[a-z0-9_-]{1,40}$' }, method: { type: 'string', enum: ['tcp', 'icmp'] }, port: { type: 'integer', minimum: 1, maximum: 65535 } } } }
   }, async (request, reply) => {
@@ -37,6 +69,7 @@ export default async function networkProbeRoutes(fastify: FastifyInstance) {
     if (!targets) return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, 'network_probe_targets'))
     for (const target of targets) {
       if (isIP(target.host) || !(await resolvePublicTargetHost(target.host))) return reply.code(400).send({ error: `目標 ${target.label} 必須是解析至公開 IP 的 DNS hostname` })
+      if (!(await prisma.packageHost.findUnique({ where: { packageId_hostId: { packageId: target.packageId, hostId: target.hostId } }, select: { id: true } }))) return reply.code(400).send({ error: '目標必須綁定商品既有的 host' })
     }
     const value = JSON.stringify(targets)
     await prisma.systemConfig.upsert({

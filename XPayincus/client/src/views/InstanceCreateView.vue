@@ -29,6 +29,7 @@ import PackageSelector from '@/components/instance/PackageSelector.vue'
 import PlanSelector from '@/components/instance/PlanSelector.vue'
 import ResourceSliders from '@/components/instance/ResourceSliders.vue'
 import HostSelector from '@/components/instance/HostSelector.vue'
+import PurchaseNetworkProbe from '@/components/instance/PurchaseNetworkProbe.vue'
 import ImageSelector from '@/components/instance/ImageSelector.vue'
 import SSHKeySelector from '@/components/instance/SSHKeySelector.vue'
 import InitCommandSelector from '@/components/extensions/InitCommandSelector.vue'
@@ -1267,6 +1268,7 @@ async function handleSubmit(): Promise<void> {
               :auto-selected-label="getCreatePageText('hostAutoSelected')"
               @update:selected-host-id="form.hostId = $event"
             />
+            <PurchaseNetworkProbe v-if="isPaidPackage && form.packageId && form.hostId" :key="`${form.packageId}:${form.hostId}`" :package-id="form.packageId" :host-id="form.hostId" />
             <ImageSelector
               :available-images="availableImages"
               :selected-image="form.image"

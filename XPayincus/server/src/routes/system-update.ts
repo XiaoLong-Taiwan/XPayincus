@@ -14,6 +14,7 @@ import {
 import { createLog, LogModule, LogResult } from '../db/logs.js'
 import {
   canApplyUpdate,
+  getUpdateRejectionReason,
   checkForUpdates,
   getCurrentVersionMetadata,
   getProjectRoot,
@@ -205,12 +206,10 @@ export default async function systemUpdateRoutes(fastify: FastifyInstance) {
     if (!isValidReleaseTag(targetVersion)) {
       return reply.code(400).send({ error: 'Target version must be a release tag like v1.2.3', code: 'INVALID_TARGET_VERSION' })
     }
-    // artifact 模式（下载 release 包 + 校验 sha256 + 原子发布）不需要 Git；只有在目标版本
-    // 拿不到本机可用 artifact、必须回退到「源码构建」时才真的需要 Git 工作区。
     if (!(await canApplyUpdate(targetVersion))) {
       return reply.code(409).send({
-        error: 'No usable OTA artifact for this platform and the deployment directory is not a Git working tree',
-        code: 'GIT_REPOSITORY_REQUIRED'
+        error: await getUpdateRejectionReason(targetVersion),
+        code: process.env.SYSTEM_UPDATE_APPLY_MODE?.trim().toLowerCase() === 'git' ? 'GIT_REPOSITORY_REQUIRED' : 'UPDATE_INCOMPATIBLE'
       })
     }
     if (await hasRunningSystemUpdateTask()) {

@@ -1960,6 +1960,7 @@ enum OperationType {
   transfer_instance
   delete_snapshot
   delete_backup
+  backup_panel
 }
 
 enum VerificationChannel {

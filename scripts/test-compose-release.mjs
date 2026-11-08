@@ -7,12 +7,17 @@ import { spawnSync } from 'node:child_process'
 import { artifactNames, composeImages, root, validateVersions } from './release-contract.mjs'
 
 const version = validateVersions()
-assert.equal(version, 'v1.0.3')
+assert.equal(version, 'v1.0.4')
 const images = composeImages(version)
+const compose = fs.readFileSync(path.join(root, 'XPayincus/deploy/compose/compose.yaml'), 'utf8')
+const build = fs.readFileSync(path.join(root, 'XPayincus/deploy/compose/compose.build.yaml'), 'utf8')
+for (const image of Object.values(images)) assert.ok(compose.includes(`image: ${image}`))
+assert.equal((build.match(new RegExp(`org.opencontainers.image.version: ${version.replaceAll('.', '\\.')}`, 'g')) || []).length, 2)
+assert.ok(fs.readFileSync(path.join(root, 'XPayincus-Agent/cmd/incudal-agent/main.go'), 'utf8').includes(`var version = "${version}"`))
 assert.deepEqual(images, {
-  api: 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3',
-  user: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3',
-  admin: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3'
+  api: 'ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.4',
+  user: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.4',
+  admin: 'ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.4'
 })
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'xpayincus-compose-'))
 function run(script, directory, success = true) {

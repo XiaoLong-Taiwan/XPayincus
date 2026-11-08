@@ -5,13 +5,13 @@ services:
       dockerfile: deploy/compose/Dockerfile
       target: api
       labels:
-        org.opencontainers.image.version: v1.0.3
+        org.opencontainers.image.version: v1.0.4
   user:
     build: &web-build
       context: ${BUILD_CONTEXT:-../..}
       dockerfile: deploy/compose/Dockerfile
       target: web
       labels:
-        org.opencontainers.image.version: v1.0.3
+        org.opencontainers.image.version: v1.0.4
   admin:
     build: *web-build

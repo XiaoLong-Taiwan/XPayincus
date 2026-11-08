@@ -49,8 +49,8 @@ assert.ok(!/^\s*(source|\.) .*\.env/m.test(cli), 'CLI must not execute the deplo
 assert.ok(cli.includes('--profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared'), 'Mode changes must stop the previous ingress services')
 
 assert.ok(!/^    build:/m.test(compose), 'Default deployment must only pull published images')
-assert.ok(api.includes('image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3'))
-assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-panel-web:v1\.0\.3/g) || []).length, 2)
+assert.ok(api.includes('image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.4'))
+assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-panel-web:v1\.0\.4/g) || []).length, 2)
 const up = section(cli, '\n  up)', '\n  down)')
 assert.ok(up.includes('deployment_mode="${1:-pull}"') && up.includes('compose.build.yaml'))
 const stop = up.indexOf('"${compose[@]}" stop user admin api')

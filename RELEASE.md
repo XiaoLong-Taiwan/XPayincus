@@ -1,8 +1,14 @@
 # 統一發行
 
-根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，目前為 `v1.0.3`。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
+根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，目前為 `v1.0.4`。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
 
 GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent 內兩個宿主元件須納入實際來源，不能只有 gitlink 或 submodule。Git 工作區是否已提交、推送及遠端 CI 是否成功，需另以當次紀錄確認，不應把文件中的工作區描述當作即時狀態。來源碼上傳不等於建立 GitHub Release，也不代表已部署。
+
+## v1.0.4 版本準備
+
+- 同步根／Agent／ZFS VERSION、四份 package.json、RFW 自家 crate 與 Cargo.lock、Agent 預設版本及 Compose 映像／建置標籤。
+- 修正備份降權讀取、tar 路徑轉換、PostgreSQL 16 client 與私有 Agent manifest token，補入封存內容及重新導向認證回歸測試。
+- 本機關聯守衛、前後端型別檢查與版本契約通過；Docker daemon 未啟動，尚未驗證容器權限與 PostgreSQL 16 實際備份，也未發布或部署。
 
 ## v1.0.3 版本準備
 
@@ -31,9 +37,9 @@ GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent �
 
 ## GHCR 映像發布
 
-`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（目前 `v1.0.3`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
+`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（目前 `v1.0.4`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
 
-API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。目前版本標籤為 `:v1.0.3`。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
+API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。目前版本標籤為 `:v1.0.4`。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
 
 發布前同時核對 API／web：既有版本 index 的 revision、version、source 與兩種架構必須符合，且內容必須與該 commit 的 SHA index 完全一致，缺少 SHA 證據或不同 commit 一律失敗。所有 Docker workflow 共用 concurrency group 且不取消執行中的發布；重跑保留既有 SHA index，不以新建置覆寫它，再補上尚未發布的版本標籤。手動發布後，之後同版本 Git tag 必須指向相同 commit；若 main 已新增 commit，須升版，不能重新指定舊版映像。兩個 GHCR package 的標籤更新不是跨 package 原子交易，失敗可能留下部分完成標籤，可在同 commit 重跑補齊。
 

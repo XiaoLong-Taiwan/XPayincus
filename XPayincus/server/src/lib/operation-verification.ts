@@ -20,7 +20,8 @@ const ACCOUNT_OPERATIONS: OperationType[] = [
     'change_password',
     'disable_2fa',
     'change_email',
-    'delete_account'
+    'delete_account',
+    'backup_panel'
 ]
 
 const RESOURCE_OPERATIONS: OperationType[] = [
@@ -50,7 +51,8 @@ const OPERATION_NAMES: Record<OperationType, { zh: string; en: string }> = {
     recreate_instance: { zh: '重建实例', en: 'Recreate Instance' },
     transfer_instance: { zh: '转移实例', en: 'Transfer Instance' },
     delete_snapshot: { zh: '删除快照', en: 'Delete Snapshot' },
-    delete_backup: { zh: '删除备份', en: 'Delete Backup' }
+    delete_backup: { zh: '删除备份', en: 'Delete Backup' },
+    backup_panel: { zh: '建立面板加密備份', en: 'Create encrypted panel backup' }
 }
 
 /**

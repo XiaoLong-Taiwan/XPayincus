@@ -30,6 +30,6 @@ for (const arch of ['amd64', 'arm64']) {
   for await (const chunk of fs.createReadStream(file)) hash.update(chunk)
   files[`linux-${arch}`] = { name, sha256: hash.digest('hex'), size: fs.statSync(file).size, gzip: true }
 }
-fs.writeFileSync(`${process.env.STAGING}/manifest.json`, JSON.stringify({ version, generatedAt: new Date().toISOString(), files }, null, 2) + '\n', { flag: 'wx' })
+fs.writeFileSync(`${process.env.STAGING}/manifest.json`, JSON.stringify({ schemaVersion: 1, minimumUpdaterVersion: 'v1.0.3', version, generatedAt: new Date().toISOString(), files }, null, 2) + '\n', { flag: 'wx' })
 NODE
 for file in "$STAGING"/*; do publish_file "$file" "$DIST_DIR/$(basename "$file")"; done

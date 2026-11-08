@@ -2045,7 +2045,7 @@ const api = {
 
   // 系统配置（管理员）
   systemConfig: {
-    updateNetworkProbeTargets: (targets: Array<{ id: string; label: string; host: string; tcpPorts: number[]; icmp: boolean }>): Promise<{ targets: Array<{ id: string; label: string; host: string; tcpPorts: number[]; icmp: boolean }> }> => http.put('/network-probe/manage-targets', { targets }),
+    updateNetworkProbeTargets: (targets: import('@/types/network-probe').NetworkProbeTarget[]): Promise<{ targets: import('@/types/network-probe').NetworkProbeTarget[] }> => http.put('/network-probe/manage-targets', { targets }),
     // 公开配置（无需登录）
     getPublic: (): Promise<{
       registrationEnabled: boolean
@@ -2580,6 +2580,16 @@ const api = {
 
   // 管理员 API
   admin: {
+    panelBackups: {
+      list: (): Promise<{ backups: Array<{ id: string; createdAt: string; size: number; status: 'success' }>; task: { status: 'idle' | 'running' | 'success' | 'failed'; startedAt?: string; backup?: { id: string; createdAt: string; size: number; status: 'success' } } }> =>
+        http.get('/admin/panel-backups'),
+      create: (passphrase: string): Promise<{ task: { started: true } }> =>
+        http.post('/admin/panel-backups', { passphrase }),
+      createDownloadToken: (id: string): Promise<{ token: string; expiresIn: number }> =>
+        http.post(`/admin/panel-backups/${encodeURIComponent(id)}/download-token`, {}),
+      download: (token: string): Promise<Blob> =>
+        http.get(`/admin/panel-backups/download/${encodeURIComponent(token)}`, { responseType: 'blob' })
+    },
     // ==================== 支付渠道管理 ====================
 
     // 获取支付渠道列表

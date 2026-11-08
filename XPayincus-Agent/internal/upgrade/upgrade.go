@@ -77,7 +77,13 @@ func RandomJitter(max time.Duration) time.Duration {
 
 func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstruction, currentVersion string) error {
 	if !instruction.Available {
+		if instruction.Error != "" {
+			return errors.New(instruction.Error)
+		}
 		return nil
+	}
+	if err := validateInstruction(instruction, currentVersion); err != nil {
+		return err
 	}
 	if instruction.Version == "" {
 		return errors.New("upgrade version is required")
@@ -108,6 +114,9 @@ func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstru
 	if err := verifySHA256(packageBytes, instruction.SHA256); err != nil {
 		return err
 	}
+	if instruction.Size > 0 && int64(len(packageBytes)) != instruction.Size {
+		return errors.New("upgrade package size mismatch")
+	}
 
 	binaryBytes := packageBytes
 	if instruction.Gzip {
@@ -115,6 +124,9 @@ func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstru
 		if err != nil {
 			return err
 		}
+	}
+	if len(binaryBytes) == 0 {
+		return errors.New("empty upgrade binary")
 	}
 
 	tempPath, err := runner.writeTempBinary(binaryBytes)
@@ -134,7 +146,7 @@ func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstru
 
 func (runner *Runner) validateUpgradeURL(rawURL string) error {
 	upgradeURL, err := url.Parse(rawURL)
-	if err != nil || upgradeURL.Scheme == "" || upgradeURL.Host == "" {
+	if err != nil || upgradeURL.Scheme == "" || upgradeURL.Host == "" || upgradeURL.User != nil || upgradeURL.Fragment != "" {
 		return fmt.Errorf("upgrade URL is invalid: %s", rawURL)
 	}
 	if upgradeURL.Scheme != "http" && upgradeURL.Scheme != "https" {
@@ -156,6 +168,14 @@ func (runner *Runner) download(ctx context.Context, rawURL string) ([]byte, erro
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
+	copyClient := *client
+	copyClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("too many upgrade redirects")
+		}
+		return runner.validateUpgradeURL(request.URL.String())
+	}
+	client = &copyClient
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -301,7 +321,14 @@ func gunzip(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer reader.Close()
-	return io.ReadAll(reader)
+	body, err := io.ReadAll(io.LimitReader(reader, defaultMaxDownloadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > defaultMaxDownloadBytes {
+		return nil, errors.New("expanded upgrade exceeds limit")
+	}
+	return body, nil
 }
 
 func copyFile(source string, target string) error {

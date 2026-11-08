@@ -42,6 +42,7 @@ const operationName = computed(() => {
     transfer_instance: t('sensitiveVerification.operationTypes.transfer_instance'),
     delete_snapshot: t('sensitiveVerification.operationTypes.delete_snapshot'),
     delete_backup: t('sensitiveVerification.operationTypes.delete_backup'),
+    backup_panel: '建立面板加密備份',
     change_password: t('sensitiveVerification.operationTypes.change_password'),
     disable_2fa: t('sensitiveVerification.operationTypes.disable_2fa'),
     change_email: t('sensitiveVerification.operationTypes.change_email'),

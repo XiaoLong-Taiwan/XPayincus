@@ -19,11 +19,15 @@ case "$db_password" in
 esac
 export DATABASE_URL="postgresql://incudal:${db_password}@db:5432/incudal"
 unset db_password
-for directory in /opt/incudal/server/certs /opt/incudal/config; do
+for directory in /opt/incudal/server/certs /opt/incudal/config /opt/incudal/backups /run/incudal-backup /run/incudal-backup/secrets; do
   mkdir -p "$directory"
   chown node:node "$directory"
   chmod 700 "$directory"
 done
+for secret_name in postgres_password jwt_secret cookie_secret encryption_key admin_password; do
+  install -m 600 -o node -g node "/run/secrets/$secret_name" "/run/incudal-backup/secrets/$secret_name"
+done
+install -m 600 -o node -g node /deployment/.env /run/incudal-backup/.env
 find /opt/incudal/server/certs -type d -exec chown node:node {} + -exec chmod 700 {} +
 find /opt/incudal/server/certs -type f -exec chown node:node {} + -exec chmod 600 {} +
 cert_dir=/opt/incudal/server/certs

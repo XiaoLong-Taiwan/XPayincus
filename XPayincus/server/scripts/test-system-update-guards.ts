@@ -17,7 +17,7 @@ import {
 const repoRoot = resolve(import.meta.dirname, '../..')
 
 function read(path: string): string {
-  return readFileSync(resolve(repoRoot, path), 'utf8')
+  return readFileSync(resolve(repoRoot, path), 'utf8').replace(/\r\n/g, '\n')
 }
 
 const serverApp = read('server/src/app.ts')
@@ -77,7 +77,7 @@ assert.ok(
 assert.ok(
   versionLib.includes('export async function hasUsableOtaArtifact') &&
     versionLib.includes('export async function canApplyUpdate') &&
-    versionLib.includes('if (await hasUsableOtaArtifact(tag)) return true') &&
+    versionLib.includes('if (await hasUsableOtaArtifact(tag, current.version)) return true') &&
     versionLib.includes('return await isGitRepository(root)') &&
     versionLib.includes("SYSTEM_UPDATE_APPLY_MODE?.trim().toLowerCase() === 'git'") &&
     versionLib.includes('compareReleaseTags(tag, current.version) <= 0') &&
@@ -94,7 +94,7 @@ assert.ok(
 
 assert.ok(
   versionLib.includes('compareReleaseTags(right, left)') &&
-    versionLib.includes('if (!update.ota.manifestAvailable) continue') &&
+    versionLib.includes('if (!update.ota.manifestAvailable) {') &&
     versionLib.includes('if (compareReleaseTags(tag, current.version) > 0) updates.push(update)') &&
     versionLib.includes('latest,') &&
     versionLib.includes('updateAvailable: updates.length > 0') &&
@@ -168,7 +168,8 @@ assert.ok(
     runTask.includes("tar', ['-xzf', artifactPath") &&
     runTask.includes('assertArtifactStaging') &&
     runTask.includes("'.git'") &&
-    runTask.includes('No usable OTA artifact found; falling back to Git build mode') &&
+    runTask.includes('OTA update rejected; no usable artifact is available') &&
+    !runTask.includes('falling back to Git build mode') &&
     runTask.includes('Skipping source-based Agent release smoke in artifact mode') &&
     runTask.includes('autoRollbackFromBackup') &&
     runTask.includes('switchCurrentRelease') &&
@@ -200,7 +201,7 @@ assert.ok(
     runTask.includes('Auto rollback completed successfully') &&
     runTask.includes("status: rolledBack ? 'rolled_back' : 'failed'") &&
     runTask.includes('failed-update'),
-  'online updater must prefer checksum-verified OTA release artifacts, support atomic current/release switching, clean OTA caches, preflight disk space, prune old releases safely, and preserve Git fallback mode'
+  'online updater must verify OTA artifacts and reject unusable artifacts without automatic Git fallback'
 )
 
 assert.ok(

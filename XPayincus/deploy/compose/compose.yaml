@@ -12,7 +12,7 @@ services:
         mkdir -p /var/lib/postgresql/data /deployment/certs /deployment/backups /deployment/config
         chown postgres:postgres /var/lib/postgresql/data
         chown 1000:1000 /deployment/certs /deployment/config
-        chown "$$(stat -c '%u:%g' /deployment/.env)" /deployment/backups
+        chown 1000:1000 /deployment/backups
         chmod 700 /var/lib/postgresql/data /deployment/certs /deployment/backups /deployment/config /deployment/secrets
         for secret_name in postgres_password jwt_secret cookie_secret encryption_key admin_password; do
           test -f "/deployment/secrets/$$secret_name"
@@ -66,7 +66,7 @@ services:
 
   api:
     container_name: incudal-panel-api
-    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.3
+    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.4
     restart: unless-stopped
     init: true
     environment:
@@ -95,15 +95,21 @@ services:
       INCUDAL_RELEASE_REPOSITORY: ${INCUDAL_RELEASE_REPOSITORY:-}
       INCUDAL_AGENT_RELEASE_REPOSITORY: ${INCUDAL_AGENT_RELEASE_REPOSITORY:-}
     secrets:
-      - postgres_password
       - jwt_secret
       - cookie_secret
       - encryption_key
       - admin_password
+      - postgres_password
     volumes:
       - ./certs:/opt/incudal/server/certs
       - ./config:/opt/incudal/config
-      - ./backups:/opt/incudal/backups:ro
+      - ./backups:/opt/incudal/backups
+      - type: bind
+        source: ./.env
+        target: /deployment/.env
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       init:
         condition: service_completed_successfully
@@ -128,7 +134,7 @@ services:
     logging: *logging
 
   user:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.4
     restart: unless-stopped
     environment:
       PANEL_ENTRY: user
@@ -150,7 +156,7 @@ services:
     logging: *logging
 
   admin:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.3
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.4
     restart: unless-stopped
     environment:
       PANEL_ENTRY: admin

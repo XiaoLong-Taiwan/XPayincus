@@ -4,6 +4,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as db from '../db/index.js'
+import { prisma } from '../db/prisma.js'
 import { hasAvailableMailOffering } from '../db/mail.js'
 import { createLog } from '../db/logs.js'
 import { apiError, ErrorCode } from '../lib/errors.js'
@@ -682,8 +683,12 @@ export default async function systemConfigRoutes(fastify: FastifyInstance) {
                     } catch {
                         return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, config.key))
                     }
-                    const { parseNetworkProbeTargets } = await import('../lib/network-probe.js')
-                    if (!parseNetworkProbeTargets(parsed)) return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, config.key))
+                    const { parseNetworkProbeTargets, resolvePublicTargetHost } = await import('../lib/network-probe.js')
+                    const targets = parseNetworkProbeTargets(parsed)
+                    if (!targets) return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, config.key))
+                    for (const target of targets) {
+                        if (!(await resolvePublicTargetHost(target.host)) || !(await prisma.packageHost.findUnique({ where: { packageId_hostId: { packageId: target.packageId, hostId: target.hostId } }, select: { id: true } }))) return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, config.key))
+                    }
                 }
                 continue
             }

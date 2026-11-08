@@ -30,6 +30,8 @@ import {
 } from '../lib/host-agent-credentials.js'
 import { processAgentInstanceReport } from '../services/agent-instance-report.js'
 import { clampAgentHeartbeatIntervalSeconds, deriveAgentStatus, getAgentHeartbeatIntervalSeconds } from '../lib/agent-status.js'
+import { assertAgentManifest } from '../lib/update-contract.js'
+import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } from '../lib/system-version.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -77,6 +79,8 @@ interface AgentUpgradeManifestFile {
 }
 
 interface AgentUpgradeManifest {
+  schemaVersion?: number
+  minimumUpdaterVersion?: string
   version?: string
   generatedAt?: string
   files?: Record<string, AgentUpgradeManifestFile>
@@ -97,6 +101,11 @@ interface GitHubRelease {
 }
 
 interface AgentUpgradeInstruction {
+  schemaVersion?: number
+  minimumUpdaterVersion?: string
+  platform?: string
+  arch?: string
+  error?: string
   available: boolean
   version?: string
   url?: string
@@ -398,6 +407,7 @@ function normalizeLocalAgentManifest(raw: unknown, releaseDir: string): AgentUpg
     return null
   }
   const version = normalizeAgentBinaryVersion(raw.version)
+  assertAgentManifest(raw)
   const files = isRecord(raw.files) ? raw.files : null
   if (!version || !files) {
     return null
@@ -405,6 +415,8 @@ function normalizeLocalAgentManifest(raw: unknown, releaseDir: string): AgentUpg
 
   const manifest: AgentUpgradeManifest = {
     version,
+    ...(raw.schemaVersion === 1 ? { schemaVersion: 1 } : {}),
+    ...(typeof raw.minimumUpdaterVersion === 'string' ? { minimumUpdaterVersion: raw.minimumUpdaterVersion } : {}),
     generatedAt: sanitizeShortString(raw.generatedAt, 80) ?? new Date().toISOString(),
     files: {}
   }
@@ -422,7 +434,8 @@ function normalizeLocalAgentManifest(raw: unknown, releaseDir: string): AgentUpg
       return null
     }
     const stat = statSync(path)
-    if (!stat.isFile() || stat.size <= 0 || stat.size > agentBinaryDownloadLimitBytes) {
+    if (!stat.isFile() || stat.size <= 0 || stat.size > agentBinaryDownloadLimitBytes ||
+      (file.size !== undefined && file.size !== stat.size)) {
       return null
     }
     if (hashLocalFile(path) !== sha256) {
@@ -449,10 +462,12 @@ async function readLocalAgentUpgradeManifest(): Promise<AgentUpgradeManifest | n
   try {
     const manifestPath = join(releaseDir, 'manifest.json')
     const raw = JSON.parse(readFileSync(manifestPath, 'utf8'))
-    return normalizeLocalAgentManifest(raw, releaseDir)
+    const manifest = normalizeLocalAgentManifest(raw, releaseDir)
+    if (!manifest) throw new Error('Invalid local Agent manifest or artifact')
+    return manifest
   } catch (error) {
     console.warn('[AgentRelease] Failed to read local Agent release manifest', error)
-    return null
+    throw error
   }
 }
 
@@ -522,6 +537,7 @@ function normalizeAgentBinaryVersion(value: unknown): string | null {
 }
 
 function agentApiBinaryNameToReleaseAssetName(name: string, version: string): string | null {
+  if (['amd64', 'arm64'].some(arch => name === `xpayincus-agent-${version}-linux-${arch}.gz`)) return name
   if (name === `xpayincus-agent-${version}-linux-amd64`) {
     return `xpayincus-agent-${version}-linux-amd64`
   }
@@ -633,6 +649,32 @@ async function readAgentUpgradeManifest(): Promise<AgentUpgradeManifest | null> 
     files: {}
   }
   const assets = new Map<string, GitHubReleaseAsset>()
+  const published = release.assets.filter(asset => asset.name === 'manifest.json')
+  if (published.length > 1) throw new Error('Ambiguous Agent manifest assets')
+  if (published.length === 1) {
+    const url = published[0]?.url || published[0]?.browser_download_url
+    if (!url) throw new Error('Missing Agent manifest URL')
+    assertTrustedAgentReleaseDownloadUrl(url)
+    const response = await fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/octet-stream')
+    if (!response.ok) throw new Error(`Agent manifest HTTP ${response.status}`)
+    const raw = await readReleaseJson<unknown>(response)
+    if (!isRecord(raw)) throw new Error('Invalid published Agent manifest')
+    assertAgentManifest(raw)
+    if (raw.version !== version) throw new Error('Agent manifest release version mismatch')
+    manifest.schemaVersion = raw.schemaVersion as number | undefined
+    manifest.minimumUpdaterVersion = raw.minimumUpdaterVersion as string | undefined
+    manifest.files = raw.files as Record<string, AgentUpgradeManifestFile>
+    for (const file of Object.values(manifest.files)) {
+      const matches = release.assets.filter(asset => asset.name === file.name)
+      if (matches.length !== 1 || (file.size !== undefined && matches[0]?.size !== file.size)) {
+        throw new Error('Agent manifest artifact does not match release asset')
+      }
+      assets.set(file.name!, matches[0]!)
+    }
+    agentReleaseManifestCache = { expiresAt: Date.now() + agentReleaseCacheTtlMs, manifest }
+    agentReleaseAssetCache = { expiresAt: Date.now() + agentReleaseCacheTtlMs, assets }
+    return manifest
+  }
 
   for (const asset of release.assets) {
     if (!isRecord(asset)) {
@@ -738,7 +780,7 @@ async function downloadAgentReleaseBinary(input: {
 
   const asset = await getAgentReleaseAsset(input.name, input.version)
   const assetName = sanitizeShortString(asset?.name, 256)
-  if (!assetName || !agentReleaseBinaryNamePattern.test(assetName)) {
+  if (!assetName || !agentBinaryNamePattern.test(assetName)) {
     return null
   }
 
@@ -797,13 +839,27 @@ function isSha256(value: string | undefined): value is string {
 }
 
 async function buildAgentUpgradeInstruction(request: FastifyRequest, body: AgentHeartbeatBody): Promise<AgentUpgradeInstruction> {
-  const manifest = await readAgentUpgradeManifest()
+  let manifest: AgentUpgradeManifest | null
+  try {
+    manifest = await readAgentUpgradeManifest()
+  } catch (error) {
+    return { available: false, error: error instanceof Error ? error.message : 'Agent manifest rejected' }
+  }
   const manifestVersion = sanitizeShortString(manifest?.version, 128)
   if (!manifest || !manifestVersion) {
     return { available: false }
   }
 
   const currentVersion = sanitizeShortString(body.version, 128)
+  if (!currentVersion || !isValidReleaseTag(currentVersion) || !isValidReleaseTag(manifestVersion)) {
+    return { available: false, error: 'Invalid Agent current/target version' }
+  }
+  if (compareReleaseTags(manifestVersion, currentVersion) < 0) {
+    return { available: false, version: manifestVersion, error: 'Agent downgrade rejected' }
+  }
+  if (manifest.minimumUpdaterVersion && compareReleaseTags(currentVersion, manifest.minimumUpdaterVersion) < 0) {
+    return { available: false, version: manifestVersion, error: `Agent requires minimumUpdaterVersion ${manifest.minimumUpdaterVersion}` }
+  }
   if (currentVersion === manifestVersion) {
     return { available: false, version: manifestVersion }
   }
@@ -812,7 +868,7 @@ async function buildAgentUpgradeInstruction(request: FastifyRequest, body: Agent
   const goos = sanitizeShortString(runtimeInfo.goos, 32)
   const goarch = sanitizeShortString(runtimeInfo.goarch, 32)
   if (goos !== 'linux' || (goarch !== 'amd64' && goarch !== 'arm64')) {
-    return { available: false, version: manifestVersion }
+    return { available: false, version: manifestVersion, error: 'Unsupported Agent platform/arch' }
   }
 
   const file = manifest.files?.[`${goos}-${goarch}`]
@@ -823,6 +879,10 @@ async function buildAgentUpgradeInstruction(request: FastifyRequest, body: Agent
 
   const upgradeUrl = `${derivePanelUrl(request)}/api/agent/binary/${encodeURIComponent(name)}?v=${encodeURIComponent(manifestVersion)}&sha256=${encodeURIComponent(file.sha256)}`
   const instruction: AgentUpgradeInstruction = {
+    schemaVersion: manifest.schemaVersion,
+    minimumUpdaterVersion: manifest.minimumUpdaterVersion,
+    platform: goos,
+    arch: goarch,
     available: true,
     version: manifestVersion,
     url: upgradeUrl,

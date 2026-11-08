@@ -32,16 +32,40 @@ type HeartbeatResult struct {
 }
 
 type UpgradeInstruction struct {
-	Available bool   `json:"available"`
-	Version   string `json:"version"`
-	URL       string `json:"url"`
-	SHA256    string `json:"sha256"`
-	Gzip      bool   `json:"gzip"`
-	Size      int64  `json:"size"`
+	SchemaVersion         *int    `json:"schemaVersion,omitempty"`
+	MinimumUpdaterVersion *string `json:"minimumUpdaterVersion,omitempty"`
+	Platform              string  `json:"platform,omitempty"`
+	Arch                  string  `json:"arch,omitempty"`
+	Error                 string  `json:"error,omitempty"`
+	Available             bool    `json:"available"`
+	Version               string  `json:"version"`
+	URL                   string  `json:"url"`
+	SHA256                string  `json:"sha256"`
+	Gzip                  bool    `json:"gzip"`
+	Size                  int64   `json:"size"`
 }
 
 type heartbeatResponse struct {
 	Upgrade *UpgradeInstruction `json:"upgrade"`
+}
+
+func (instruction *UpgradeInstruction) UnmarshalJSON(data []byte) error {
+	type wireInstruction UpgradeInstruction
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"schemaVersion", "minimumUpdaterVersion", "platform", "arch", "size", "gzip"} {
+		if raw, exists := fields[key]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("invalid upgrade %s: null", key)
+		}
+	}
+	var value wireInstruction
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*instruction = UpgradeInstruction(value)
+	return nil
 }
 
 func New(cfg config.Config) *Client {
@@ -104,9 +128,10 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 	}
 
 	var parsedResponse heartbeatResponse
-	if err := json.Unmarshal(responseBody, &parsedResponse); err == nil {
-		result.Upgrade = parsedResponse.Upgrade
+	if err := json.Unmarshal(responseBody, &parsedResponse); err != nil {
+		return result, fmt.Errorf("invalid heartbeat upgrade response: %w", err)
 	}
+	result.Upgrade = parsedResponse.Upgrade
 
 	var parsed map[string]any
 	if err := json.Unmarshal(responseBody, &parsed); err == nil {

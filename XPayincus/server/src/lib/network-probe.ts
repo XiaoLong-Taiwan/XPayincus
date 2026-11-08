@@ -15,6 +15,9 @@ export interface NetworkProbeTarget {
   host: string
   tcpPorts: number[]
   icmp: boolean
+  packageId: number
+  hostId: number
+  https: boolean
 }
 
 export interface NetworkProbeResult {
@@ -34,14 +37,15 @@ let activeProbes = 0
 function isPublicIpv4(value: string): boolean {
   const octets = value.split('.').map(Number)
   if (octets.length !== 4 || octets.some(part => part < 0 || part > 255)) return false
-  const [a, b] = octets
-  return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)))
+  const [a, b, c] = octets
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168 || (b === 88 && c === 99))) || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) || (a === 203 && b === 0 && c === 113))
 }
 
 function isPublicIpv6(value: string): boolean {
   const normalized = value.toLowerCase()
   const firstHextet = Number.parseInt(normalized.split(':')[0] || '0', 16)
-  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !normalized.startsWith('2001:db8:')
+  const secondHextet = Number.parseInt(normalized.split(':')[1] || '0', 16)
+  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !(firstHextet === 0x2001 && (secondHextet < 0x200 || secondHextet === 0xdb8)) && firstHextet !== 0x2002 && !(firstHextet === 0x3fff && secondHextet <= 0xfff)
 }
 
 export async function resolvePublicTargetHost(host: string): Promise<string | null> {
@@ -65,12 +69,13 @@ export function parseNetworkProbeTargets(value: unknown): NetworkProbeTarget[] |
     const candidate = item as Record<string, unknown>
     if (typeof candidate.id !== 'string' || !/^[a-z0-9_-]{1,40}$/.test(candidate.id) || ids.has(candidate.id)) return null
     if (typeof candidate.label !== 'string' || !candidate.label.trim() || candidate.label.trim().length > 80) return null
-    if (typeof candidate.host !== 'string' || candidate.host !== candidate.host.trim() || !/^[a-z0-9.-]{1,253}$/i.test(candidate.host)) return null
+    if (typeof candidate.host !== 'string' || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(candidate.host)) return null
     if (isIP(candidate.host)) return null
     if (!Array.isArray(candidate.tcpPorts) || candidate.tcpPorts.length > 10 || candidate.tcpPorts.some(port => !Number.isInteger(port) || (port as number) < MIN_PORT || (port as number) > MAX_PORT)) return null
-    if (typeof candidate.icmp !== 'boolean' || (!candidate.icmp && candidate.tcpPorts.length === 0)) return null
+    if (typeof candidate.icmp !== 'boolean' || typeof candidate.https !== 'boolean' || (!candidate.icmp && !candidate.https && candidate.tcpPorts.length === 0)) return null
+    if (![candidate.packageId, candidate.hostId].every(id => Number.isInteger(id) && (id as number) > 0 && (id as number) <= 2147483647)) return null
     ids.add(candidate.id)
-    targets.push({ id: candidate.id, label: candidate.label.trim(), host: candidate.host.toLowerCase(), tcpPorts: Array.from(new Set(candidate.tcpPorts as number[])), icmp: candidate.icmp })
+    targets.push({ id: candidate.id, label: candidate.label.trim(), host: candidate.host.toLowerCase(), tcpPorts: Array.from(new Set(candidate.tcpPorts as number[])), icmp: candidate.icmp, packageId: candidate.packageId as number, hostId: candidate.hostId as number, https: candidate.https })
   }
   return targets
 }

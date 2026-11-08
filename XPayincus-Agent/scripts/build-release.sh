@@ -60,6 +60,8 @@ AMD64_GZ="${DIST_DIR}/xpayincus-agent-${VERSION}-linux-amd64.gz"
 ARM64_GZ="${DIST_DIR}/xpayincus-agent-${VERSION}-linux-arm64.gz"
 cat > "${DIST_DIR}/manifest.json" <<EOF_MANIFEST
 {
+  "schemaVersion": 1,
+  "minimumUpdaterVersion": "v1.0.3",
   "version": "${VERSION}",
   "generatedAt": "${GENERATED_AT}",
   "files": {

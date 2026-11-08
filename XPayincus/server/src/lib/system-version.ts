@@ -2,6 +2,7 @@ import { execFile } from 'child_process'
 import { readFile } from 'fs/promises'
 import { join, resolve } from 'path'
 import { promisify } from 'util'
+import { assertManifestCompatibility } from './update-contract.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -153,7 +154,8 @@ function normalizeOtaArtifact(input: unknown): OtaArtifactInfo | null {
     ? value.size
     : null
 
-  if (!name || !platform || !arch || !url || !/^[a-f0-9]{64}$/.test(sha256)) return null
+  if (!name || !platform || !arch || !url || !/^[a-f0-9]{64}$/.test(sha256) ||
+    (Object.hasOwn(value, 'size') && (size === null || size <= 0))) return null
   return { name, platform, arch, url, sha256, size }
 }
 
@@ -164,7 +166,7 @@ function normalizeOtaArtifact(input: unknown): OtaArtifactInfo | null {
 export function isTrustedReleaseHost(rawUrl: string): boolean {
   try {
     const u = new URL(rawUrl)
-    if (u.protocol !== 'https:') return false
+    if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443')) return false
     const host = u.hostname.toLowerCase()
     return host === 'github.com'
       || host === 'api.github.com'
@@ -176,22 +178,47 @@ export function isTrustedReleaseHost(rawUrl: string): boolean {
   }
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const headers: Record<string, string> = {
-    accept: 'application/vnd.github+json',
-    'user-agent': 'xpayincus-online-update'
+export async function fetchRelease(url: string, token: string | null = getReleaseToken(), accept?: string): Promise<Response> {
+  let next = url
+  for (let count = 0; count < 6; count++) {
+    if (!isTrustedReleaseHost(next)) throw new Error('Untrusted release download URL')
+    const headers: Record<string, string> = { 'user-agent': 'xpayincus-online-update' }
+    if (accept) headers.accept = accept
+    if (token && new URL(next).origin === 'https://api.github.com') headers.authorization = `Bearer ${token}`
+    const response = await fetch(next, { headers, redirect: 'manual', signal: AbortSignal.timeout(120000) })
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location')
+      await response.body?.cancel()
+      if (!location) throw new Error('Release redirect missing Location')
+      next = new URL(location, next).href
+      continue
+    }
+    return response
   }
-  const token = getReleaseToken()
-  if (token && isTrustedReleaseHost(url)) headers.authorization = `Bearer ${token}`
+  throw new Error('Too many release redirects')
+}
 
-  const response = await fetch(url, { headers })
+export async function readReleaseJson<T>(response: Response): Promise<T> {
+  if (!response.body) throw new Error('Empty release JSON')
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for await (const chunk of response.body) {
+    total += chunk.byteLength
+    if (total > 2 * 1024 * 1024) throw new Error('Release JSON exceeds download limit')
+    chunks.push(chunk)
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetchRelease(url)
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`)
   }
-  return await response.json() as T
+  return await readReleaseJson<T>(response)
 }
 
-export async function getOtaReleaseInfo(tag: string): Promise<OtaReleaseInfo> {
+export async function getOtaReleaseInfo(tag: string, currentVersion?: string): Promise<OtaReleaseInfo> {
   const repository = getReleaseRepository()
   const releaseApiUrl = `https://api.github.com/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`
 
@@ -218,6 +245,7 @@ export async function getOtaReleaseInfo(tag: string): Promise<OtaReleaseInfo> {
 
     const manifest = await fetchJson<{
       schemaVersion?: unknown
+      minimumUpdaterVersion?: unknown
       product?: unknown
       releaseChannel?: unknown
       version?: unknown
@@ -229,6 +257,7 @@ export async function getOtaReleaseInfo(tag: string): Promise<OtaReleaseInfo> {
       !Array.isArray(manifest.artifacts)) {
       throw new Error('OTA manifest schema/product/channel/version/tag mismatch')
     }
+    assertManifestCompatibility(manifest, currentVersion ?? (await getCurrentVersionMetadata()).version)
     const panelEntries = manifest.artifacts.filter(input => {
       if (!input || typeof input !== 'object') return false
       const name = (input as { name?: unknown }).name
@@ -247,7 +276,8 @@ export async function getOtaReleaseInfo(tag: string): Promise<OtaReleaseInfo> {
       const matchingAssets = assets.filter(asset => asset.name === artifact.name)
       const expectedUrl = `https://github.com/${repository}/releases/download/${tag}/${artifact.name}`
       if (matchingAssets.length !== 1 || artifact.url !== expectedUrl ||
-        matchingAssets[0]?.browser_download_url !== artifact.url) {
+        matchingAssets[0]?.browser_download_url !== artifact.url ||
+        (artifact.size !== null && matchingAssets[0]?.size !== undefined && artifact.size !== matchingAssets[0]?.size)) {
         throw new Error('Panel artifact does not match release asset')
       }
     }
@@ -297,10 +327,10 @@ export function selectRuntimeArtifact(artifacts: OtaArtifactInfo[], tag?: string
   return matches.length === 1 ? matches[0]! : null
 }
 
-export async function hasUsableOtaArtifact(tag: string): Promise<boolean> {
+export async function hasUsableOtaArtifact(tag: string, currentVersion?: string): Promise<boolean> {
   if (!isValidReleaseTag(tag)) return false
   try {
-    const ota = await getOtaReleaseInfo(tag)
+    const ota = await getOtaReleaseInfo(tag, currentVersion)
     return ota.manifestAvailable && selectRuntimeArtifact(ota.artifacts, tag) !== null
   } catch {
     return false
@@ -314,8 +344,18 @@ export async function canApplyUpdate(tag: string, root = getProjectRoot()): Prom
   if (process.env.SYSTEM_UPDATE_APPLY_MODE?.trim().toLowerCase() === 'git') {
     return await isGitRepository(root)
   }
-  if (await hasUsableOtaArtifact(tag)) return true
+  if (await hasUsableOtaArtifact(tag, current.version)) return true
   return false
+}
+
+export async function getUpdateRejectionReason(tag: string, root = getProjectRoot()): Promise<string> {
+  if (!isValidReleaseTag(tag)) return 'Update rejected: invalid target version'
+  const current = await getCurrentVersionMetadata(root)
+  if (!isValidReleaseTag(current.version) || compareReleaseTags(tag, current.version) <= 0) {
+    return 'Update rejected: target must be newer than a valid current release version'
+  }
+  const ota = await getOtaReleaseInfo(tag, current.version)
+  return ota.error || `Update rejected: no unique artifact for ${getRuntimePlatform()}/${getRuntimeArch()}`
 }
 
 // 非 Git 部署下的版本发现：改用 GitHub Releases API，语义与 `git tag --list` 一致（只取正式 release tag）。
@@ -418,7 +458,7 @@ async function checkForUpdatesWithoutGit(current: VersionMetadata): Promise<Upda
     commit: null,
     date: null,
     changelog: [],
-    ota: await getOtaReleaseInfo(tag)
+    ota: await getOtaReleaseInfo(tag, current.version)
   })
   const candidates = [...new Set(tags)].sort((left, right) => compareReleaseTags(right, left))
   let latest: AvailableUpdate | null = null
@@ -427,7 +467,10 @@ async function checkForUpdatesWithoutGit(current: VersionMetadata): Promise<Upda
   for (const tag of candidates) {
     if (!isValidReleaseTag(current.version) || compareReleaseTags(tag, current.version) < 0) continue
     const update = await buildAvailableUpdate(tag)
-    if (!update.ota.manifestAvailable) continue
+    if (!update.ota.manifestAvailable) {
+      latest ??= update
+      continue
+    }
     latest ??= update
     if (compareReleaseTags(tag, current.version) > 0) updates.push(update)
   }
@@ -462,7 +505,7 @@ export async function checkForUpdates(root = getProjectRoot()): Promise<UpdateCh
     commit: await getTagCommit(tag, root),
     date: await getTagDate(tag, root),
     changelog: await getTagChangelog(tag, root),
-    ota: await getOtaReleaseInfo(tag)
+    ota: await getOtaReleaseInfo(tag, current.version)
   })
   let latest: AvailableUpdate | null = null
   const updates: AvailableUpdate[] = []
