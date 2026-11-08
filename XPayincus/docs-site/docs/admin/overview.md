@@ -126,6 +126,22 @@ https://admin.example.com
 - 工单与附件：附件大小、上传安全和 Lsky 存储。
 - 弹窗公告：用户端弹窗内容和展示策略。
 
+## Discord、Google 與 GitHub 快捷登入
+
+管理員於 `/admin/oauth` 分別填入各平台的 Client ID、Client Secret，在平台控制台登記回呼網址後啟用。系統未內附或自動設定任何憑證；沒有有效憑證就無法完成登入或綁定。停用的 provider 不顯示於登入頁，既有綁定仍會顯示於個人設定供解除。
+
+| 平台 | 開發者控制台 | Scope | 回呼路徑 |
+| --- | --- | --- | --- |
+| Discord | https://discord.com/developers/applications | `identify email` | `/api/oauth/callback/discord` |
+| Google | https://console.cloud.google.com/apis/credentials | `openid email profile` | `/api/oauth/callback/google` |
+| GitHub | https://github.com/settings/developers | `read:user user:email` | `/api/oauth/callback/github` |
+
+客戶端回呼 origin 使用 `SITE_URL` 或第一個 `FRONTEND_URL`；管理端使用 `ADMIN_FRONTEND_URL`，正式環境必須設定這些公開網址。請登記各入口完整 HTTPS 回呼網址，並將該網域的 `/api/oauth/*` 代理至 API。設定卡顯示目前管理端網域的回呼網址，客戶端網域也須登記。GitHub OAuth App 僅接受一個回呼網址；雙網域共用憑證時，須使用 GitHub 允許且涵蓋兩個回呼路徑的共同父層網址，否則須分開部署。Google 測試模式可能需要加入測試使用者。
+
+使用者先以既有帳號登入，再到 `/profile` 綁定；管理員使用 `/admin/profile`。快捷登入只以 provider 與 provider 使用者 ID 尋找既有綁定，不依電子郵件自動合併或建立帳號。同一 provider 要更換外部帳號時，須先解除原綁定；解除會撤銷既有面板會話，之後須重新登入。
+
+部署時須套用 `20261109000000_add_discord_oauth` 遷移並重新產生 Prisma Client，才能使用 Discord；本次修改未執行遷移或程式碼產生。OAuth state 沿用十分鐘效期與一次性 nonce，攜帶 provider 及綁定會話資訊並拒絕 provider 不相符的回呼；更新前已開始的授權須重新發起。API 仍只支援單一 Node 程序。
+
 ## 版本更新
 
 `/admin/system-update` 用于后台 OTA：

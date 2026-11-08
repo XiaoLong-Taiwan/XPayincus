@@ -1126,6 +1126,14 @@ export interface HostWithDetails extends Host {
   }
 }
 
+export interface HostAgentUpgradeState {
+  targetVersion: string
+  requestedAt: string
+  expiresAt: string
+  deliveredAt: string | null
+  status: 'pending' | 'delivered' | 'succeeded' | 'unconfirmed'
+}
+
 export interface HostAgentStatus {
   id: number
   hostId: number
@@ -1135,6 +1143,7 @@ export interface HostAgentStatus {
   version: string | null
   latestVersion: string | null
   versionStatus: 'latest' | 'outdated' | 'unknown'
+  upgrade: HostAgentUpgradeState | null
   capabilities: string[]
   lastReport: {
     incus?: {
@@ -1696,19 +1705,17 @@ export interface PaginatedInboxMessages {
 // ==================== OAuth 相关 ====================
 
 export interface OAuthConfig {
-  id: number
-  provider: 'github' | 'google'
-  client_id: string
-  client_secret: string
-  enabled: number
-  created_at: string
-  updated_at: string
+  provider: 'github' | 'google' | 'discord'
+  clientId: string
+  clientSecretMasked: string | null
+  enabled: boolean
+  updatedAt: string
 }
 
 export interface UserOAuthBinding {
   id: number
   user_id: number
-  provider: 'github' | 'google'
+  provider: 'github' | 'google' | 'discord'
   provider_user_id: string
   provider_username: string | null
   provider_email: string | null
@@ -1721,6 +1728,14 @@ export interface UpdateOAuthConfigRequest {
   clientId?: string
   clientSecret?: string
   enabled?: boolean
+}
+
+export interface OAuthBindingSummary {
+  provider: 'github' | 'google' | 'discord'
+  username: string | null
+  email: string | null
+  avatar: string | null
+  boundAt: string
 }
 
 export interface OAuthClientApp {

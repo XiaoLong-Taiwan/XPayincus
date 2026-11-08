@@ -1,0 +1,292 @@
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+REPOSITORY = 'XiaoLong-Taiwan/XPayincus'
+RELEASES = f'https://github.com/{REPOSITORY}/releases/download'
+VERSION = re.compile(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)')
+FILES = (
+    'docker-compose.yml', 'compose.yaml', 'compose.build.yaml', 'panel.sh',
+    'download.sh', 'update.py', 'README.md', 'https-proxy.conf.example',
+    'origin-entrypoint.sh', 'edge-nginx.conf.template', 'tunnel-nginx.conf.template',
+    'Dockerfile', 'Dockerfile.dockerignore', 'api-entrypoint.sh',
+    'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml',
+)
+
+
+def fail(message):
+    raise SystemExit(message)
+
+
+def run(args, **kwargs):
+    return subprocess.run(args, check=True, pass_fds=(9,), **kwargs)
+
+
+def fetch(url, target):
+    run(['curl', '--fail', '--silent', '--show-error', '--location',
+         '--proto', '=https', '--proto-redir', '=https', '--connect-timeout', '20',
+         '--max-time', '300', '--retry', '2', '--max-filesize', '2097152',
+         '--output', str(target), url])
+
+
+def checksum(version, scratch):
+    target = scratch / 'SHA256SUMS'
+    fetch(f'{RELEASES}/{version}/SHA256SUMS', target)
+    artifact = f'xpayincus-dashboard-{version}-compose.tar.gz'
+    entries = [line.split() for line in target.read_text().splitlines()]
+    matches = [entry for entry in entries if len(entry) == 2 and entry[1] == artifact]
+    if len(matches) != 1 or not re.fullmatch('[0-9a-f]{64}', matches[0][0]):
+        fail('官方 SHA256SUMS 缺少唯一有效的 Dashboard checksum。')
+    return matches[0][0]
+
+
+def stage(base, version, scratch, name):
+    digest = checksum(version, scratch)
+    destination = scratch / name
+    run(['bash', str(base / 'download.sh'), 'install', str(destination), version, digest])
+    if name == 'target' and not (destination / 'update.py').is_file():
+        fail('目標 Release 尚未交付宿主一鍵更新工具。')
+    return destination, digest
+
+
+def settings(base):
+    values = {}
+    for line in (base / '.env').read_text().splitlines():
+        match = re.fullmatch(r'\s*(COMPOSE_[A-Z_]+)\s*=(.*)', line)
+        if match:
+            key, value = match.groups()
+            if key in values:
+                fail('重複的 Compose 設定，拒絕更新。')
+            values[key] = value.strip().strip('\'"')
+    for key in set(values) | {key for key in os.environ if key.startswith('COMPOSE_')}:
+        value = os.environ.get(key, values.get(key, ''))
+        allowed = {
+            'COMPOSE_FILE': ('', 'docker-compose.yml', 'compose.yaml', 'compose.yaml:compose.release.yaml'),
+            'COMPOSE_PROJECT_NAME': ('', 'incudal-panel'),
+            'COMPOSE_PROFILES': ('', 'nginx', 'cloudflare'),
+        }
+        if key not in allowed or value not in allowed[key]:
+            fail(f'自訂或衝突的 {key}，拒絕更新。')
+    for pattern in ('compose.override.*', 'docker-compose.override.*'):
+        if list(base.glob(pattern)):
+            fail('發現自訂 Compose override，拒絕更新。')
+
+
+def current_version(base):
+    images = re.findall(r'ghcr.io/xiaolong-taiwan/xpayincus-(?:api|panel-web):(v[0-9]+\.[0-9]+\.[0-9]+)',
+                        (base / 'compose.yaml').read_text())
+    if (base / 'compose.release.yaml').exists():
+        override = json.loads((base / 'compose.release.yaml').read_text())
+        images = [value['image'].rsplit(':', 1)[-1] for value in override['services'].values()]
+    if len(images) != 3 or len(set(images)) != 1 or not VERSION.fullmatch(images[0]):
+        fail('無法確認目前正式版本，拒絕更新。')
+    return images[0]
+
+
+def resolve_images(base, compose_entry):
+    base = Path(base).resolve()
+    if not (base / '.state').is_dir() or (base / '.state').is_symlink():
+        fail('操作狀態目錄無效。')
+    entry = Path(compose_entry)
+    if entry.name not in {'docker-compose.yml', 'compose.yaml'} or entry.parent.resolve() != base:
+        fail('非標準 Compose 入口，拒絕解析映像。')
+    settings(base)
+    version = current_version(base)
+    expected = {service: {'image': f'ghcr.io/xiaolong-taiwan/xpayincus-{suffix}:{version}'}
+                for service, suffix in [('api', 'api'), ('user', 'panel-web'), ('admin', 'panel-web')]}
+    override = json.loads((base / 'compose.release.yaml').read_text())
+    if override != {'services': expected}:
+        fail('部署映像清單不是標準官方版本。')
+    pull_required = False
+    for image in sorted({value['image'] for value in expected.values()}):
+        reference = image.rsplit(':', 1)[0]
+        result = run(['docker', 'buildx', 'imagetools', 'inspect', image, '--format', '{{json .Manifest}}'],
+                     capture_output=True, text=True)
+        digest = json.loads(result.stdout).get('digest', '')
+        if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+            fail('無法取得官方映像 digest。')
+        inspect = subprocess.run(['docker', 'image', 'inspect', image, '--format', '{{json .RepoDigests}}'],
+                                 capture_output=True, text=True)
+        local = json.loads(inspect.stdout) if inspect.returncode == 0 else []
+        if f'{reference}@{digest}' not in (local or []):
+            pull_required = True
+    marker = base / '.state/pull-required'
+    if marker.is_symlink():
+        fail('映像狀態檔不可為符號連結。')
+    if pull_required:
+        marker.write_text(version + '\n')
+    elif marker.exists():
+        marker.unlink()
+    print(f'部署釘選版本：{version}；' + ('映像需拉取' if pull_required else '映像 digest 相同，略過應用映像 pull'))
+
+
+def dispatch():
+    if len(sys.argv) == 4 and sys.argv[1] == 'resolve-images':
+        resolve_images(sys.argv[2], sys.argv[3])
+        return
+    main()
+
+
+def update_compose(base, target):
+    run(['docker', 'compose', '--project-name', 'incudal-panel', '--project-directory', str(base),
+         '--env-file', str(base / '.env'), '--file', str(target / 'compose.yaml'),
+         '--file', str(target / 'compose.release.yaml'), 'config', '--quiet'])
+
+
+def validate_files(base, official):
+    current = base / '.bootstrap/current'
+    if os.path.lexists(current):
+        if not current.is_symlink() or not re.fullmatch(r'release-[0-9a-f]{64}-[A-Za-z0-9_]+', os.readlink(current)):
+            fail('bootstrap 指標無效。')
+        if current.resolve().parent != (base / '.bootstrap').resolve():
+            fail('bootstrap 指標超出部署目錄。')
+        for name in FILES:
+            entry = base / name
+            if name == 'update.py' and not os.path.lexists(entry) and not (official / name).exists():
+                continue
+            if not entry.is_symlink() or os.readlink(entry) != f'.bootstrap/current/{name}':
+                fail(f'管理入口有衝突：{name}')
+    else:
+        for name in ('docker-compose.yml', 'compose.yaml', 'panel.sh', 'download.sh', 'origin-entrypoint.sh',
+                     'edge-nginx.conf.template', 'tunnel-nginx.conf.template'):
+            if not (base / name).is_file():
+                fail(f'手動部署缺少標準檔案：{name}')
+    for name in FILES:
+        entry = base / name
+        if os.path.lexists(entry):
+            if (not current.is_symlink() and entry.is_symlink()) or not entry.is_file():
+                fail(f'部署檔案不是標準一般檔案：{name}')
+            if not (official / name).is_file() or entry.read_bytes() != (official / name).read_bytes():
+                fail(f'部署檔案有自訂修改：{name}')
+
+
+def validate_containers(base):
+    ids = run(['docker', 'ps', '-aq', '--filter', 'label=com.docker.compose.project=incudal-panel'],
+              capture_output=True, text=True).stdout.split()
+    if not ids:
+        fail('找不到既有 incudal-panel 容器；請先完成標準部署。')
+    containers = json.loads(run(['docker', 'inspect', *ids, 'incudal-panel-api'],
+                               capture_output=True, text=True).stdout)
+    services = set()
+    seen = set()
+    for container in containers:
+        if container['Id'] in seen:
+            continue
+        seen.add(container['Id'])
+        labels = container['Config'].get('Labels') or {}
+        service = labels.get('com.docker.compose.service')
+        if service in services:
+            fail('同一服務有多個容器，拒絕自動更新。')
+        if (labels.get('com.docker.compose.project') != 'incudal-panel'
+                or labels.get('com.docker.compose.project.working_dir') != str(base)
+                or service not in {'init', 'db', 'api', 'user', 'admin', 'nginx', 'tunnel-origin', 'cloudflared'}):
+            fail('現有容器專案、路徑或服務衝突。')
+        config_files = labels.get('com.docker.compose.project.config_files', '').split(',')
+        if not config_files or any(Path(file).parent != base or Path(file).name not in
+                                   {'docker-compose.yml', 'compose.yaml', 'compose.release.yaml'} for file in config_files):
+            fail('現有容器使用自訂 Compose 檔案。')
+        expected = {'db': {'/var/lib/postgresql/data': 'data/postgres'},
+                    'api': {'/opt/incudal/server/certs': 'certs', '/opt/incudal/config': 'config',
+                            '/opt/incudal/backups': 'backups', '/deployment/.env': '.env'}}.get(service, {})
+        mounts = {mount['Destination']: mount for mount in container['Mounts']}
+        for mount in mounts.values():
+            if mount.get('Type') == 'bind' and not Path(mount['Source']).is_relative_to(base):
+                fail('現有容器含部署目錄外掛載，拒絕更新。')
+        for target, source in expected.items():
+            mount = mounts.get(target, {})
+            if mount.get('Type') != 'bind' or mount.get('Source') != str(base / source):
+                fail('現有資料掛載與標準部署不符，拒絕更新。')
+        if service in {'db', 'api'} and not container['State']['Running']:
+            fail('DB 與 API 必須正在運行，才能備份更新。')
+        services.add(service)
+    if not {'db', 'api'} <= services:
+        fail('缺少既有 DB 或 API。')
+
+
+def activate(base, target, scratch, backup):
+    store = base / '.bootstrap'
+    release_dir = (target / '.bootstrap/current').resolve()
+    next_dir = store / release_dir.name
+    os.rename(release_dir, next_dir)
+    pointer = scratch / 'next'
+    os.symlink(next_dir.name, pointer)
+    current = store / 'current'
+    if current.is_symlink():
+        added = base / 'update.py'
+        created = not os.path.lexists(added)
+        try:
+            if created:
+                os.symlink('.bootstrap/current/update.py', added)
+            os.replace(pointer, current)
+        except BaseException:
+            if created and added.is_symlink():
+                added.unlink()
+            raise
+    else:
+        changed = []
+        try:
+            for name in FILES:
+                link = scratch / name
+                os.symlink(f'.bootstrap/current/{name}', link)
+                os.replace(link, base / name)
+                changed.append(name)
+            os.replace(pointer, current)
+        except BaseException:
+            for name in changed:
+                (base / name).unlink()
+                if (backup / name).exists():
+                    shutil.copyfile(backup / name, base / name)
+            raise
+
+
+def main():
+    base = Path(sys.argv[1]).resolve()
+    os.umask(0o077)
+    for name in ('.env', '.bootstrap', 'backups'):
+        if (base / name).is_symlink():
+            fail(f'{name} 不可為符號連結。')
+    settings(base)
+    old_version = current_version(base)
+    store = base / '.bootstrap'
+    store.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.update-', dir=store) as temporary:
+        scratch = Path(temporary)
+        metadata = scratch / 'release.json'
+        fetch(f'https://api.github.com/repos/{REPOSITORY}/releases/latest', metadata)
+        release = json.loads(metadata.read_text())
+        version = release.get('tag_name', '')
+        if release.get('draft') is not False or release.get('prerelease') is not False or not VERSION.fullmatch(version):
+            fail('官方最新 Release 不是正式 vX.Y.Z。')
+        if tuple(map(int, version[1:].split('.'))) < tuple(map(int, old_version[1:].split('.'))):
+            fail('拒絕自動降版。')
+        target, digest = stage(base, version, scratch, 'target')
+        official = target if version == old_version else stage(base, old_version, scratch, 'previous')[0]
+        validate_files(base, official)
+        validate_containers(base)
+        update_compose(base, target)
+        backup = base / 'backups'
+        backup.mkdir(exist_ok=True)
+        backup = Path(tempfile.mkdtemp(prefix='before-update-', dir=backup))
+        for name in FILES:
+            if (base / name).is_file():
+                shutil.copyfile(base / name, backup / name)
+        run(['bash', str(base / 'panel.sh'), 'export', str(backup / 'panel.dump')])
+        activate(base, target, scratch, backup)
+        print(f'已固定官方 {version}，SHA256={digest}；備份：{backup}', flush=True)
+        try:
+            run(['bash', str(base / 'panel.sh'), 'up'])
+        except subprocess.CalledProcessError:
+            fail(f'更新啟動失敗；部署檔與 DB 備份保留於 {backup}。請檢查 status/logs；不自動回滾資料庫。')
+
+
+if __name__ == '__main__':
+    try:
+        dispatch()
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+        fail(f'更新失敗（{type(error).__name__}）；請檢查網路、部署及備份，未自動回滾。')

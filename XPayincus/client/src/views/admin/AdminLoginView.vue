@@ -79,6 +79,11 @@ function checkOAuthErrors(): void {
       'account_banned': t('auth.oauthAccountBanned'),
       'provider_disabled': t('auth.oauthProviderDisabled'),
       'token_error': t('auth.oauthTokenError'),
+      'invalid_provider': t('auth.oauthInvalidProvider'),
+      'access_denied': t('auth.oauthAccessDenied'),
+      'invalid_state': t('auth.oauthStateExpired'),
+      'state_expired': t('auth.oauthStateExpired'),
+      'missing_code': t('auth.oauthError'),
       'oauth_error': t('auth.oauthError')
     }
     error.value = errorMessages[urlError] || t('auth.loginFailed') + ': ' + urlError
@@ -166,6 +171,12 @@ interface ProviderInfo {
 
 function getProviderInfo(provider: string): ProviderInfo {
   const info: Record<string, ProviderInfo> = {
+    discord: {
+      name: 'Discord',
+      bgClass: 'bg-themed-secondary hover:bg-themed-tertiary border border-themed',
+      textClass: 'text-themed',
+      icon: '<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M20 4.5a19 19 0 0 0-4.8-1.5l-.6 1.2a17 17 0 0 0-5.2 0L8.8 3A19 19 0 0 0 4 4.5C1 9 0 13.4.5 17.7a19 19 0 0 0 5.9 3l1.2-2a12 12 0 0 1-1.9-.9l.5-.4a14 14 0 0 0 11.6 0l.5.4-1.9.9 1.2 2a19 19 0 0 0 5.9-3C24 12.7 22.6 8.3 20 4.5ZM8 15c-1.1 0-2-1-2-2.2s.9-2.2 2-2.2 2 1 2 2.2S9.1 15 8 15Zm8 0c-1.1 0-2-1-2-2.2s.9-2.2 2-2.2 2 1 2 2.2-.9 2.2-2 2.2Z"/></svg>'
+    },
     github: {
       name: 'GitHub',
       bgClass: 'bg-[#24292e] hover:bg-[#2f363d]',

@@ -5,7 +5,7 @@
 
 import { Agent, request as undiciRequest } from 'undici'
 import { readFileSync } from 'node:fs'
-import { formatHostForUrl } from './network-address.js'
+import { formatHostForUrl, getAddressFamily, normalizeNetworkHost } from './network-address.js'
 
 // 请求超时配置（毫秒）
 const REQUEST_TIMEOUT = 30000 // 30秒
@@ -90,7 +90,7 @@ export class CaddyClient {
    * 发起 API 请求
    */
   private async request<T>(
-    method: string,
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     body?: unknown
   ): Promise<T> {
@@ -171,7 +171,11 @@ export class CaddyClient {
    * @param httpsEnabled 是否启用 HTTPS（自动申请 Let's Encrypt 证书）
    */
   async addSite(domain: string, targetIp: string, targetPort: number, httpsEnabled: boolean = true): Promise<void> {
-    const routeId = `site-${domain.replace(/\./g, '-')}`
+    const routeId = `site-${Buffer.from(domain).toString('base64url')}`
+    const normalizedTargetIp = normalizeNetworkHost(targetIp)
+    const targetAddress = getAddressFamily(normalizedTargetIp) === 6
+      ? `[${normalizedTargetIp}]`
+      : normalizedTargetIp
     
     // 构建路由配置
     const route: CaddyRoute = {
@@ -179,7 +183,7 @@ export class CaddyClient {
       match: [{ host: [domain] }],
       handle: [{
         handler: 'reverse_proxy',
-        upstreams: [{ dial: `${targetIp}:${targetPort}` }]
+        upstreams: [{ dial: `${targetAddress}:${targetPort}` }]
       }],
       terminal: true
     }
@@ -270,14 +274,24 @@ export class CaddyClient {
    * @param domain 域名
    */
   async deleteSite(domain: string): Promise<void> {
-    const routeId = `site-${domain.replace(/\./g, '-')}`
-    
-    try {
-      await this.request('DELETE', `/id/${routeId}`)
-    } catch (error) {
-      // 如果路由不存在，忽略错误
-      if (error instanceof Error && !error.message.includes('404')) {
-        throw error
+    const routeIds = [
+      `site-${Buffer.from(domain).toString('base64url')}`,
+      `site-${domain.replace(/\./g, '-')}`
+    ]
+
+    for (const routeId of new Set(routeIds)) {
+      try {
+        const route = await this.request<CaddyRoute>('GET', `/id/${routeId}`)
+        if (!Array.isArray(route.match) || route.match.length !== 1 ||
+            !Array.isArray(route.match[0]?.host) || route.match[0].host.length !== 1 ||
+            route.match[0].host[0] !== domain) {
+          continue
+        }
+        await this.request('DELETE', `/id/${routeId}`)
+      } catch (error) {
+        if (!(error instanceof CaddyApiError) || error.statusCode !== 404) {
+          throw error
+        }
       }
     }
   }

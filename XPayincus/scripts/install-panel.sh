@@ -873,24 +873,43 @@ generate_panel_cert() {
     local cert_file="${cert_dir}/client.crt"
     local key_file="${cert_dir}/client.key"
 
+    export PANEL_CRT_PATH="$cert_file" PANEL_KEY_PATH="$key_file"
+
     step "配置面板客户端证书..."
 
     # 幂等性：证书已存在则跳过
-    if [[ -f "$cert_file" && -f "$key_file" ]]; then
+    if [[ -e "$cert_file" || -L "$cert_file" || -e "$key_file" || -L "$key_file" ]]; then
+        if [[ ! -f "$cert_file" || ! -f "$key_file" ]]; then
+            error "面板凭证配对不完整，请还原原配对；不会覆盖现有文件"
+            return 1
+        fi
         log "面板客户端证书已存在，跳过生成"
         return 0
     fi
 
     mkdir -p "$cert_dir"
+    local cert_tmp
+    cert_tmp=$(mktemp -d "${cert_dir}/.client-cert.XXXXXX") || return 1
 
     # 生成自签名客户端证书（用于面板与 Incus API 的 mTLS 通信）
     info "生成面板客户端证书（RSA 4096 位，有效期 10 年）..."
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout "$key_file" \
-        -out "$cert_file" \
+    if ! openssl req -x509 -newkey rsa:4096 \
+        -keyout "${cert_tmp}/client.key" \
+        -out "${cert_tmp}/client.crt" \
         -days 3650 -nodes \
         -subj "/CN=incudal-panel/O=XPayincus" \
-        2>/dev/null
+        2>/dev/null; then
+        rm -rf "$cert_tmp"
+        return 1
+    fi
+    chmod 600 "${cert_tmp}/client.crt" "${cert_tmp}/client.key"
+    chown "${RUN_USER}:${RUN_USER}" "${cert_tmp}/client.crt" "${cert_tmp}/client.key"
+    if ! ln "${cert_tmp}/client.key" "$key_file" || ! ln "${cert_tmp}/client.crt" "$cert_file"; then
+        rm -rf "$cert_tmp"
+        error "发布凭证失败，请还原完整配对；不会覆盖现有文件"
+        return 1
+    fi
+    rm -rf "$cert_tmp"
 
     # 设置权限：只有 incudal 用户可读
     chmod 600 "$cert_file" "$key_file"
@@ -1096,6 +1115,7 @@ Environment=XDG_CACHE_HOME=${INSTALL_DIR}/.cache
 Environment=PATH=/usr/local/libexec/incudal:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 启动前自动执行数据库迁移
+ExecStartPre=/usr/bin/node ${app_dir}/server/dist/scripts/ensure-panel-certificate.js
 ExecStartPre=/usr/bin/bash -c 'cd ${app_dir}/server && pnpm exec prisma migrate deploy'
 
 # 启动主程序

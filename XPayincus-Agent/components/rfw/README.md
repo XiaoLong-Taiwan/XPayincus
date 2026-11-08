@@ -1,6 +1,6 @@
 # XPayincus RFW
 
-基於 Rust、Aya 與 eBPF/XDP 的宿主機防火牆，提供 IPv4 GeoIP、協定特徵過濾及存取統計。此目錄屬於 XPayincus Agent 宿主元件；產品發行版本讀取 [根 VERSION](../../../VERSION)，目前為 `v1.0.5`。RFW 在宿主機執行，不屬於面板 Compose；由獨立 Rust 程序載入 eBPF，Go Agent 不載入核心程式。整合邊界見 [元件管理](../README.md)。
+基於 Rust、Aya 與 eBPF/XDP 的宿主機防火牆，提供 IPv4 GeoIP、協定特徵過濾及存取統計。此目錄屬於 XPayincus Agent 宿主元件；產品發行版本讀取 [根 VERSION](../../../VERSION)，目前準備 `v1.0.6`（未發布）。RFW 在宿主機執行，不屬於面板 Compose；由獨立 Rust 程序載入 eBPF，Go Agent 不載入核心程式。整合邊界見 [元件管理](../README.md)。
 
 ## 功能與限制
 

@@ -4227,7 +4227,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       remark?: string
     }
   }>('/:id/ports', {
-    onRequest: [fastify.authenticateUser],
+    onRequest: [fastify.authenticate],
     schema: {
       body: {
         type: 'object',
@@ -4264,7 +4264,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
     }
 
-    if (instance.user_id !== user.id) {
+    if (user.role !== 'admin' && instance.user_id !== user.id) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
@@ -4335,7 +4335,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
 
   // 删除端口映射
   fastify.delete<{ Params: { id: string; portId: string } }>('/:id/ports/:portId', {
-    onRequest: [fastify.authenticateUser]
+    onRequest: [fastify.authenticate]
   }, async (request: FastifyRequest<{ Params: { id: string; portId: string } }>, reply: FastifyReply) => {
     const { id, portId } = request.params
     const instanceId = parsePositiveRouteId(id)
@@ -4352,7 +4352,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
     }
 
-    if (instance.user_id !== user.id) {
+    if (user.role !== 'admin' && instance.user_id !== user.id) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
@@ -4417,7 +4417,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       portMappings?: Array<{ privatePort: number; publicPort: number }>
     }
   }>('/:id/ports/batch', {
-    onRequest: [fastify.authenticateUser],
+    onRequest: [fastify.authenticate],
     schema: {
       body: {
         type: 'object',
@@ -4472,7 +4472,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
     }
 
-    if (instance.user_id !== user.id) {
+    if (user.role !== 'admin' && instance.user_id !== user.id) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 

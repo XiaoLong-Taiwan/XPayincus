@@ -17,6 +17,20 @@ const installPanel = readFileSync(resolve(__dirname, '../../scripts/install-pane
 const systemctlWrapper = readFileSync(resolve(__dirname, '../../deploy/incudal-systemctl-wrapper.sh.example'), 'utf8')
 const apiEntrypoint = readFileSync(resolve(__dirname, '../../deploy/compose/api-entrypoint.sh'), 'utf8')
 const panelCertificate = readFileSync(resolve(__dirname, '../src/lib/incus/panel-certificate.ts'), 'utf8')
+const startupCertificate = readFileSync(resolve(__dirname, '../src/scripts/ensure-panel-certificate.ts'), 'utf8')
+
+assert.ok(
+  startupCertificate.includes('lstatSync(path)') &&
+    startupCertificate.includes("code === 'ENOENT'") &&
+    startupCertificate.includes('Boolean(process.env.PANEL_CRT_PATH) !== Boolean(process.env.PANEL_KEY_PATH)') &&
+    startupCertificate.includes('!pathExists(certPath) && !pathExists(keyPath)') &&
+    startupCertificate.includes('chmodSync(temporaryKey, 0o600)') &&
+    startupCertificate.indexOf('readPanelCertificatePair(temporaryCert, temporaryKey)') < startupCertificate.indexOf('linkSync(temporaryKey, keyPath)') &&
+    startupCertificate.includes('readPanelCertificatePair(certPath, keyPath)') &&
+    !startupCertificate.includes('linkSync(temporaryKey, keyPath,') &&
+    !startupCertificate.includes('existsSync('),
+  'startup must treat dangling links as existing paths, validate staged and published pairs, and reject generation failures without raw crypto errors'
+)
 
 assert.ok(
   installPanel.includes('install_verified_root_helpers_from_archive') &&
@@ -58,11 +72,14 @@ assert.ok(
 assert.ok(
   hostInstallScript.includes('cert_file=$(mktemp /tmp/incudal-panel-cert.XXXXXX.crt)') &&
     hostInstallScript.includes('curl -sSf "$cert_url" -o "$cert_file"') &&
-    hostInstallScript.includes('面板证书已存在，更新为当前证书') &&
-    hostInstallScript.includes('incus config trust remove panel') &&
+    hostInstallScript.includes('fetch_authenticated_panel_certificate certificate') &&
+    hostInstallScript.includes('fetch_authenticated_panel_certificate verify') &&
+    hostInstallScript.includes('hmac.compare_digest(proof, expected)') &&
+    hostInstallScript.includes('incus config trust remove "$old"') &&
+    !hostInstallScript.slice(hostInstallScript.indexOf('import_cert() {'), hostInstallScript.indexOf('install_incudal_agent() {')).includes('incus config trust remove panel') &&
     hostInstallScript.includes('incus config trust add-certificate "$cert_file" --name panel') &&
     !hostInstallScript.includes('面板证书已存在，跳过导入'),
-  'host install script must refresh the panel trust certificate instead of skipping stale panel entries'
+  'host install script must authenticate certificate rotation and verify connectivity before removing old fingerprints'
 )
 
 assert.ok(
@@ -353,6 +370,30 @@ assert.ok(!/storage (delete|set)|volume delete|source=/.test(storageFunction), '
 assert.ok(shellFunction('zfs_storage_available').includes('[[ -c /dev/zfs ]]'), 'ZFS detection must verify the kernel device')
 assert.ok(shellFunction('apply_zfs_arc_config').includes('[[ -n "$ZFS_ARC_MAX_BYTES" ]] || return 0'), 'reruns without explicit ARC input must preserve config')
 assert.ok(!shellFunction('apply_zfs_arc_config').includes('|| true'), 'ARC application must not silently ignore failures')
+const arcApply = shellFunction('apply_zfs_arc_config')
+assert.ok(arcApply.includes('if ! cat > "$modprobe_file"') && arcApply.includes('chmod 0644 "$modprobe_file" || return 1'), 'ARC persistence failures must propagate even when called in a conditional')
+assert.match(arcApply, /initramfs 更新失败[^\n]*\n\s*return 1/, 'initramfs failure must not report successful persistence')
+const bootServices = shellFunction('preserve_zfs_boot_services')
+assert.ok(bootServices.includes('! -L /etc/modules-load.d/incudal-zfs.conf') && bootServices.includes("grep -Eq '^[[:space:]]*zfs[[:space:]]*$'"), 'existing module-load config must be a regular non-symlink file that loads ZFS')
+assert.ok(bootServices.includes('zfs-import-cache.service zfs-mount.service zfs.target') && bootServices.includes('systemctl enable "$service" >/dev/null 2>&1 || return 1'), 'ZFS boot units must be enabled with failures propagated')
+assert.match(hostInstallScript, /if ! refresh_panel_trust; then\n\s*warn [^\n]*\n\s*elif ! update_incudal_agent_from_config true; then/, 'automatic root script updates must require successful authenticated trust refresh')
+const arcFailureHarness = `set -euo pipefail
+${arcApply.replace('"/etc/modprobe.d/99-zfs-arc.conf"', '"/dev/null"').replace('[[ -d /sys/module/zfs ]]', '[[ -d /dev/null ]]')}
+info() { :; }
+warn() { :; }
+log() { echo unexpected-success; }
+ZFS_ARC_MAX_BYTES=536870912
+ZFS_ARC_MIN_BYTES=134217728
+`
+for (const failure of ['cat', 'chmod', 'update-initramfs']) {
+  assert.equal(runShell(`${arcFailureHarness}
+cat() { return ${failure === 'cat' ? 1 : 0}; }
+chmod() { return ${failure === 'chmod' ? 1 : 0}; }
+update-initramfs() { return ${failure === 'update-initramfs' ? 1 : 0}; }
+uname() { printf guard-kernel; }
+if apply_zfs_arc_config; then exit 92; fi
+`), '', `ARC ${failure} failure must propagate without reporting success`)
+}
 assert.ok(hostInstallScript.includes('--uninstall|--uninstall-keep-data)') && hostInstallScript.includes('--delete-data)'), 'destructive uninstall must require an extra explicit option')
 assert.equal((hostInstallScript.slice(hostInstallScript.indexOf('init_incus() {'), hostInstallScript.indexOf('import_cert() {')).match(/ensure_incus_storage/g) ?? []).length, 2, 'storage must initialize on fresh installs and reruns with an existing bridge')
 

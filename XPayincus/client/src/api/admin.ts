@@ -275,6 +275,31 @@ const http: AxiosInstance = axios.create({
   }
 })
 
+const instancePortApi = {
+  add: (id: number, data: CreatePortMappingRequest): Promise<PortMapping> =>
+    http.post(`/instances/${id}/ports`, data),
+  addBatch: (id: number, data: {
+    protocol: 'tcp' | 'udp' | 'both'
+    privatePortStart: number
+    privatePortEnd: number
+    publicPortStart?: number
+    publicPortEnd?: number
+    remark?: string
+    portMappings?: Array<{ privatePort: number; publicPort: number }>
+  }): Promise<{
+    message: string
+    mappings: Array<{ id: number; protocol: string; publicPort: number; privatePort: number }>
+    count: number
+  } | {
+    error: string
+    message: string
+    conflicts: Array<{ publicPort: number; suggestedPort: number | null }>
+    availableCount: number
+  }> => http.post(`/instances/${id}/ports/batch`, data),
+  delete: (id: number, portId: number): Promise<void> =>
+    http.delete(`/instances/${id}/ports/${portId}`)
+}
+
 // 刷新 token 的锁，防止多个请求同时触发刷新
 let isRefreshing = false
 let failedQueue: Array<{
@@ -618,6 +643,7 @@ http.interceptors.response.use(
 
 // API 模块
 const api = {
+  instancePorts: instancePortApi,
   // 认证
   auth: {
     check2FA: (username: string): Promise<{ requires2FA: boolean }> =>
@@ -688,7 +714,7 @@ const api = {
     disable2FA: (id: number): Promise<{ message: string }> =>
       http.post(`/users/${id}/disable-2fa`),
     // 管理员解绑用户 OAuth
-    unbindOAuth: (userId: number, provider: 'github' | 'google'): Promise<{ message: string }> =>
+    unbindOAuth: (userId: number, provider: 'github' | 'google' | 'discord'): Promise<{ message: string }> =>
       http.delete(`/users/${userId}/oauth/${provider}`),
     // 管理员获取用户登录记录
     getLoginRecords: (userId: number, params: { page?: number; pageSize?: number } = {}): Promise<{
@@ -1259,8 +1285,8 @@ const api = {
       http.get(`/agent/hosts/${id}/status`),
     generateAgentInstallCommand: (id: number): Promise<HostAgentInstallCommandResponse> =>
       http.post(`/agent/hosts/${id}/install-command`, {}),
-    requestAgentUpgrade: (id: number): Promise<HostAgentUpgradeRequestResponse> =>
-      http.post(`/agent/hosts/${id}/upgrade`, {}),
+    requestAgentUpgrade: (id: number, targetVersion: string): Promise<HostAgentUpgradeRequestResponse> =>
+      http.post(`/agent/hosts/${id}/upgrade`, { confirm: true, targetVersion }),
     sync: (id: number): Promise<void> => http.post(`/hosts/${id}/sync`, {}, { timeout: TIMEOUT.LONG }),
     setMaintenance: (id: number, enabled: boolean): Promise<Host> =>
       http.post(`/hosts/${id}/maintenance`, { enabled }),
@@ -1938,15 +1964,15 @@ const api = {
 
   // OAuth 配置（管理员）
   oauth: {
-    getConfigs: (): Promise<OAuthConfig[]> => http.get('/oauth/configs'),
-    updateConfig: (provider: 'github' | 'google', data: UpdateOAuthConfigRequest): Promise<OAuthConfig> =>
+    getConfigs: (): Promise<{ configs: OAuthConfig[] }> => http.get('/oauth/configs'),
+    updateConfig: (provider: 'github' | 'google' | 'discord', data: UpdateOAuthConfigRequest): Promise<{ message: string }> =>
       http.put(`/oauth/configs/${provider}`, data),
-    deleteConfig: (provider: 'github' | 'google'): Promise<void> =>
+    deleteConfig: (provider: 'github' | 'google' | 'discord'): Promise<void> =>
       http.delete(`/oauth/configs/${provider}`),
-    getProviders: (): Promise<Array<{ provider: 'github' | 'google'; enabled: boolean }>> =>
+    getProviders: (): Promise<{ providers: Array<UserOAuthBinding['provider']> }> =>
       http.get('/oauth/providers'),
-    getBindings: (): Promise<UserOAuthBinding[]> => http.get('/oauth/bindings'),
-    unbind: (provider: 'github' | 'google'): Promise<void> =>
+    getBindings: (): Promise<{ bindings: import('@/types/api').OAuthBindingSummary[] }> => http.get('/oauth/bindings'),
+    unbind: (provider: 'github' | 'google' | 'discord'): Promise<void> =>
       http.delete(`/oauth/bindings/${provider}`),
     createBindTicket: (): Promise<{ ticket: string; expiresIn: number }> =>
       http.post('/oauth/bind-ticket', {}),

@@ -14,22 +14,31 @@ die() {
 usage() {
   printf '%s\n' \
     'bash deploy/compose/panel.sh setup https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]  (同 init，只初始化)' \
+    'bash deploy/compose/panel.sh update  (官方最新正式 Release、驗證、備份並安全納管後 up)' \
     'bash deploy/compose/panel.sh update VERSION SHA256  (驗證 Release 並準備部署檔案；完成後另執行 up)' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
-    'bash deploy/compose/panel.sh up [pull|build]  (預設 pull)' \
+    'bash deploy/compose/panel.sh up [pull|build]  (預設核對部署釘選版本的映像 digest；換版請用 update)' \
     'bash deploy/compose/panel.sh down|status' \
     'bash deploy/compose/panel.sh logs [init|db|api|user|admin|nginx|tunnel-origin|cloudflared]' \
     'bash deploy/compose/panel.sh export [/absolute/path/panel.dump]  (預設 ./backups)' \
-    'bash deploy/compose/panel.sh import /absolute/path/panel.dump --confirm-replace-incudal'
+    'bash deploy/compose/panel.sh import /absolute/path/panel.dump --confirm-replace-incudal' \
+    '標準手動部署可由 update 安全納管；官方檔案或容器設定有自訂衝突時拒絕更新。'
 }
 
 case "$command_name" in
   help|-h|--help) usage; exit 0 ;;
   setup) command_name=init ;;
   update)
-    (($# == 2)) || die 'update 需要固定 VERSION 與 Release Dashboard Compose 資產的可信 SHA256。'
-    exec bash "$base/download.sh" update "$base" "$@"
+    if (($# == 2)); then exec bash "$base/download.sh" update "$base" "$@"; fi
+    (($# == 0)) || die 'update 不帶參數，或提供 VERSION SHA256 僅準備檔案。'
+    command -v python3 >/dev/null || die '需要 Python 3。'
+    command -v flock >/dev/null || die '需要 Linux flock。'
+    [[ ! -L "$base/.state" && ! -L "$base/.state/operation.lock" ]] || die '操作鎖不可為符號連結。'
+    mkdir -p -- "$base/.state"
+    exec 9>"$base/.state/operation.lock"
+    flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
+    exec python3 "$base/update.py" "$base"
     ;;
   install|init|up|down|status|logs|export|import) ;;
   *) usage; exit 2 ;;
@@ -55,14 +64,14 @@ if [[ "$command_name" == install ]]; then
   [[ "$destination" != "$source_root" && "$destination" != "$source_root/"* ]] || die '安裝目的地必須位於來源樹之外，避免遞迴複製。'
   [[ -z "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]] || die '安裝目的地必須為空目錄，拒絕覆蓋來源或既有部署。'
   mkdir -m 700 -- "$destination/source"
-  tar --exclude=node_modules --exclude=dist --exclude='.env*' --exclude=certs \
+  tar --exclude=node_modules --exclude=dist --exclude=__pycache__ --exclude='*.pyc' --exclude='.env*' --exclude=certs \
     --exclude=deploy/compose/.bootstrap \
     --exclude=deploy/compose/secrets --exclude=deploy/compose/backups --exclude=deploy/compose/tls \
     --exclude=deploy/compose/data --exclude=deploy/compose/config --exclude=deploy/compose/.state \
     --exclude=.git --exclude='*.log' --exclude='*.dump' \
     -C "$source_root" -cf - package.json pnpm-lock.yaml pnpm-workspace.yaml client server deploy/compose \
     | tar -C "$destination/source" -xf -
-  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh download.sh README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
+  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh download.sh update.py README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
     cp -- "$base/$deployment_file" "$destination/$deployment_file"
   done
   if [[ -f "$base/.env.example" ]]; then cp -- "$base/.env.example" "$destination/.env.example"; fi
@@ -72,8 +81,11 @@ if [[ "$command_name" == install ]]; then
 fi
 
 command -v flock >/dev/null || die '需要 Linux util-linux 的 flock。'
+[[ ! -L "$base/.state" && ! -L "$base/.state/operation.lock" ]] || die '操作鎖不可為符號連結。'
 mkdir -p -- "$base/.state"
-exec 9>"$base/.state/operation.lock"
+if [[ "$(readlink /proc/$$/fd/9 2>/dev/null || true)" != "$base/.state/operation.lock" ]]; then
+  exec 9>"$base/.state/operation.lock"
+fi
 flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
 
 if [[ "$command_name" == init ]]; then
@@ -120,6 +132,11 @@ command -v docker >/dev/null || die '需要 Docker 與 Compose v2.20.0 以上。
 compose_entry="$base/docker-compose.yml"
 if [[ -f "$base/compose.release.yaml" ]]; then compose_entry="$base/compose.yaml"; fi
 if [[ "$command_name" == up && "${1:-pull}" == build ]]; then compose_entry="$base/compose.yaml"; fi
+if [[ "$command_name" == up && "${1:-pull}" != build ]]; then
+  command -v python3 >/dev/null || die '需要 Python 3。'
+  [[ ! -L "$base/.state" ]] || die '操作狀態目錄不可為符號連結。'
+  mkdir -p -- "$base/.state"
+fi
 compose=(docker compose --project-name incudal-panel --project-directory "$base" --env-file "$base/.env" --file "$compose_entry")
 if [[ "$source_root" == "$base/source" ]]; then
   export BUILD_CONTEXT=./source
@@ -198,7 +215,17 @@ case "$command_name" in
       "${compose[@]}" build api user admin
       "${compose[@]}" pull --ignore-buildable
     else
-      "${compose[@]}" pull --policy always
+      [[ "$compose_entry" == "$base/compose.yaml" && -f "$base/compose.release.yaml" ]] || die '預設 pull 需要官方 compose.release.yaml；自訂／手動映像設定請使用 up build 或先以 update 安全納管。'
+      python3 "$base/update.py" resolve-images "$base" "$compose_entry" || die '無法解析官方映像 digest；未停止現有服務。'
+      if [[ -s "$base/.state/pull-required" ]]; then
+        "${compose[@]}" pull --policy always api user admin
+        rm -f -- "$base/.state/pull-required"
+      fi
+      "${compose[@]}" pull --policy missing --ignore-buildable db init
+      case "$configured_profiles" in
+        nginx) "${compose[@]}" pull --policy missing nginx ;;
+        cloudflare) "${compose[@]}" pull --policy missing tunnel-origin cloudflared ;;
+      esac
     fi
     "${compose[@]}" stop user admin api
     "${compose[@]}" --profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared

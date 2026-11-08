@@ -335,7 +335,7 @@ export interface NotificationLog {
 
 export interface OAuthConfig {
   id: number
-  provider: 'github' | 'google'
+  provider: 'github' | 'google' | 'discord'
   client_id: string
   client_secret: string
   enabled: number
@@ -346,7 +346,7 @@ export interface OAuthConfig {
 export interface UserOAuthBinding {
   id: number
   user_id: number
-  provider: 'github' | 'google'
+  provider: 'github' | 'google' | 'discord'
   provider_user_id: string
   provider_username: string | null
   provider_email: string | null

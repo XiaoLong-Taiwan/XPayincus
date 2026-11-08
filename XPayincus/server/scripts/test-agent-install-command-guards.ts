@@ -205,6 +205,14 @@ assert.ok(
 )
 
 assert.ok(
+  installScriptSource.includes('validate_credentials()') &&
+    installScriptSource.includes('^agt_[A-Za-z0-9_-]{24,64}$') &&
+    installScriptSource.includes('^ias_[A-Za-z0-9_-]{32,96}$') &&
+    installScriptSource.indexOf('\n  validate_credentials\n') < installScriptSource.indexOf('\ndownload_binary "${BINARY_URL}"') &&
+    installScriptSource.slice(installScriptSource.indexOf('\nfetch_agent_install_config\n'), installScriptSource.indexOf('echo "Installing Incudal Agent"')).includes('validate_credentials'),
+  'static credentials must reject YAML injection before downloading and exchanged credentials must validate before writing config'
+)
+assert.ok(
   installScriptSource.includes('--panel-url|--token-file|--binary|--sha256') &&
     installScriptSource.includes('read -r -s -p') &&
     installScriptSource.includes('set +x'),

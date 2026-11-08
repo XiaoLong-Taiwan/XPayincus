@@ -17,7 +17,7 @@ git -C "$ROOT_DIR" archive --format=tar HEAD -- \
   | tar -xf - -C "$STAGING/source" \
     --exclude='.git' --exclude='.gitmodules' --exclude='node_modules' \
     --exclude='secrets' --exclude='.env' --exclude='.env.*' \
-    --exclude='dist' --exclude='certs' --exclude='*.pem' --exclude='*.key' \
+    --exclude='dist' --exclude='__pycache__' --exclude='*.pyc' --exclude='certs' --exclude='*.pem' --exclude='*.key' \
     --exclude='*.p12' --exclude='*.pfx' --exclude='*.dump' --exclude='*.log'
 [[ -z "$(find "$STAGING" -type l -print -quit)" ]] || { printf 'Dashboard sources must not contain symlinks\n' >&2; exit 1; }
 for entry in \
@@ -27,7 +27,7 @@ for entry in \
   server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh \
   server/scripts/export-legacy-host.mjs server/scripts/LEGACY_HOST_EXPORT.md \
   deploy/compose/docker-compose.yml deploy/compose/compose.yaml deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore \
-  deploy/compose/panel.sh deploy/compose/download.sh deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template \
+  deploy/compose/panel.sh deploy/compose/download.sh deploy/compose/update.py deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template \
   deploy/compose/origin-entrypoint.sh deploy/compose/edge-nginx.conf.template deploy/compose/tunnel-nginx.conf.template \
   deploy/compose/README.md deploy/compose/https-proxy.conf.example; do
   [[ -f "$STAGING/source/XPayincus/$entry" && -r "$STAGING/source/XPayincus/$entry" && -s "$STAGING/source/XPayincus/$entry" ]] || { printf 'Missing, unreadable or empty committed Dashboard source: %s\n' "$entry" >&2; exit 1; }

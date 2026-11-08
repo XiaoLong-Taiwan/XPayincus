@@ -49,12 +49,12 @@ assert.ok(!/^\s*(source|\.) .*\.env/m.test(cli), 'CLI must not execute the deplo
 assert.ok(cli.includes('--profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared'), 'Mode changes must stop the previous ingress services')
 
 assert.ok(!/^    build:/m.test(compose), 'Default deployment must only pull published images')
-assert.ok(api.includes('image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.5'))
-assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-panel-web:v1\.0\.5/g) || []).length, 2)
+assert.match(api, /image: ghcr\.io\/xiaolong-taiwan\/xpayincus-api:v[0-9]+\.[0-9]+\.[0-9]+/)
+assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-panel-web:v[0-9]+\.[0-9]+\.[0-9]+/g) || []).length, 2)
 const up = section(cli, '\n  up)', '\n  down)')
 assert.ok(up.includes('deployment_mode="${1:-pull}"') && up.includes('compose.build.yaml'))
 const stop = up.indexOf('"${compose[@]}" stop user admin api')
-for (const preparation of ['build api user admin', 'pull --ignore-buildable', 'pull --policy always']) {
+for (const preparation of ['build api user admin', 'pull --ignore-buildable', 'resolve-images', 'pull --policy always api user admin', 'pull --policy missing --ignore-buildable db init', 'pull --policy missing nginx', 'pull --policy missing tunnel-origin cloudflared']) {
   assert.ok(up.indexOf(preparation) >= 0 && up.indexOf(preparation) < stop, `${preparation} must succeed before stopping services`)
 }
 assert.ok(up.includes('up -d --no-build --pull never --wait --wait-timeout 300'))

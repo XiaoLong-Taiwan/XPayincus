@@ -66,7 +66,7 @@ services:
 
   api:
     container_name: incudal-panel-api
-    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.5
+    image: ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.6
     restart: unless-stopped
     init: true
     environment:
@@ -135,7 +135,7 @@ services:
     logging: *logging
 
   user:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.5
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.6
     restart: unless-stopped
     environment:
       PANEL_ENTRY: user
@@ -157,7 +157,7 @@ services:
     logging: *logging
 
   admin:
-    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.5
+    image: ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.6
     restart: unless-stopped
     environment:
       PANEL_ENTRY: admin

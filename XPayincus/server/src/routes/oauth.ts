@@ -45,6 +45,12 @@ const OAUTH_PROVIDERS = {
     tokenUrl: 'https://oauth2.googleapis.com/token',
     userUrl: 'https://www.googleapis.com/oauth2/v2/userinfo',
     scope: 'openid email profile'
+  },
+  discord: {
+    authUrl: 'https://discord.com/oauth2/authorize',
+    tokenUrl: 'https://discord.com/api/oauth2/token',
+    userUrl: 'https://discord.com/api/v10/users/@me',
+    scope: 'identify email'
   }
 } as const
 
@@ -52,6 +58,10 @@ type OAuthProvider = keyof typeof OAUTH_PROVIDERS
 const OAUTH_SECRET_UNCHANGED_PLACEHOLDER = 'UNCHANGED'
 const OAUTH_PROVIDER_FETCH_TIMEOUT_MS = 15_000
 const OAUTH_PROVIDER_MAX_RESPONSE_BYTES = 128 * 1024
+
+function isOAuthProvider(provider: string): provider is OAuthProvider {
+  return Object.prototype.hasOwnProperty.call(OAUTH_PROVIDERS, provider)
+}
 
 function normalizePublicBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '')
@@ -166,7 +176,7 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
         type: 'object',
         required: ['provider'],
         properties: {
-          provider: { type: 'string', enum: ['github', 'google'] }
+          provider: { type: 'string', enum: ['github', 'google', 'discord'] }
         }
       },
       body: {
@@ -185,6 +195,9 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
   }>, _reply: FastifyReply) => {
     const { provider } = request.params
     const { clientId, clientSecret, enabled = false } = request.body
+    if (!isOAuthProvider(provider)) {
+      return _reply.code(400).send({ error: 'Unsupported OAuth provider', code: 'INVALID_PROVIDER' })
+    }
     const existingConfig = await db.getOAuthConfig(provider)
     const shouldKeepExistingSecret = existingConfig && (
       clientSecret === undefined ||
@@ -212,6 +225,9 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
     onRequest: [fastify.authenticateAdmin]
   }, async (request: FastifyRequest<{ Params: { provider: OAuthProvider } }>, _reply: FastifyReply) => {
     const { provider } = request.params
+    if (!isOAuthProvider(provider)) {
+      return _reply.code(400).send({ error: 'Unsupported OAuth provider', code: 'INVALID_PROVIDER' })
+    }
     await db.deleteOAuthConfig(provider)
 
     return { message: `${provider} OAuth 配置已删除` }
@@ -225,7 +241,7 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
   fastify.get('/providers', async () => {
     const configs = await db.getEnabledOAuthConfigs()
     return {
-      providers: configs.map(c => c.provider)
+      providers: configs.map(c => c.provider).filter(isOAuthProvider)
     }
   })
 
@@ -265,7 +281,7 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
     const { provider } = request.params
     const { mode = 'login', redirect, bindTicket } = request.query
 
-    if (!OAUTH_PROVIDERS[provider]) {
+    if (!isOAuthProvider(provider)) {
       return reply.code(400).send({ error: 'Unsupported OAuth provider', code: 'INVALID_PROVIDER' })
     }
 
@@ -313,7 +329,7 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const state = await generateOAuthState(validMode, safeRedirectUrl, bindSession)
+    const state = await generateOAuthState(validMode, safeRedirectUrl, bindSession, provider)
 
     // 构建回调 URL
     let callbackUrl: string
@@ -359,14 +375,8 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
     const { provider } = request.params
     const { code, state, error } = request.query
 
-    // 错误处理
-    if (error) {
-      await logSecurityEvent(SecurityEventType.LOGIN_FAILED, null, {
-        ip: request.ip,
-        action: 'oauth_callback',
-        reason: `OAuth error: ${error}`
-      })
-      return reply.redirect(`/login?error=${encodeURIComponent(error)}`)
+    if (!isOAuthProvider(provider)) {
+      return reply.code(400).send({ error: 'Unsupported OAuth provider', code: 'INVALID_PROVIDER' })
     }
 
     if (!state) {
@@ -395,6 +405,14 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
     // 根据 mode 确定错误跳转目标
     const loginRedirectBase = getLoginPathForRedirect(redirectUrl)
     const errorRedirectBase = stateData.mode === 'bind' ? redirectUrl : loginRedirectBase
+
+    if (stateData.provider !== provider) {
+      return reply.redirect(redirectWithQuery(errorRedirectBase, { error: 'invalid_provider' }))
+    }
+
+    if (error) {
+      return reply.redirect(redirectWithQuery(errorRedirectBase, { error: 'access_denied' }))
+    }
 
     if (!code) {
       return reply.redirect(redirectWithQuery(errorRedirectBase, { error: 'missing_code' }))
@@ -494,6 +512,9 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
         // 检查当前用户是否已绑定该提供商
         const hasBound = await db.hasOAuthBinding(userId, provider)
         if (hasBound) {
+          if (!existingBinding || existingBinding.user_id !== userId) {
+            return reply.redirect(redirectWithQuery(errorRedirectBase, { error: 'already_bound' }))
+          }
           // 更新 token
           await db.updateOAuthBindingToken(userId, provider, tokenData.access_token, tokenData.refresh_token || null)
         } else {
@@ -610,6 +631,10 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest<{ Params: { provider: OAuthProvider } }>, reply: FastifyReply) => {
     const { provider } = request.params
 
+    if (!isOAuthProvider(provider)) {
+      return reply.code(400).send({ error: 'Unsupported OAuth provider', code: 'INVALID_PROVIDER' })
+    }
+
     // 检查是否有绑定
     const hasBound = await db.hasOAuthBinding(request.user.id, provider)
     if (!hasBound) {
@@ -673,7 +698,7 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
       return reply.code(401).send({ error: 'User not found', code: 'USER_NOT_FOUND' })
     }
 
-    if (user.status === 'banned') {
+    if (user.status !== 'active') {
       await logSecurityEvent(SecurityEventType.LOGIN_FAILED, loginData.userId, {
         ip: request.ip,
         username: loginData.username,
@@ -699,18 +724,18 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
 
     // 生成 Access Token（简化版：7天有效期）
     const accessToken = fastify.jwt.sign({
-      id: loginData.userId,
-      username: loginData.username,
-      role: loginData.role as 'admin' | 'user',
+      id: user.id,
+      username: user.username,
+      role: user.role,
       sid: sessionId
     }, { expiresIn: '7d' })
 
     return {
       token: accessToken,
       user: {
-        id: loginData.userId,
-        username: loginData.username,
-        role: loginData.role
+        id: user.id,
+        username: user.username,
+        role: user.role
       }
     }
   })
@@ -744,5 +769,16 @@ function parseOAuthUser(
     }
   }
 
-  return { id: String(data.id || ''), username: null, email: null, avatar: null }
+  if (provider === 'discord') {
+    const id = typeof data.id === 'string' && /^\d+$/.test(data.id) ? data.id : ''
+    const avatar = typeof data.avatar === 'string' && /^[a-zA-Z0-9_]+$/.test(data.avatar) ? data.avatar : null
+    return {
+      id,
+      username: typeof data.global_name === 'string' ? data.global_name : typeof data.username === 'string' ? data.username : null,
+      email: data.verified === true && typeof data.email === 'string' ? data.email : null,
+      avatar: id && avatar ? `https://cdn.discordapp.com/avatars/${id}/${avatar}.png` : null
+    }
+  }
+
+  return { id: '', username: null, email: null, avatar: null }
 }

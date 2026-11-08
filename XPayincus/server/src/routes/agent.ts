@@ -5,7 +5,8 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { Prisma } from '@prisma/client'
-import { createHash } from 'crypto'
+import { createHash, createHmac } from 'crypto'
+import { Agent, request as undiciRequest } from 'undici'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { isIP } from 'net'
 import { dirname, isAbsolute, join } from 'path'
@@ -33,6 +34,8 @@ import { clampAgentHeartbeatIntervalSeconds, deriveAgentStatus, getAgentHeartbea
 import { AgentReleaseCache, readBoundedAgentResponse, validateCachedAgentManifest } from '../lib/agent-release-cache.js'
 import { homedir } from 'node:os'
 import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } from '../lib/system-version.js'
+import { AgentUpgradeRequests, agentVersionStatus } from '../lib/agent-upgrade.js'
+import { readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -118,6 +121,7 @@ interface AgentUpgradeInstruction {
 
 const agentModel = prisma.hostAgent
 const nonceModel = prisma.hostAgentNonce
+const agentUpgradeRequests = new AgentUpgradeRequests()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const agentBinaryNamePattern = /^xpayincus-agent-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?-linux-(amd64|arm64)(?:\.gz)?$/
@@ -795,10 +799,7 @@ async function getLatestAgentVersion(): Promise<string | null> {
 }
 
 function getAgentVersionStatus(agentVersion: string | null, latestVersion: string | null): 'latest' | 'outdated' | 'unknown' {
-  if (!agentVersion || !latestVersion) {
-    return 'unknown'
-  }
-  return agentVersion === latestVersion ? 'latest' : 'outdated'
+  return agentVersionStatus(agentVersion, latestVersion)
 }
 
 function isSha256(value: string | undefined): value is string {
@@ -882,6 +883,7 @@ async function serializeAgent(agent: HostAgentRecord) {
     version: agent.version,
     latestVersion,
     versionStatus,
+    upgrade: agentUpgradeRequests.get(agent.agentId),
     capabilities: agent.capabilities ?? [],
     lastReport: agent.lastReport ?? {},
     lastSeenAt: agent.lastSeenAt?.toISOString() ?? null,
@@ -904,6 +906,7 @@ async function serializeAgentStatus(agent: HostAgentRecord) {
     version: agent.version,
     latestVersion,
     versionStatus,
+    upgrade: agentUpgradeRequests.get(agent.agentId),
     capabilities: agent.capabilities ?? [],
     lastReport: agent.lastReport ?? {},
     lastSeenAt: agent.lastSeenAt?.toISOString() ?? null,
@@ -1004,6 +1007,56 @@ async function authenticateAgentRequest(
 }
 
 export default async function agentRoutes(fastify: FastifyInstance) {
+  fastify.post<{ Body: AgentHeartbeatBody; Params: { phase: string } }>('/panel-trust/:phase', async (request, reply) => {
+    if (request.params.phase !== 'certificate' && request.params.phase !== 'verify') {
+      return reply.code(404).send({ error: 'Unknown trust operation' })
+    }
+    const agent = await authenticateAgentRequest(request, reply)
+    if (!agent) return
+    const host = await prisma.host.findUnique({ where: { id: agent.hostId }, select: { url: true, isInstalled: true } })
+    if (!host?.isInstalled) return reply.code(403).send({ error: 'Installed host required' })
+    try {
+      const appDir = process.env.INCUDAL_APP_DIR || process.cwd()
+      const installDir = process.env.INSTALL_DIR || (appDir.endsWith('/current') ? dirname(appDir) : null)
+      const stableDir = installDir ? join(installDir, 'server/certs') : null
+      const certDir = stableDir && (existsSync(join(stableDir, 'client.crt')) || existsSync(join(stableDir, 'client.key')))
+        ? stableDir : join(__dirname, '../../certs')
+      const explicit = process.env.PANEL_CRT_PATH || process.env.PANEL_KEY_PATH
+      const pair = readPanelCertificatePair(
+        explicit ? process.env.PANEL_CRT_PATH || '' : join(certDir, 'client.crt'),
+        explicit ? process.env.PANEL_KEY_PATH || '' : join(certDir, 'client.key')
+      )
+      if (request.params.phase === 'verify') {
+        const serverCertificate = request.body.incus?.serverCertificate
+        if (typeof serverCertificate !== 'string' || serverCertificate.length > 16384) {
+          return reply.code(400).send({ error: 'Host server certificate required' })
+        }
+        const dispatcher = new Agent({ connect: {
+          cert: pair.cert, key: pair.key, ca: serverCertificate, rejectUnauthorized: true,
+          checkServerIdentity: () => undefined, timeout: 10000
+        } })
+        try {
+          const response = await undiciRequest(new URL('/1.0/resources', host.url), {
+            dispatcher, method: 'GET', headersTimeout: 10000, bodyTimeout: 10000
+          })
+          const data = await response.body.json() as { type?: string; status_code?: number }
+          if (response.statusCode !== 200 || data.type !== 'sync' || data.status_code !== 200) {
+            return reply.code(409).send({ error: 'Panel certificate is not trusted by host' })
+          }
+        } finally {
+          await dispatcher.close()
+        }
+      }
+      const headers = readAgentAuthHeaders(request.headers)!
+      const digest = createHash('sha256').update(pair.cert).digest('hex')
+      const proof = createHmac('sha256', decryptSensitiveData(agent.secretEncrypted)!)
+        .update(`panel-trust\n${request.params.phase}\n${headers.nonce}\n${digest}`).digest('hex')
+      return reply.header('Cache-Control', 'no-store').type('text/plain').send(`${proof}\n${pair.cert.toString('utf8')}`)
+    } catch {
+      return reply.code(503).send({ error: 'Panel trust operation failed' })
+    }
+  })
+
   fastify.get('/install.sh', async (_request: FastifyRequest, reply: FastifyReply) => {
     const scriptPath = join(__dirname, '../../templates/agent-install.sh')
     const script = readFileSync(scriptPath, 'utf8')
@@ -1169,9 +1222,26 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     }
   })
 
-  fastify.post<{ Params: AgentCredentialsParams }>('/hosts/:hostId/upgrade', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{ Params: AgentCredentialsParams }>, reply: FastifyReply) => {
+  fastify.post<{ Params: AgentCredentialsParams; Body: { confirm: boolean; targetVersion: string } }>('/hosts/:hostId/upgrade', {
+    onRequest: [fastify.authenticate],
+    preValidation: async (request, reply) => {
+      if (!isRecord(request.body) || request.body.confirm !== true || typeof request.body.targetVersion !== 'string' ||
+        Object.keys(request.body).some(key => key !== 'confirm' && key !== 'targetVersion')) {
+        return reply.code(400).send({ error: 'Explicit Agent update confirmation and target version are required', code: 'AGENT_UPGRADE_INVALID_REQUEST' })
+      }
+    },
+    schema: {
+      body: {
+        type: 'object',
+        required: ['confirm', 'targetVersion'],
+        additionalProperties: false,
+        properties: {
+          confirm: { type: 'boolean', const: true },
+          targetVersion: { type: 'string', maxLength: 128 }
+        }
+      }
+    }
+  }, async (request, reply) => {
     const hostId = parsePositiveId(request.params.hostId)
     if (!hostId) {
       return reply.code(400).send({ error: 'Invalid host ID', code: 'INVALID_HOST_ID' })
@@ -1203,6 +1273,9 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     if (!latestVersion) {
       return reply.code(503).send({ error: 'Agent latest version unavailable', code: 'AGENT_LATEST_VERSION_UNAVAILABLE' })
     }
+    if (request.body.confirm !== true || request.body.targetVersion !== latestVersion) {
+      return reply.code(409).send({ error: 'Refresh and confirm the current Agent release', code: 'AGENT_TARGET_CHANGED' })
+    }
     if (versionStatus === 'unknown') {
       return reply.code(409).send({ error: 'Agent version unknown', code: 'AGENT_VERSION_UNKNOWN' })
     }
@@ -1221,6 +1294,14 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     }
 
     const nextHeartbeatSeconds = getAgentHeartbeatIntervalSeconds(agent)
+    const report = isRecord(agent.lastReport) ? agent.lastReport : {}
+    const instruction = await buildAgentUpgradeInstruction(request, {
+      version: agent.version ?? undefined,
+      runtime: isRecord(report.runtime) ? report.runtime : {}
+    })
+    if (!instruction.available || instruction.version !== latestVersion) {
+      return reply.code(409).send({ error: 'Agent release is incompatible or changed', code: 'AGENT_UPGRADE_UNAVAILABLE' })
+    }
     await createLog(
       request.user.id,
       LogModule.HOST,
@@ -1228,9 +1309,11 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       `请求宿主机 Agent 升级: ${host.name} (#${host.id}) ${agent.version || 'unknown'} -> ${latestVersion}`,
       LogResult.SUCCESS
     )
+    const upgrade = agentUpgradeRequests.request(agent.agentId, instruction, nextHeartbeatSeconds)
 
     return {
       requested: true,
+      upgrade,
       currentVersion: agent.version,
       latestVersion,
       versionStatus,
@@ -1524,7 +1607,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       serverTime: now.toISOString(),
       taskPollIntervalSeconds: 15,
       instanceReport,
-      upgrade: await buildAgentUpgradeInstruction(request, request.body)
+      upgrade: agentUpgradeRequests.heartbeat(agent.agentId, request.body.version, request.body.runtime ?? {})
     }
   })
 }

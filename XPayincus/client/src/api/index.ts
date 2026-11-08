@@ -1138,8 +1138,8 @@ const api = {
       http.get(`/agent/hosts/${id}/status`),
     generateAgentInstallCommand: (id: number): Promise<HostAgentInstallCommandResponse> =>
       http.post(`/agent/hosts/${id}/install-command`, {}),
-    requestAgentUpgrade: (id: number): Promise<HostAgentUpgradeRequestResponse> =>
-      http.post(`/agent/hosts/${id}/upgrade`, {}),
+    requestAgentUpgrade: (id: number, targetVersion: string): Promise<HostAgentUpgradeRequestResponse> =>
+      http.post(`/agent/hosts/${id}/upgrade`, { confirm: true, targetVersion }),
     sync: (id: number): Promise<void> => http.post(`/hosts/${id}/sync`, {}, { timeout: TIMEOUT.LONG }),
     setMaintenance: (id: number, enabled: boolean): Promise<Host> =>
       http.post(`/hosts/${id}/maintenance`, { enabled }),
@@ -1911,10 +1911,10 @@ const api = {
 
   // OAuth 自助绑定
   oauth: {
-    getProviders: (): Promise<Array<{ provider: 'github' | 'google'; enabled: boolean }>> =>
+    getProviders: (): Promise<{ providers: Array<UserOAuthBinding['provider']> }> =>
       http.get('/oauth/providers'),
-    getBindings: (): Promise<UserOAuthBinding[]> => http.get('/oauth/bindings'),
-    unbind: (provider: 'github' | 'google'): Promise<void> =>
+    getBindings: (): Promise<{ bindings: import('@/types/api').OAuthBindingSummary[] }> => http.get('/oauth/bindings'),
+    unbind: (provider: 'github' | 'google' | 'discord'): Promise<void> =>
       http.delete(`/oauth/bindings/${provider}`),
     createBindTicket: (): Promise<{ ticket: string; expiresIn: number }> =>
       http.post('/oauth/bind-ticket', {}),

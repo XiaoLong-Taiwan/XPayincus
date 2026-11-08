@@ -23,7 +23,7 @@ assert.ok(
     oauthSource.includes('issuedAt: ticketData.issuedAt') &&
     oauthSource.includes('sessionId: ticketData.sessionId') &&
     oauthSource.includes("const safeRedirectUrl = getSafeRedirectUrl(redirect, validMode === 'bind' ? '/profile' : '/')") &&
-    oauthSource.includes('const state = await generateOAuthState(validMode, safeRedirectUrl, bindSession)'),
+    oauthSource.includes('const state = await generateOAuthState(validMode, safeRedirectUrl, bindSession, provider)'),
   'OAuth authorize bind flow must preserve the validated bind-ticket session in signed state'
 )
 
@@ -82,6 +82,59 @@ assert.ok(
     bindCallbackGuard.includes('const bindUser = await db.findUserById(userId)') &&
     bindCallbackGuard.includes("if (!bindUser || bindUser.status !== 'active')"),
   'OAuth callback bind flow must re-check session invalidation and active user status before writing bindings'
+)
+
+assert.ok(
+  oauthSource.includes('stateData.provider !== provider') &&
+    securitySource.includes('provider?: \'github\' | \'google\' | \'discord\'') &&
+    oauthSource.includes('Object.prototype.hasOwnProperty.call(OAUTH_PROVIDERS, provider)'),
+  'OAuth callbacks must validate an own provider entry and match the provider carried in signed state'
+)
+
+assert.ok(
+  oauthSource.includes("error: 'already_bound'") &&
+    oauthSource.includes('if (!existingBinding || existingBinding.user_id !== userId)'),
+  'OAuth binding must not update tokens for a different external account under the same provider'
+)
+
+assert.equal(securitySource.split(".update('oauth-state:')").length - 1, 2,
+  'OAuth state signing and verification must use the state-specific HMAC context')
+assert.equal(securitySource.split(".update('oauth-login-code:')").length - 1, 2,
+  'OAuth login-code signing and verification must use a separate HMAC context')
+assert.ok(
+  securitySource.includes("data.mode !== 'login' && data.mode !== 'bind'") &&
+    securitySource.includes("['github', 'google', 'discord'].includes(data.provider ?? '')") &&
+    securitySource.split('!Number.isSafeInteger(data.timestamp) || data.timestamp > Date.now()').length - 1 === 2 &&
+    securitySource.includes('!Number.isSafeInteger(data.userId) || data.userId <= 0') &&
+    securitySource.includes("data.role !== 'admin' && data.role !== 'user'"),
+  'Signed OAuth payloads must validate their purpose-specific identity, provider, timestamp, and nonce fields'
+)
+
+const exchangeSource = oauthSource.slice(oauthSource.indexOf("}>('/exchange-code'"))
+assert.ok(
+  exchangeSource.includes("if (user.status !== 'active')") &&
+    exchangeSource.includes('id: user.id') &&
+    exchangeSource.includes('username: user.username') &&
+    exchangeSource.includes('role: user.role') &&
+    !exchangeSource.includes('role: loginData.role'),
+  'OAuth code exchange must require an active account and use its current database identity and role'
+)
+
+const invalidationSource = securitySource.slice(securitySource.indexOf('export async function isAccessTokenInvalidated('), securitySource.indexOf('// ==================== 敏感数据加密'))
+assert.ok(
+  /catch \(error\) \{\s*console\.error\('Failed to check token invalidation, rejecting token:', error\)\s*return true/.test(invalidationSource),
+  'Session invalidation lookup failures must reject access tokens and OAuth bind sessions'
+)
+
+const schemaSource = readFileSync(resolve(__dirname, '../prisma/schema.prisma'), 'utf8')
+const discordMigration = readFileSync(resolve(__dirname, '../prisma/migrations/20261109000000_add_discord_oauth/migration.sql'), 'utf8')
+assert.ok(
+  /enum OAuthProvider\s*\{[^}]*\bdiscord\b/.test(schemaSource) &&
+    discordMigration.includes('ALTER TYPE "OAuthProvider" ADD VALUE IF NOT EXISTS \'discord\'') &&
+    oauthSource.includes("authUrl: 'https://discord.com/oauth2/authorize'") &&
+    oauthSource.includes("userUrl: 'https://discord.com/api/v10/users/@me'") &&
+    oauthSource.includes("data.verified === true && typeof data.email === 'string'"),
+  'Discord login must have its schema migration, fixed provider endpoints, and verified-email handling'
 )
 
 console.log('OAuth bind session guard checks passed')

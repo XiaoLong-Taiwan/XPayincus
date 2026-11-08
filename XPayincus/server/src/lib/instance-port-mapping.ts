@@ -109,15 +109,24 @@ export async function addInstancePortMapping(input: AddPortMappingInput): Promis
   if (instance.network_mode === 'ipv6_only') {
     return { ok: false, code: ErrorCode.INVALID_PARAMS, detail: 'IPv6 Only instances do not require port mappings' }
   }
+  if (!Number.isInteger(privatePort) || privatePort < 1 || privatePort > 65535 ||
+      (input.publicPort !== undefined && (!Number.isInteger(input.publicPort) || input.publicPort < 1 || input.publicPort > 65535))) {
+    return { ok: false, code: ErrorCode.INVALID_PARAMS }
+  }
+  if (host.nat_port_start == null || host.nat_port_end == null ||
+      !Number.isInteger(host.nat_port_start) || !Number.isInteger(host.nat_port_end) ||
+      host.nat_port_start < 1 || host.nat_port_end > 65535 || host.nat_port_start > host.nat_port_end) {
+    return { ok: false, code: ErrorCode.PORT_RANGE_INVALID }
+  }
 
   let allocatedPort = input.publicPort
-  if (!allocatedPort) {
+  if (allocatedPort === undefined) {
     const port = await db.allocatePort(instance.host_id, protocol)
     if (!port) {
       return { ok: false, code: ErrorCode.PORT_NO_AVAILABLE }
     }
     allocatedPort = port
-  } else if (host.nat_port_start && host.nat_port_end) {
+  } else {
     if (allocatedPort < host.nat_port_start || allocatedPort > host.nat_port_end) {
       return { ok: false, code: ErrorCode.PORT_RANGE_INVALID, detail: `${host.nat_port_start}-${host.nat_port_end}` }
     }

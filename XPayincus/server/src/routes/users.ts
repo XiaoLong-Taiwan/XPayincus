@@ -1422,7 +1422,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
     }
 
     // 验证 provider 参数
-    if (provider !== 'github' && provider !== 'google') {
+    if (provider !== 'github' && provider !== 'google' && provider !== 'discord') {
       return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS, 'Invalid OAuth provider'))
     }
 
@@ -1436,13 +1436,13 @@ export default async function userRoutes(fastify: FastifyInstance) {
     }
 
     // 检查用户是否绑定了该 OAuth
-    const hasBound = await db.hasOAuthBinding(userId, provider as 'github' | 'google')
+    const hasBound = await db.hasOAuthBinding(userId, provider)
     if (!hasBound) {
       return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS, 'User has not bound this OAuth provider'))
     }
 
     // 删除 OAuth 绑定
-    await db.deleteOAuthBinding(userId, provider as 'github' | 'google')
+    await db.deleteOAuthBinding(userId, provider)
 
     await revokeAllUserRefreshTokens(userId)
     await invalidateUserAccessTokens(userId)

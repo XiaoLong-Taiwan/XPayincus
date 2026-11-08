@@ -41,6 +41,7 @@ User=incudal
 Group=incudal
 WorkingDirectory=/opt/incudal/current
 EnvironmentFile=/opt/incudal/.env
+ExecStartPre=/usr/bin/node /opt/incudal/current/server/dist/scripts/ensure-panel-certificate.js
 ExecStartPre=/usr/bin/bash -lc 'cd /opt/incudal/current/server && pnpm exec prisma migrate deploy'
 ExecStart=/usr/bin/node /opt/incudal/current/server/dist/app.js
 ```

@@ -2,7 +2,7 @@
 
 統一倉庫的 Debian 宿主 ZFS 預編譯模組打包工具。`zfs-builder.sh` 在專用 Debian 編譯主機安裝建置相依與 DKMS，針對指定核心建置並封裝模組；不部署於面板 Compose。
 
-產品發行版本由 [根 VERSION](../../../VERSION) 管理，目前為 `v1.0.5`，本目錄 `VERSION` 為產品版本記錄。實際 ZFS 模組版本仍由 Debian 套件與 DKMS 來源決定，不能改成產品版本號。此目錄納入 Agent 宿主元件管理，不代表 Go Agent 編譯、安裝或載入 ZFS 核心模組；管理邊界見 [元件管理](../README.md)。
+產品發行版本由 [根 VERSION](../../../VERSION) 管理，目前準備 `v1.0.6`（未發布），本目錄 `VERSION` 為產品版本記錄。實際 ZFS 模組版本仍由 Debian 套件與 DKMS 來源決定，不能改成產品版本號。此目錄納入 Agent 宿主元件管理，不代表 Go Agent 編譯、安裝或載入 ZFS 核心模組；管理邊界見 [元件管理](../README.md)。
 
 ## 使用方式
 

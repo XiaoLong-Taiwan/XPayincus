@@ -8,6 +8,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '@/api'
+import adminApi from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
@@ -1522,7 +1523,7 @@ async function deletePort(portId: number): Promise<void> {
   if (!instance.value || !confirm(t('instance.detail.port.confirmDelete'))) return
 
   try {
-    await api.instances.deletePort(instance.value.id, portId)
+    await (isAdminEntry ? adminApi.instancePorts.delete(instance.value.id, portId) : api.instances.deletePort(instance.value.id, portId))
     // 立即从本地数据移除，提供即时反馈
     if ((instance.value as any).port_mappings) {
       (instance.value as any).port_mappings = (instance.value as any).port_mappings.filter(
@@ -1551,7 +1552,7 @@ async function deletePorts(portIds: number[]): Promise<void> {
   try {
     for (const portId of portIds) {
       try {
-        await api.instances.deletePort(instance.value.id, portId)
+        await (isAdminEntry ? adminApi.instancePorts.delete(instance.value.id, portId) : api.instances.deletePort(instance.value.id, portId))
         // 立即从本地数据移除
         if ((instance.value as any).port_mappings) {
           (instance.value as any).port_mappings = (instance.value as any).port_mappings.filter(
@@ -1965,7 +1966,7 @@ async function handleAddPort(form: {
         batchData.remark = form.remark.trim()
       }
 
-      const response = await api.instances.addPortBatch(instance.value.id, batchData)
+      const response = await (isAdminEntry ? adminApi.instancePorts.addBatch(instance.value.id, batchData) : api.instances.addPortBatch(instance.value.id, batchData))
 
       // 检查是否有冲突
       if ('conflicts' in response && response.conflicts) {
@@ -2001,7 +2002,7 @@ async function handleAddPort(form: {
           tcpPayload.remark = form.remark.trim()
         }
 
-        const tcpResponse = await api.instances.addPort(instance.value!.id, tcpPayload)
+        const tcpResponse = await (isAdminEntry ? adminApi.instancePorts.add(instance.value!.id, tcpPayload) : api.instances.addPort(instance.value!.id, tcpPayload))
         // @ts-ignore - API response structure
         const tcpMapping = tcpResponse.mapping
         if (tcpMapping && instance.value) {
@@ -2031,7 +2032,7 @@ async function handleAddPort(form: {
           udpPayload.remark = form.remark.trim()
         }
 
-        const udpResponse = await api.instances.addPort(instance.value!.id, udpPayload)
+        const udpResponse = await (isAdminEntry ? adminApi.instancePorts.add(instance.value!.id, udpPayload) : api.instances.addPort(instance.value!.id, udpPayload))
         // @ts-ignore - API response structure
         const udpMapping = udpResponse.mapping
         if (udpMapping && instance.value) {
@@ -2061,7 +2062,7 @@ async function handleAddPort(form: {
           payload.remark = form.remark.trim()
         }
 
-        const response = await api.instances.addPort(instance.value.id, payload)
+        const response = await (isAdminEntry ? adminApi.instancePorts.add(instance.value.id, payload) : api.instances.addPort(instance.value.id, payload))
         // @ts-ignore - API response structure
         const newMapping = response.mapping
         if (newMapping && instance.value) {
@@ -2143,13 +2144,19 @@ async function handlePortConflictConfirm(resolvedPorts: Array<{ original: number
     }
 
     // 重新提交，带上修改后的端口映射
-    const response = await api.instances.addPortBatch(instance.value.id, {
+    const response = await (isAdminEntry ? adminApi.instancePorts.addBatch(instance.value.id, {
       protocol: data.protocol,
       privatePortStart: data.privatePortStart,
       privatePortEnd: data.privatePortEnd,
       remark: data.remark,
       portMappings
-    })
+    }) : api.instances.addPortBatch(instance.value.id, {
+      protocol: data.protocol,
+      privatePortStart: data.privatePortStart,
+      privatePortEnd: data.privatePortEnd,
+      remark: data.remark,
+      portMappings
+    }))
 
     if ('mappings' in response && response.mappings) {
       showPortConflictModal.value = false

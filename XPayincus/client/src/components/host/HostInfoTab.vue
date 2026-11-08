@@ -245,7 +245,9 @@ const agentVersionInfo = computed(() => {
   }
 })
 
-const canRequestAgentUpgrade = computed(() => agentStatus.value?.versionStatus === 'outdated')
+const agentUpgradeActive = computed(() => ['pending', 'delivered'].includes(agentStatus.value?.upgrade?.status ?? ''))
+const canRequestAgentUpgrade = computed(() => agentStatus.value?.versionStatus === 'outdated' &&
+  agentStatus.value.enabled && agentStatus.value.status === 'online' && !agentUpgradeActive.value)
 
 watch(() => props.host.id, () => {
   agentInstallCommand.value = ''
@@ -332,9 +334,14 @@ function refreshAgentStatus() {
 
 async function requestAgentUpgrade() {
   if (!canRequestAgentUpgrade.value || agentUpgradeRequesting.value) return
+  const targetVersion = agentStatus.value?.latestVersion
+  if (!targetVersion || !window.confirm(t('admin.hosts.agentUpgradeConfirm', {
+    current: agentStatus.value?.version,
+    version: targetVersion
+  }))) return
   agentUpgradeRequesting.value = true
   try {
-    const result = await api.hosts.requestAgentUpgrade(props.host.id)
+    const result = await api.hosts.requestAgentUpgrade(props.host.id, targetVersion)
     const message = result.requested
       ? t('admin.hosts.agentUpgradeRequestSuccess', { seconds: result.nextHeartbeatSeconds })
       : t('admin.hosts.agentAlreadyLatest')
@@ -736,6 +743,9 @@ const xAxisLabels = computed(() => {
     </div>
 
     <template v-else>
+      <p v-if="agentStatus.upgrade" role="status" aria-live="polite" class="text-sm mb-4 break-words">
+        {{ t(`admin.hosts.agentUpgradeState_${agentStatus.upgrade.status}`, { version: agentStatus.upgrade.targetVersion }) }}
+      </p>
       <div
         class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pb-4 mb-4 border-b"
         :class="themeStore.isDark ? 'border-gray-800' : 'border-gray-100'"
@@ -764,7 +774,7 @@ const xAxisLabels = computed(() => {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             <span v-if="agentStatus.version">{{ agentStatus.version }}</span>
-            <span class="font-sans font-medium">{{ agentVersionInfo.label }}</span>
+            <span class="font-sans font-medium">{{ t('admin.hosts.agentUpgradeAction') }}</span>
           </button>
           <span
             v-else

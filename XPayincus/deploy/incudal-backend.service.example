@@ -15,6 +15,7 @@ Environment=NPM_CONFIG_CACHE=/opt/incudal/.npm
 Environment=XDG_CACHE_HOME=/opt/incudal/.cache
 Environment=PATH=/usr/local/libexec/incudal:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+ExecStartPre=/usr/bin/node /opt/incudal/current/server/dist/scripts/ensure-panel-certificate.js
 ExecStartPre=/usr/bin/bash -lc 'cd /opt/incudal/current/server && pnpm exec prisma migrate deploy'
 ExecStart=/usr/bin/node /opt/incudal/current/server/dist/app.js
 

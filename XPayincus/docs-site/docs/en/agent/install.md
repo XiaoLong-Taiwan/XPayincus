@@ -8,9 +8,11 @@ The host install script is recommended for Ubuntu 22.04+ and Debian 12/13. Debia
 
 ## Panel Certificate Trust
 
-The host install script imports the panel Incus client certificate into the host Incus trust list as `panel`. If the panel is reinstalled, migrated, restored from disaster recovery, or has its client certificate regenerated, the host may still trust an old `panel` certificate. Admin storage-pool creation or resource reads can then fail with `not authorized`.
+The host installer adds the panel Incus client certificate to host trust. After panel reinstall, migration, disaster recovery, or certificate rotation, stale trust can cause `not authorized`. A current HMAC-capable Agent can retrieve and authenticate the new certificate using existing node credentials; the old fingerprint is removed only after the new connection succeeds.
 
-When this happens, generate a fresh host install command from the admin console and run it again on the host. The current installer downloads the latest panel certificate first, then replaces the existing `panel` trust entry on the host.
+An older Agent without the HMAC trust endpoint cannot securely prove a new certificate to the panel. Do not automatically trust a downloaded certificate or remove old trust. Back up `/etc/incus/` and the Agent configuration, upgrade the panel to a release with the authenticated trust endpoint, then run the updated host management script on the original Incus host to update the Agent binary. Open the script again to complete authenticated trust rotation. If the old Agent cannot authenticate, generate a fresh Agent install command/one-time token for that host in the admin console and run it on the original host to pair the Agent again; then verify the host in the panel. For `AGENT_AUTH_REQUIRED` or `AGENT_SIGNATURE_INVALID`, do not bypass verification or manually trust the downloaded certificate; use the re-pairing path. This process does not automatically remove Incus containers, storage pools, or host data. Do not use uninstall/delete-data options or remove old trust until the new certificate connection is verified.
+
+The panel certificate pair is checked on every API start. `client.crt` and `client.key` are generated only if both files are absent. A partial pair, permission error, or mismatched pair prevents API startup; restore the original pair from backup instead of deleting files to trigger regeneration.
 
 ## Release Configuration
 

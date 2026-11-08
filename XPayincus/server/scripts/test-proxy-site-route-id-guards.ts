@@ -147,4 +147,21 @@ assert.ok(
   'Caddy clients must reuse a module-level TLS Agent for the same host and trust configuration'
 )
 
+const deleteSiteSource = caddyClientSource.slice(caddyClientSource.indexOf('async deleteSite('), caddyClientSource.indexOf('async getSites('))
+assert.ok(
+  caddyClientSource.includes("Buffer.from(domain).toString('base64url')") &&
+    deleteSiteSource.includes("domain.replace(/\\./g, '-')") &&
+    deleteSiteSource.includes("await this.request<CaddyRoute>('GET', `/id/${routeId}`)") &&
+    deleteSiteSource.includes('route.match[0].host.length !== 1') &&
+    deleteSiteSource.includes('route.match[0].host[0] !== domain') &&
+    deleteSiteSource.indexOf('route.match[0].host[0] !== domain') < deleteSiteSource.indexOf("await this.request('DELETE'"),
+  'Caddy deletion must verify the exact domain before deleting either the encoded or colliding legacy route ID'
+)
+assert.ok(
+  caddyClientSource.includes("method: 'GET' | 'POST' | 'PUT' | 'DELETE'") &&
+    caddyClientSource.includes('getAddressFamily(normalizedTargetIp) === 6') &&
+    caddyClientSource.includes('`[${normalizedTargetIp}]`'),
+  'Caddy requests must use typed HTTP methods and bracket IPv6 upstream addresses'
+)
+
 console.log('proxy site route ID guard tests passed')

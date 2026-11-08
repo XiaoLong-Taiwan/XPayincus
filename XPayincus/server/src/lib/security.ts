@@ -963,7 +963,6 @@ export async function invalidateSessionAccessToken(userId: number, sessionId: st
  * @param sessionId 可选的会话标识
  * @returns true 表示 token 已失效，false 表示有效
  * 
- * 注意：如果数据库查询失败，返回 false（允许 token 通过），避免 Redis 不可用导致频繁登出
  */
 export async function isAccessTokenInvalidated(userId: number, tokenIssuedAt: number, sessionId?: string): Promise<boolean> {
     try {
@@ -1000,9 +999,8 @@ export async function isAccessTokenInvalidated(userId: number, tokenIssuedAt: nu
 
         return false
     } catch (error) {
-        // 数据库查询失败时，返回 false（允许 token 通过），避免 Redis 不可用导致频繁登出
-        console.error('Failed to check token invalidation, allowing token:', error)
-        return false
+        console.error('Failed to check token invalidation, rejecting token:', error)
+        return true
     }
 }
 
@@ -1265,6 +1263,7 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000  // 10分钟（毫秒）
 
 export interface OAuthStateData {
     mode: 'login' | 'bind'
+    provider?: 'github' | 'google' | 'discord'
     redirect: string
     timestamp: number
     nonce: string  // 防止重放攻击
@@ -1284,13 +1283,15 @@ function getOAuthStateSecret(): string {
 export async function generateOAuthState(
     mode: 'login' | 'bind',
     redirect: string,
-    bindSession?: { userId: number; issuedAt: number; sessionId?: string }
+    bindSession?: { userId: number; issuedAt: number; sessionId?: string },
+    provider?: 'github' | 'google' | 'discord'
 ): Promise<string> {
     const nonce = crypto.randomBytes(16).toString('hex')
     const timestamp = Date.now()
 
     const data: OAuthStateData = {
         mode,
+        provider,
         redirect,
         timestamp,
         nonce,
@@ -1305,6 +1306,7 @@ export async function generateOAuthState(
     // 生成 HMAC 签名
     const signature = crypto
         .createHmac('sha256', getOAuthStateSecret())
+        .update('oauth-state:')
         .update(payload)
         .digest('base64url')
 
@@ -1354,6 +1356,7 @@ export async function verifyAndConsumeOAuthState(stateToken: string): Promise<OA
         // 验证签名
         const expectedSignature = crypto
             .createHmac('sha256', getOAuthStateSecret())
+            .update('oauth-state:')
             .update(payload)
             .digest('base64url')
 
@@ -1363,6 +1366,14 @@ export async function verifyAndConsumeOAuthState(stateToken: string): Promise<OA
 
         // 解码数据
         const data = JSON.parse(Buffer.from(payload, 'base64url').toString()) as OAuthStateData
+
+        if (!data || (data.mode !== 'login' && data.mode !== 'bind') ||
+            !['github', 'google', 'discord'].includes(data.provider ?? '') ||
+            typeof data.redirect !== 'string' ||
+            !Number.isSafeInteger(data.timestamp) || data.timestamp > Date.now() ||
+            typeof data.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(data.nonce)) {
+            return null
+        }
 
         // 检查时戳是否过期
         if (Date.now() - data.timestamp > OAUTH_STATE_TTL_MS) {
@@ -1607,6 +1618,7 @@ export function generateOAuthLoginCode(data: Omit<OAuthLoginCodeData, 'timestamp
     // 生成 HMAC 签名
     const signature = crypto
         .createHmac('sha256', getOAuthStateSecret())
+        .update('oauth-login-code:')
         .update(payload)
         .digest('base64url')
 
@@ -1630,6 +1642,7 @@ export function verifyAndConsumeOAuthLoginCode(code: string): OAuthLoginCodeData
         // 验证签名
         const expectedSignature = crypto
             .createHmac('sha256', getOAuthStateSecret())
+            .update('oauth-login-code:')
             .update(payload)
             .digest('base64url')
 
@@ -1639,6 +1652,14 @@ export function verifyAndConsumeOAuthLoginCode(code: string): OAuthLoginCodeData
 
         // 解码数据
         const data = JSON.parse(Buffer.from(payload, 'base64url').toString()) as OAuthLoginCodeData
+
+        if (!data || !Number.isSafeInteger(data.userId) || data.userId <= 0 ||
+            typeof data.username !== 'string' || !data.username ||
+            (data.role !== 'admin' && data.role !== 'user') ||
+            !Number.isSafeInteger(data.timestamp) || data.timestamp > Date.now() ||
+            typeof data.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(data.nonce)) {
+            return null
+        }
 
         // 检查时戳是否过期（60秒）
         if (Date.now() - data.timestamp > OAUTH_LOGIN_CODE_TTL_MS) {

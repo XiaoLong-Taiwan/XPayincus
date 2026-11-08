@@ -114,6 +114,11 @@ need_env() {
   fi
 }
 
+validate_credentials() {
+  [[ "${INCUDAL_AGENT_ID:-}" =~ ^agt_[A-Za-z0-9_-]{24,64}$ ]] || fail "invalid Agent ID format"
+  [[ "${INCUDAL_AGENT_SECRET:-}" =~ ^ias_[A-Za-z0-9_-]{32,96}$ ]] || fail "invalid Agent secret format"
+}
+
 detect_os() {
   case "$(uname -s)" in
     Linux) echo "linux" ;;
@@ -363,17 +368,17 @@ rollback_agent_install() {
   systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
   if [ "${HAD_OLD_BIN}" = "1" ] && [ -e "${BACKUP_BIN}" ]; then
-    mv -f "${BACKUP_BIN}" "${BIN_PATH}" || restore_ok=0
+    cp -a "${BACKUP_BIN}" "${BIN_PATH}.restore.$$" && mv -f "${BIN_PATH}.restore.$$" "${BIN_PATH}" || restore_ok=0
   else
     rm -f "${BIN_PATH}"
   fi
   if [ "${HAD_OLD_CONFIG}" = "1" ] && [ -e "${BACKUP_CONFIG}" ]; then
-    mv -f "${BACKUP_CONFIG}" "${CONFIG_FILE}" || restore_ok=0
+    cp -a "${BACKUP_CONFIG}" "${CONFIG_FILE}.restore.$$" && mv -f "${CONFIG_FILE}.restore.$$" "${CONFIG_FILE}" || restore_ok=0
   else
     rm -f "${CONFIG_FILE}"
   fi
   if [ "${HAD_OLD_SERVICE}" = "1" ] && [ -e "${BACKUP_SERVICE}" ]; then
-    mv -f "${BACKUP_SERVICE}" "${SERVICE_FILE}" || restore_ok=0
+    cp -a "${BACKUP_SERVICE}" "${SERVICE_FILE}.restore.$$" && mv -f "${SERVICE_FILE}.restore.$$" "${SERVICE_FILE}" || restore_ok=0
   else
     rm -f "${SERVICE_FILE}"
   fi
@@ -476,6 +481,7 @@ preflight_environment
 if [ "${REINSTALL}" != "1" ] && [ -z "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
   need_env INCUDAL_AGENT_ID
   need_env INCUDAL_AGENT_SECRET
+  validate_credentials
 fi
 
 if [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ]; then
@@ -510,8 +516,11 @@ download_binary "${BINARY_URL}" "${STAGED_BIN}" "${BINARY_FALLBACK_URL}" "${BINA
 
 fetch_agent_install_config
 if [ "${REINSTALL}" != "1" ]; then
-need_env INCUDAL_AGENT_ID
-need_env INCUDAL_AGENT_SECRET
+  need_env INCUDAL_AGENT_ID
+  need_env INCUDAL_AGENT_SECRET
+  if [ "${DRY_RUN}" != "1" ]; then
+    validate_credentials
+  fi
 fi
 
 echo "Installing Incudal Agent"
@@ -618,6 +627,7 @@ if [ "${COMMIT_OK}" = "1" ]; then
   sleep 2
   systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null || COMMIT_OK="0"
   systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null || COMMIT_OK="0"
+  "${BIN_PATH}" -config "${CONFIG_FILE}" -once || COMMIT_OK="0"
 fi
 
 if [ "${COMMIT_OK}" != "1" ]; then

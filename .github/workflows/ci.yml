@@ -28,6 +28,7 @@ jobs:
         run: |
           node scripts/test-compose-release.mjs
           python3 scripts/test-compose-bootstrap.py
+          python3 scripts/test-compose-update.py
           python3 scripts/test-agent-installer.py
           python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
   panel:
@@ -114,3 +115,8 @@ jobs:
         run: |
           bash deploy/compose/panel.sh init https://pay.example.com https://admin.example.com admin@example.com
           docker compose --env-file deploy/compose/.env -f deploy/compose/compose.yaml -f deploy/compose/compose.build.yaml build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Package committed Dashboard sources
+        run: bash scripts/package-dashboard-release.sh

@@ -69,6 +69,7 @@ files = (
 )
 managed = (*files, 'compose.release.yaml')
 wanted = {'XPayincus/deploy/compose/' + name: name for name in managed}
+wanted['XPayincus/deploy/compose/update.py'] = 'update.py'
 wanted['VERSION'] = 'VERSION'
 release = scratch / 'release'
 release.mkdir()
@@ -111,6 +112,9 @@ expected_override = {
 }
 if json.loads((release / 'compose.release.yaml').read_text()) != expected_override:
     raise SystemExit('Release 映像設定與要求版本不符')
+if (release / 'update.py').exists():
+    compile((release / 'update.py').read_text(), 'update.py', 'exec')
+    managed = (*managed, 'update.py')
 (release / 'receipt.json').write_text(json.dumps({
     'repository': 'XiaoLong-Taiwan/XPayincus', 'version': version,
     'artifact': f'xpayincus-dashboard-{version}-compose.tar.gz', 'sha256': checksum
@@ -125,6 +129,8 @@ if action == 'update':
         raise SystemExit('目前 release 無效')
     for name in managed:
         target = destination / name
+        if name == 'update.py' and not os.path.lexists(target) and not (previous / name).exists():
+            continue
         if not target.is_symlink() or os.readlink(target) != f'.bootstrap/current/{name}':
             raise SystemExit(f'部署入口曾被修改，拒絕覆寫：{name}')
 else:
@@ -135,8 +141,8 @@ os.rename(release, store / release_name)
 created = []
 pointer = scratch / 'next'
 try:
-    if action == 'install':
-        for name in managed:
+    for name in managed:
+        if action == 'install' or (name == 'update.py' and not os.path.lexists(destination / name)):
             os.symlink(f'.bootstrap/current/{name}', destination / name)
             created.append(destination / name)
     os.symlink(release_name, pointer)
@@ -147,4 +153,4 @@ except BaseException:
     raise
 PY
 printf '已準備 %s：%s\n' "$version" "$destination"
-printf '%s\n' '既有服務未停止；首次請執行 bash panel.sh setup，設定完成並備份後再執行 bash panel.sh up。'
+printf '%s\n' '既有服務未停止；首次請執行 bash panel.sh setup，設定完成後執行 bash panel.sh up。標準手動部署請先確認官方檔案與容器掛載一致，再由 bash panel.sh update 安全納管；任何自訂衝突均拒絕覆蓋。'

@@ -40,7 +40,7 @@ export async function getOAuthConfigs(): Promise<OAuthConfig[]> {
 /**
  * 获取指定提供商的 OAuth 配置
  */
-export async function getOAuthConfig(provider: 'github' | 'google'): Promise<OAuthConfig | null> {
+export async function getOAuthConfig(provider: 'github' | 'google' | 'discord'): Promise<OAuthConfig | null> {
   const config = await prisma.oAuthConfig.findUnique({
     where: { provider }
   })
@@ -80,7 +80,7 @@ export async function getEnabledOAuthConfigs(): Promise<Array<Pick<OAuthConfig, 
  * 创建或更新 OAuth 配置
  */
 export async function upsertOAuthConfig(
-  provider: 'github' | 'google',
+  provider: 'github' | 'google' | 'discord',
   data: {
     clientId: string
     clientSecret: string
@@ -109,7 +109,7 @@ export async function upsertOAuthConfig(
 /**
  * 删除 OAuth 配置
  */
-export async function deleteOAuthConfig(provider: 'github' | 'google'): Promise<void> {
+export async function deleteOAuthConfig(provider: 'github' | 'google' | 'discord'): Promise<void> {
   await prisma.oAuthConfig.delete({
     where: { provider }
   })
@@ -145,7 +145,7 @@ export async function getUserOAuthBindings(userId: number): Promise<UserOAuthBin
  * 根据提供商用户 ID 查找绑定
  */
 export async function findOAuthBinding(
-  provider: 'github' | 'google',
+  provider: 'github' | 'google' | 'discord',
   providerUserId: string
 ): Promise<UserOAuthBinding | null> {
   const binding = await prisma.userOAuthBinding.findUnique({
@@ -177,7 +177,7 @@ export async function findOAuthBinding(
 /**
  * 检查用户是否已绑定某提供商
  */
-export async function hasOAuthBinding(userId: number, provider: 'github' | 'google'): Promise<boolean> {
+export async function hasOAuthBinding(userId: number, provider: 'github' | 'google' | 'discord'): Promise<boolean> {
   const binding = await prisma.userOAuthBinding.findUnique({
     where: {
       userId_provider: {
@@ -195,7 +195,7 @@ export async function hasOAuthBinding(userId: number, provider: 'github' | 'goog
  * 安全改进：加密存储 accessToken 和 refreshToken
  */
 export async function createOAuthBinding(userId: number, data: {
-  provider: 'github' | 'google'
+  provider: 'github' | 'google' | 'discord'
   providerUserId: string
   providerUsername?: string | null
   providerEmail?: string | null
@@ -226,7 +226,7 @@ export async function createOAuthBinding(userId: number, data: {
  */
 export async function updateOAuthBindingToken(
   userId: number,
-  provider: 'github' | 'google',
+  provider: 'github' | 'google' | 'discord',
   accessToken: string,
   refreshToken: string | null = null
 ): Promise<void> {
@@ -248,7 +248,7 @@ export async function updateOAuthBindingToken(
 /**
  * 删除 OAuth 绑定
  */
-export async function deleteOAuthBinding(userId: number, provider: 'github' | 'google'): Promise<void> {
+export async function deleteOAuthBinding(userId: number, provider: 'github' | 'google' | 'discord'): Promise<void> {
   await prisma.userOAuthBinding.delete({
     where: {
       userId_provider: {

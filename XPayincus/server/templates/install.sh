@@ -694,11 +694,14 @@ apply_zfs_arc_config() {
 
     info "写入 ZFS ARC 内存配置..."
 
-    cat > "$modprobe_file" <<EOF_MODPROBE
+    if ! cat > "$modprobe_file" <<EOF_MODPROBE
 options zfs zfs_arc_max=${arc_max_bytes}
 options zfs zfs_arc_min=${arc_min_bytes}
 EOF_MODPROBE
-    chmod 0644 "$modprobe_file"
+    then
+        return 1
+    fi
+    chmod 0644 "$modprobe_file" || return 1
     info "已写入模块参数: ${modprobe_file}"
 
     if [[ -d /sys/module/zfs ]]; then
@@ -709,11 +712,13 @@ EOF_MODPROBE
             if ! printf '%s' "$arc_min_bytes" > /sys/module/zfs/parameters/zfs_arc_min ||
                ! printf '%s' "$arc_max_bytes" > /sys/module/zfs/parameters/zfs_arc_max; then
                 warn "ARC 即时套用失败；配置已保存，请检查模块参数并重启"
+                return 1
             fi
         else
             if ! printf '%s' "$arc_max_bytes" > /sys/module/zfs/parameters/zfs_arc_max ||
                ! printf '%s' "$arc_min_bytes" > /sys/module/zfs/parameters/zfs_arc_min; then
                 warn "ARC 即时套用失败；配置已保存，请检查模块参数并重启"
+                return 1
             fi
         fi
     else
@@ -723,6 +728,7 @@ EOF_MODPROBE
     if command -v update-initramfs >/dev/null 2>&1; then
         if ! update-initramfs -u -k "$(uname -r)"; then
             warn "initramfs 更新失败；启动镜像可能仍包含旧 ARC 参数，请手动修复"
+            return 1
         fi
     else
         warn "缺少 update-initramfs，请确认启动镜像中的 ARC 参数"
@@ -1444,7 +1450,7 @@ install_deps() {
     fi
 
     # 安装基础依赖
-    apt-get install -y -qq curl gpg python3 >/dev/null 2>&1
+    apt-get install -y -qq curl gpg python3 openssl ca-certificates >/dev/null 2>&1
 
     # ---- Debian ZFS 安装策略 ----
     # 优先级: 预编译包(秒级) → DKMS 编译(分钟级) → 跳过(使用 dir 存储池)
@@ -1462,8 +1468,8 @@ install_deps() {
             # ZFS 装不上不是安装失败 —— 面板用 dir 存储池一样能跑。所以这里所有失败路径都只
             # 降级、不中断安装，也不打红字（此前把可降级的回退打成 error，用户看到就是「ZFS 安装报错」）。
             info "尝试 DKMS 编译 ZFS 模块（约 5-10 分钟）..."
-            install_zfs_dkms
-            local dkms_rc=$?
+            local dkms_rc=0
+            install_zfs_dkms || dkms_rc=$?
 
             if [[ $dkms_rc -eq 0 ]]; then
                 debian_zfs_compiled=true
@@ -1498,6 +1504,11 @@ install_deps() {
             info "已锁定内核版本: ${kernel_pkg}（防止自动更新导致 ZFS 失效）"
         fi
         log "ZFS 套件、DKMS 编译工具链与当前内核标头已全部保留"
+    fi
+    if command -v zpool >/dev/null 2>&1 && modprobe zfs 2>/dev/null; then
+        if ! preserve_zfs_boot_services; then
+            warn "ZFS 开机服务设置未完成；保留套件、配置与池，请检查 systemd"
+        fi
     fi
 }
 
@@ -2035,8 +2046,133 @@ YAML
 }
 
 # 步骤 5: 导入面板证书
+fetch_authenticated_panel_certificate() {
+    local phase="$1" target="$2"
+    PANEL_TRUST_URL="$(read_agent_config_value panel_url)" \
+    PANEL_TRUST_ID="$(read_agent_config_value agent_id)" \
+    PANEL_TRUST_SECRET="$(read_agent_config_value agent_secret)" \
+    python3 - "$phase" "$target" <<'PY'
+import hashlib, hmac, json, os, re, secrets, sys, time, urllib.request
+phase, target = sys.argv[1:]
+origin = os.environ['PANEL_TRUST_URL'].rstrip('/')
+agent_id = os.environ['PANEL_TRUST_ID']
+secret = os.environ['PANEL_TRUST_SECRET'].encode()
+if not re.fullmatch(r'https://(?:[A-Za-z0-9.-]+|\[[A-Fa-f0-9:]+\])(?::[0-9]{1,5})?', origin):
+    sys.exit(1)
+if not re.fullmatch(r'agt_[A-Za-z0-9_-]{24,64}', agent_id) or not re.fullmatch(rb'ias_[A-Za-z0-9_-]{32,96}', secret):
+    sys.exit(1)
+path = '/api/agent/panel-trust/' + phase
+nonce = secrets.token_hex(24)
+timestamp = str(time.time_ns() // 1000000)
+body = b'{}'
+if phase == 'verify':
+    try:
+        with open('/var/lib/incus/server.crt') as source:
+            body = json.dumps({'incus': {'serverCertificate': source.read(16385)}}, sort_keys=True, separators=(',', ':')).encode()
+    except OSError:
+        sys.exit(1)
+digest = hashlib.sha256(body).hexdigest()
+signature = hmac.new(secret, '\n'.join(['POST', path, timestamp, nonce, digest]).encode(), hashlib.sha256).hexdigest()
+request = urllib.request.Request(origin + path, data=body, headers={
+    'Content-Type': 'application/json', 'X-Incudal-Agent-Id': agent_id,
+    'X-Incudal-Timestamp': timestamp, 'X-Incudal-Nonce': nonce,
+    'X-Incudal-Body-Sha256': digest, 'X-Incudal-Signature': signature})
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+try:
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+        payload = response.read(65537)
+    if len(payload) > 65536:
+        sys.exit(1)
+    proof, certificate = payload.split(b'\n', 1)
+    expected = hmac.new(secret, ('panel-trust\n' + phase + '\n' + nonce + '\n' + hashlib.sha256(certificate).hexdigest()).encode(), hashlib.sha256).hexdigest().encode()
+    if not hmac.compare_digest(proof, expected):
+        sys.exit(1)
+    with open(target, 'wb') as output:
+        output.write(certificate)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+preserve_zfs_boot_services() {
+    install -d -m 0755 /etc/modules-load.d || return 1
+    if [[ ! -e /etc/modules-load.d/incudal-zfs.conf && ! -L /etc/modules-load.d/incudal-zfs.conf ]]; then
+        (set -o noclobber; printf '%s\n' zfs > /etc/modules-load.d/incudal-zfs.conf) || return 1
+    fi
+    [[ -f /etc/modules-load.d/incudal-zfs.conf && ! -L /etc/modules-load.d/incudal-zfs.conf ]] || return 1
+    grep -Eq '^[[:space:]]*zfs[[:space:]]*$' /etc/modules-load.d/incudal-zfs.conf || return 1
+    local service
+    for service in zfs-import-cache.service zfs-mount.service zfs.target; do
+        if systemctl cat "$service" >/dev/null 2>&1; then
+            systemctl enable "$service" >/dev/null 2>&1 || return 1
+        fi
+    done
+}
+
+refresh_panel_trust() {
+    command -v python3 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1 && command -v incus >/dev/null 2>&1 || return 1
+    local work_dir fingerprint old_fingerprints verified_fingerprint
+    work_dir=$(mktemp -d /tmp/incudal-panel-trust.XXXXXX) || return 1
+    if ! fetch_authenticated_panel_certificate certificate "$work_dir/cert" ||
+       ! openssl x509 -in "$work_dir/cert" -noout -checkend 0 >/dev/null 2>&1; then
+        rm -rf "$work_dir"
+        return 1
+    fi
+    fingerprint=$(openssl x509 -in "$work_dir/cert" -outform DER | sha256sum | awk '{print $1}') || { rm -rf "$work_dir"; return 1; }
+    if ! incus config trust list --format json > "$work_dir/trust"; then
+        rm -rf "$work_dir"
+        return 1
+    fi
+    if ! old_fingerprints=$(python3 - "$work_dir/trust" <<'PY'
+import json, re, sys
+with open(sys.argv[1]) as source:
+    entries = json.load(source)
+for entry in entries:
+    if entry.get('name') == 'panel' or re.fullmatch(r'panel-[a-f0-9]{64}', entry.get('name', '')):
+        if entry.get('restricted') or entry.get('type') != 'client' or not re.fullmatch(r'[a-f0-9]{64}', entry.get('fingerprint', '')):
+            sys.exit(1)
+        print(entry['fingerprint'])
+PY
+    ); then
+        rm -rf "$work_dir"
+        return 1
+    fi
+    if ! incus config trust show "$fingerprint" >/dev/null 2>&1; then
+        if ! incus config trust add-certificate "$work_dir/cert" --name "panel-${fingerprint}" >/dev/null 2>&1; then
+            rm -rf "$work_dir"
+            return 1
+        fi
+    fi
+    if ! fetch_authenticated_panel_certificate verify "$work_dir/verified"; then
+        rm -rf "$work_dir"
+        return 1
+    fi
+    verified_fingerprint=$(openssl x509 -in "$work_dir/verified" -outform DER | sha256sum | awk '{print $1}') || { rm -rf "$work_dir"; return 1; }
+    if [[ "$fingerprint" != "$verified_fingerprint" ]]; then
+        rm -rf "$work_dir"
+        return 1
+    fi
+    local old
+    while IFS= read -r old; do
+        [[ -n "$old" && "$old" != "$fingerprint" ]] || continue
+        if ! incus config trust remove "$old"; then
+            rm -rf "$work_dir"
+            return 1
+        fi
+    done <<< "$old_fingerprints"
+    rm -rf "$work_dir"
+    log "面板凭证信任已通过既有 Agent 认证与连线验证"
+}
+
 import_cert() {
     step "步骤 [5/5]  导入面板信任证书..."
+
+    if [[ -f "$AGENT_CONFIG_FILE" ]]; then
+        refresh_panel_trust
+        return $?
+    fi
 
     local cert_url="${PANEL_URL}/api/hosts/cert/${TOKEN}"
     local cert_file=""
@@ -2057,8 +2193,6 @@ import_cert() {
     local cert_valid=false
     if command -v openssl >/dev/null 2>&1; then
         openssl x509 -noout -in "$cert_file" >/dev/null 2>&1 && cert_valid=true
-    elif grep -q "BEGIN CERTIFICATE" "$cert_file" 2>/dev/null; then
-        cert_valid=true
     fi
     if [[ "$cert_valid" != "true" ]]; then
         rm -f "$cert_file"
@@ -2067,10 +2201,15 @@ import_cert() {
         exit 1
     fi
 
-    # 证书可能因面板重装、迁移或灾备恢复而轮换；证书已校验通过，此处再替换旧信任项。
-    if incus config trust list --format csv 2>/dev/null | grep -q "panel"; then
-        info "面板证书已存在，更新为当前证书"
-        incus config trust remove panel >/dev/null 2>&1 || true
+    local existing_trust
+    if ! existing_trust=$(incus config trust list --format csv -c n); then
+        rm -f "$cert_file"
+        return 1
+    fi
+    if printf '%s\n' "$existing_trust" | grep -Eq '^panel(-[a-f0-9]{64})?$'; then
+        rm -f "$cert_file"
+        refresh_panel_trust
+        return $?
     fi
 
     if ! incus config trust add-certificate "$cert_file" --name panel >/dev/null 2>&1; then
@@ -2244,6 +2383,7 @@ prompt_agent_panel_url() {
 }
 
 update_incudal_agent_from_config() {
+    local automatic="${1:-false}"
     local panel_url=""
     local agent_id=""
     local agent_secret=""
@@ -2261,6 +2401,20 @@ update_incudal_agent_from_config() {
         return 1
     fi
 
+    if [[ "$automatic" == "true" ]]; then
+        [[ "$panel_url" =~ ^https://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]{1,5})?/?$ ]] || return 1
+        local installer_file
+        installer_file=$(mktemp /tmp/incudal-agent-installer.XXXXXX) || return 1
+        if ! curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 120 "${panel_url%/}/api/agent/install.sh" -o "$installer_file"; then
+            rm -f "$installer_file"
+            return 1
+        fi
+        local result=0
+        INCUDAL_CONFIG_FILE="$AGENT_CONFIG_FILE" INCUDAL_AGENT_BIN="$AGENT_BIN_PATH" \
+            bash "$installer_file" --reinstall || result=$?
+        rm -f "$installer_file"
+        return "$result"
+    fi
     prompt_agent_heartbeat_interval "$heartbeat_interval"
     run_incudal_agent_installer "$panel_url" "" "$agent_id" "$agent_secret" "$AGENT_HEARTBEAT_INTERVAL_SECONDS" "$AGENT_BINARY_URL" "$AGENT_BINARY_SHA256"
 }
@@ -3723,6 +3877,14 @@ main() {
 
     # 检测系统环境（只读探测；所有 CLI 入参已在此之前校验完毕）
     detect_system
+
+    if [[ "$ACTION" == "install" || "$ACTION" == "agent" ]] && [[ -f "$AGENT_CONFIG_FILE" ]]; then
+        if ! refresh_panel_trust; then
+            warn "面板信任更新失败，保留现有信任；可修复认证后重试"
+        elif ! update_incudal_agent_from_config true; then
+            warn "Agent 自动更新失败，保留现有安装及复原备份"
+        fi
+    fi
 
     # 如果通过命令行指定了卸载，直接执行
     if [[ "$ACTION" == "uninstall" ]]; then

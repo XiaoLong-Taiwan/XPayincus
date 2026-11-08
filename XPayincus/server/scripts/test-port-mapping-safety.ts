@@ -161,4 +161,22 @@ assert.ok(
   'batch port quota must be calculated from the final normalized mappings'
 )
 
+for (const [label, section] of [
+  ['single', singlePortSection], ['delete', deletePortSection], ['batch', batchPortSection]
+] as const) {
+  assert.ok(
+    section.includes('onRequest: [fastify.authenticate]') &&
+      section.includes("if (user.role !== 'admin' && instance.user_id !== user.id)"),
+    `${label} port operations must authenticate current users and restrict access to admins or the instance owner`
+  )
+}
+assert.ok(
+  portLib.includes('host.nat_port_start == null || host.nat_port_end == null') &&
+    portLib.includes('host.nat_port_start > host.nat_port_end') &&
+    portLib.includes('!Number.isInteger(privatePort)') &&
+    portLib.includes('input.publicPort !== undefined') &&
+    portLib.indexOf('host.nat_port_start == null') < automaticAllocationIndex,
+  'shared port mapping must reject invalid ports and missing or invalid NAT ranges before allocation'
+)
+
 console.log('port mapping safety tests passed')

@@ -237,6 +237,7 @@ enum NotificationLogStatus {
 enum OAuthProvider {
   github
   google
+  discord
 }
 
 // ==================== 计费相关枚举 ====================

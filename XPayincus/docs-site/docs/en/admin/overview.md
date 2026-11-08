@@ -111,6 +111,22 @@ The operations overview is returned only by the admin statistics API and is not 
 - Popup announcements.
 - Telegram integration.
 
+## Discord, Google and GitHub Login
+
+Configure each provider at `/admin/oauth` with its Client ID and Client Secret, register its callback URLs in the provider console, and enable it. No credentials are bundled or automatically configured; a provider without valid credentials cannot complete login or binding. Disabled providers are hidden from login pages, while existing bindings remain visible in Profile for unlinking.
+
+| Provider | Developer console | Scopes | Callback path |
+| --- | --- | --- | --- |
+| Discord | https://discord.com/developers/applications | `identify email` | `/api/oauth/callback/discord` |
+| Google | https://console.cloud.google.com/apis/credentials | `openid email profile` | `/api/oauth/callback/google` |
+| GitHub | https://github.com/settings/developers | `read:user user:email` | `/api/oauth/callback/github` |
+
+The customer callback origin uses `SITE_URL` or the first `FRONTEND_URL`; the admin callback origin uses `ADMIN_FRONTEND_URL`. Production requires these public origins. Register the complete HTTPS URL for every portal in use and proxy its `/api/oauth/*` paths to the API. The settings card displays the callback for the current admin origin; also register the customer origin. GitHub OAuth Apps accept one callback URL: when both origins share credentials, use a common parent callback URL allowed by GitHub for both callback paths, or use separate deployments. Google testing mode may require approved test users.
+
+Users first log in with their existing account and bind a provider at `/profile` (administrators: `/admin/profile`). Quick login looks up only the provider and provider user ID. Matching email addresses never merge or create accounts. Unlink a provider before switching its external account. Unlinking revokes existing panel sessions, so log in again afterward.
+
+Apply migration `20261109000000_add_discord_oauth` and regenerate Prisma Client as part of deployment before using Discord. This change does not apply the migration or generate code automatically. Signed state keeps the existing ten-minute expiry and single-use nonce, carries the provider and binding session, and rejects provider mismatches. Authorizations started before this update must be restarted. The API still requires a single Node process.
+
 ## OTA
 
 `/admin/system-update` shows current version, latest release tag, tag, commit, build time, deployment time, release notes, paginated task logs and rollback controls. If the deployment is already on the latest tag, the latest version still remains visible and the update action is disabled as already up to date.
