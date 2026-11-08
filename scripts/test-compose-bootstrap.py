@@ -218,12 +218,17 @@ class PanelCommandTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.base / 'docker.log'
         shutil.copyfile(COMPOSE / 'panel.sh', self.base / 'panel.sh')
+        shutil.copyfile(COMPOSE / 'update.py', self.base / 'update.py')
+        shutil.copyfile(COMPOSE / 'compose.yaml', self.base / 'compose.yaml')
+        (self.base / 'compose.release.yaml').write_bytes(release_override())
         (self.base / '.env').write_text('COMPOSE_PROFILES=\n')
         (self.base / 'secrets').mkdir()
         for name in ['postgres_password', 'jwt_secret', 'cookie_secret', 'encryption_key', 'admin_password']:
             (self.base / 'secrets' / name).write_text('fixture')
         for name, body in [('flock', 'exit 0'), ('docker',
                 'printf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
+                'if [[ "$1 $2" == "buildx imagetools" ]]; then printf \'{"digest":"sha256:%064d"}\\n\' 0; exit 0; fi\n'
+                'if [[ "$1 $2" == "image inspect" ]]; then printf \'[]\\n\'; exit 0; fi\n'
                 'if [[ " $* " == *" pull "* ]]; then exit "${PULL_EXIT:-0}"; fi')]:
             target = self.bin / name
             target.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n', newline='\n')
