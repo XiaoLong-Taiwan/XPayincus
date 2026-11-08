@@ -43,8 +43,8 @@ assert.ok(
     agentRouteSource.includes('process.env.INCUDAL_AGENT_RELEASE_TAG_PREFIX') &&
     agentRouteSource.includes("? '' : 'agent-'") &&
     agentRouteSource.includes('const version = tag.slice(prefix.length)') &&
-    agentRouteSource.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(version), assetName)') &&
-    agentRouteSource.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(input.version), assetName)') &&
+    agentRouteSource.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(validated.version), assetName)') &&
+    agentRouteSource.includes('loadRemoteAgentRelease(input.version)') &&
     !agentRouteSource.includes('getAgentReleaseAssetUrl(`agent-${'),
   'Agent release listing and exact downloads must share configurable tag prefixes while preserving the legacy repository override'
 )
@@ -144,10 +144,11 @@ assert.ok(
   agentRouteSource.includes('const agentReleaseFetchTimeoutMs = 15 * 1000'),
   'Agent release GitHub requests must use a bounded timeout'
 )
-assert.equal(
-  (agentRouteSource.match(/signal: AbortSignal\.timeout\(agentReleaseFetchTimeoutMs\)/g) ?? []).length,
-  3,
-  'Agent release API, checksum, and binary fetch paths must all use the bounded timeout'
+assert.ok(
+  !agentRouteSource.includes('await fetch(') &&
+    (agentRouteSource.match(/agentReleaseFetchTimeoutMs\)/g) ?? []).length === 4 &&
+    agentRouteSource.includes('cache.ensure') && agentRouteSource.includes('cache.binary'),
+  'Agent release API, checksum, manifest and binary downloads must use trusted redirects and bounded timeouts with persistent caching'
 )
 assert.ok(
   agentRouteSource.includes('function getLocalAgentReleaseDir') &&

@@ -178,14 +178,15 @@ export function isTrustedReleaseHost(rawUrl: string): boolean {
   }
 }
 
-export async function fetchRelease(url: string, token: string | null = getReleaseToken(), accept?: string): Promise<Response> {
+export async function fetchRelease(url: string, token: string | null = getReleaseToken(), accept?: string, timeoutMs = 120000): Promise<Response> {
   let next = url
+  const signal = AbortSignal.timeout(timeoutMs)
   for (let count = 0; count < 6; count++) {
     if (!isTrustedReleaseHost(next)) throw new Error('Untrusted release download URL')
     const headers: Record<string, string> = { 'user-agent': 'xpayincus-online-update' }
     if (accept) headers.accept = accept
     if (token && new URL(next).origin === 'https://api.github.com') headers.authorization = `Bearer ${token}`
-    const response = await fetch(next, { headers, redirect: 'manual', signal: AbortSignal.timeout(120000) })
+    const response = await fetch(next, { headers, redirect: 'manual', signal })
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location')
       await response.body?.cancel()

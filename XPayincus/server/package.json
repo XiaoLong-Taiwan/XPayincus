@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "XPayincus backend service",
   "type": "module",
   "main": "dist/app.js",
@@ -30,7 +30,7 @@
     "test:agent-route-id-guards": "node --import tsx scripts/test-agent-route-id-guards.ts",
     "test:agent-report-state-guards": "node --import tsx scripts/test-agent-report-state-guards.ts && node --import tsx scripts/test-agent-status-guards.ts",
     "test:agent-status-guards": "node --import tsx scripts/test-agent-status-guards.ts",
-    "test:agent-install-command-guards": "node --import tsx scripts/test-agent-install-command-guards.ts",
+    "test:agent-install-command-guards": "node --import tsx scripts/test-agent-install-command-guards.ts && node --import tsx scripts/test-agent-release-cache.ts",
     "test:agent-response-redaction": "node --import tsx scripts/test-agent-response-redaction.ts",
     "test:aff-points-query-guards": "node --import tsx scripts/test-aff-points-query-guards.ts",
     "test:admin-hosting-route-id-guards": "node --import tsx scripts/test-admin-hosting-route-id-guards.ts",

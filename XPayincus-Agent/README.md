@@ -2,7 +2,7 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，目前 `v1.0.3`，本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，目前 `v1.0.5`，本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
 
 ## 宿主元件整合
 

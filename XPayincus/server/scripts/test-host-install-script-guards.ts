@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -197,7 +198,7 @@ assert.ok(
 
 assert.ok(
   hostInstallScript.includes('configure_zfs_arc_memory()') &&
-    hostInstallScript.includes('ARC 最大值 (GB) [回车使用推荐值: ${default_max_gb}]') &&
+    hostInstallScript.includes('ARC 最大值 (MiB/GiB，如 512M、2G；回车保留现有设置)') &&
     hostInstallScript.includes('options zfs zfs_arc_max=${arc_max_bytes}') &&
     hostInstallScript.includes('options zfs zfs_arc_min=${arc_min_bytes}') &&
     hostInstallScript.indexOf('configure_zfs_arc_memory\n') < hostInstallScript.indexOf('confirm_install\n') &&
@@ -240,5 +241,164 @@ assert.ok(
   !hostInstallScript.includes('warn "已跳过 ZFS 安装，返回主菜单"'),
   'a failed ZFS setup must degrade to the dir storage pool, not abort the host installation'
 )
+
+const bash = process.env.BASH_PATH || (process.platform === 'win32' && existsSync('C:/Program Files/Git/bin/bash.exe')
+  ? 'C:/Program Files/Git/bin/bash.exe' : 'bash')
+const shellFunction = (name: string) => {
+  const match = hostInstallScript.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, 'm'))
+  assert.ok(match, `missing shell function ${name}`)
+  return match[0]
+}
+const runShell = (script: string, expected = 0) => {
+  const result = spawnSync(bash, ['--noprofile', '--norc', '-s'], { input: script, encoding: 'utf8' })
+  assert.equal(result.status, expected, `isolated shell check failed: ${result.error ?? ''}\n${result.stdout}\n${result.stderr}`)
+  return result.stdout
+}
+const arcHarness = `set -euo pipefail
+info() { :; }
+warn() { :; }
+error() { :; }
+${shellFunction('parse_binary_size')}
+${shellFunction('configure_zfs_arc_memory')}
+awk() { echo 8388608; }
+ZFS_ARC_MAX_BYTES=""
+ZFS_ARC_MIN_BYTES=""
+ZFS_ARC_MAX_GB=""
+ZFS_ARC_MIN_GB=""
+`
+runShell(`${arcHarness}
+[[ $(parse_binary_size 512M) == 536870912 ]]
+[[ $(parse_binary_size 512MiB) == 536870912 ]]
+[[ $(parse_binary_size 2G) == 2147483648 ]]
+[[ $(parse_binary_size 2GB) == 2147483648 ]]
+[[ $(parse_binary_size 002) == 2147483648 ]]
+for bad in 0 -1 1.5G 999999999999G 999999999999999999999999 1T '/dev/sda' '1+1'; do
+  if parse_binary_size "$bad"; then exit 1; fi
+done
+configure_zfs_arc_memory
+[[ -z "$ZFS_ARC_MAX_BYTES" ]]
+ZFS_ARC_MAX=512MiB ZFS_ARC_MIN=128M configure_zfs_arc_memory
+[[ "$ZFS_ARC_MAX_BYTES" == 536870912 && "$ZFS_ARC_MIN_BYTES" == 134217728 ]]
+ZFS_ARC_MAX_GB=2 ZFS_ARC_MIN_GB=1 configure_zfs_arc_memory
+[[ "$ZFS_ARC_MAX_BYTES" == 2147483648 && "$ZFS_ARC_MIN_BYTES" == 1073741824 ]]
+if ZFS_ARC_MAX=8G configure_zfs_arc_memory; then exit 1; fi
+if ZFS_ARC_MAX=1G ZFS_ARC_MIN=2G configure_zfs_arc_memory; then exit 1; fi
+if ZFS_ARC_MIN=1G configure_zfs_arc_memory; then exit 1; fi
+`)
+const storageHarness = `set -euo pipefail
+info() { :; }
+error() { :; }
+${shellFunction('parse_binary_size')}
+${shellFunction('ensure_incus_storage')}
+# Incus 與所有宿主機變更均使用模擬實作，不會呼叫真實服務。
+python3() {
+  if [[ "$2" == *'n for n,v'* ]]; then echo "$ROOT_DEVICE"; else echo "$ROOT_POOL"; fi
+}
+incus() {
+  case "$*" in
+    'profile show default --format json') echo '{}' ;;
+    'storage list --format csv -c n') printf '%s' "$POOLS" ;;
+    'storage show '*) return 0 ;;
+    'profile device get default root type') return 1 ;;
+    'profile device add '*|'storage create '*) printf '%s\\n' "$*" ;;
+    *) return 91 ;;
+  esac
+}
+zfs_storage_available() { return 1; }
+ROOT_DEVICE=""
+ROOT_POOL=""
+POOLS=""
+`
+assert.equal(runShell(`${storageHarness}
+ROOT_DEVICE=disk0 ROOT_POOL=custom POOLS=custom ensure_incus_storage
+`), '', 'existing profile root must not be modified')
+assert.match(runShell(`${storageHarness}
+POOLS=$'other\\ndefault' ensure_incus_storage
+`), /profile device add default root disk path=\/ pool=default/)
+assert.match(runShell(`${storageHarness}
+POOLS=$'zeta\\nalpha' ensure_incus_storage
+`), /pool=alpha/)
+assert.match(runShell(`${storageHarness}
+POOLS=$'alpha\\nzeta' INCUS_STORAGE_POOL=zeta ensure_incus_storage
+`), /pool=zeta/)
+assert.match(runShell(`${storageHarness}
+ensure_incus_storage
+`), /storage create default dir/)
+runShell(`${storageHarness}
+if INCUS_STORAGE_POOL=missing POOLS=existing ensure_incus_storage; then exit 1; fi
+if INCUS_STORAGE_DRIVER=/dev/sda ensure_incus_storage; then exit 1; fi
+if INCUS_STORAGE_DRIVER=zfs ensure_incus_storage; then exit 1; fi
+zfs_storage_available() { return 0; }
+df() { printf 'Avail\\n42949672960\\n'; }
+INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=2GiB ensure_incus_storage
+if INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=30GiB ensure_incus_storage; then exit 1; fi
+`)
+runShell(`set -euo pipefail
+${shellFunction('do_uninstall')}
+info() { :; }
+warn() { :; }
+log() { :; }
+error() { :; }
+systemctl() { [[ "$1" == cat || "$1" == disable ]]; }
+confirm_uninstall() { exit 92; }
+incus() { exit 93; }
+apt-get() { exit 94; }
+rm() { exit 95; }
+AGENT_SERVICE_NAME=incudal-agent
+UNINSTALL_DELETE_DATA=false
+do_uninstall
+`)
+const storageFunction = shellFunction('ensure_incus_storage')
+assert.ok(!/storage (delete|set)|volume delete|source=/.test(storageFunction), 'storage initialization must never delete or reconfigure pools or accept disks')
+assert.ok(shellFunction('zfs_storage_available').includes('[[ -c /dev/zfs ]]'), 'ZFS detection must verify the kernel device')
+assert.ok(shellFunction('apply_zfs_arc_config').includes('[[ -n "$ZFS_ARC_MAX_BYTES" ]] || return 0'), 'reruns without explicit ARC input must preserve config')
+assert.ok(!shellFunction('apply_zfs_arc_config').includes('|| true'), 'ARC application must not silently ignore failures')
+assert.ok(hostInstallScript.includes('--uninstall|--uninstall-keep-data)') && hostInstallScript.includes('--delete-data)'), 'destructive uninstall must require an extra explicit option')
+assert.equal((hostInstallScript.slice(hostInstallScript.indexOf('init_incus() {'), hostInstallScript.indexOf('import_cert() {')).match(/ensure_incus_storage/g) ?? []).length, 2, 'storage must initialize on fresh installs and reruns with an existing bridge')
+
+const initFunction = hostInstallScript.slice(hostInstallScript.indexOf('init_incus() {'), hostInstallScript.indexOf('import_cert() {'))
+const initHarness = `set -euo pipefail
+${initFunction}
+step() { :; }
+info() { :; }
+log() { echo unexpected-success; }
+incus() {
+  case "$*" in
+    'network show '*) return "$BRIDGE_STATUS" ;;
+    'admin init --preseed') return "$PRESEED_STATUS" ;;
+    *) return 91 ;;
+  esac
+}
+ensure_incus_storage() { STORAGE_CALLS=$((STORAGE_CALLS + 1)); return 1; }
+BRIDGE_NAME=incusbr0
+BRIDGE_SUBNET=10.0.0.1/24
+MODE=nat
+IS_PURE_IPV6=false
+LISTEN_PORT=8443
+PRESEED_FILE=/dev/null
+STORAGE_CALLS=0
+`
+for (const [bridgeStatus, preseedStatus, storageCalls] of [[0, 0, 1], [1, 1, 0], [1, 0, 1]]) {
+  assert.equal(runShell(`${initHarness}
+BRIDGE_STATUS=${bridgeStatus}
+PRESEED_STATUS=${preseedStatus}
+if init_incus; then exit 92; fi
+[[ "$STORAGE_CALLS" == ${storageCalls} ]]
+`), '', '初始化失敗必須在條件呼叫中傳回失敗，且不得記錄成功或在 preseed 失敗後檢查儲存池')
+}
+const mainInstallCalls = hostInstallScript.match(/^    install_incus[^\n]*\n    init_incus[^\n]*\n    import_cert[^\n]*/m)
+assert.ok(mainInstallCalls, '主流程必須直接呼叫初始化，再匯入證書')
+assert.ok(/^set -euo pipefail$/m.test(hostInstallScript) && /\nmain "\$@"\s*$/.test(hostInstallScript), '主流程必須啟用錯誤即中止並直接執行')
+assert.equal(runShell(`${initHarness}
+BRIDGE_STATUS=0
+PRESEED_STATUS=0
+install_incus() { :; }
+import_cert() { echo unexpected-import; }
+main() {
+${mainInstallCalls[0]}
+  echo unexpected-continuation
+}
+main
+`, 1), '', '初始化失敗必須中止主流程，不得繼續匯入證書')
 
 console.log('host install script guard tests passed')

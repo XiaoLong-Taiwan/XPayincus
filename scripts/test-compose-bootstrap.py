@@ -15,7 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / 'XPayincus/deploy/compose'
 BASH = os.environ.get('BOOTSTRAP_TEST_BASH', 'bash')
-VERSION = 'v1.0.3'
+VERSION = 'v1.0.5'
 
 
 def release_override(version=VERSION):
@@ -285,12 +285,12 @@ class PanelCommandTests(unittest.TestCase):
         env = dict(os.environ, CURL_LOG=curl_log.as_posix(), FIXTURE_ARCHIVE=fixture.as_posix(),
                    PYTHON_MARKER=marker.as_posix())
         result = subprocess.run([BASH, '-c',
-            'export PATH="$1:$PATH"; bash "$2" install "$3" v1.0.3 "$4"', 'test',
+            'export PATH="$1:$PATH"; bash "$2" install "$3" v1.0.5 "$4"', 'test',
             bin_path, (COMPOSE / 'download.sh').as_posix(),
             (self.base / 'new').as_posix(), '0' * 64], env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('https://github.com/XiaoLong-Taiwan/XPayincus/releases/download/v1.0.3/'
-                      'xpayincus-dashboard-v1.0.3-compose.tar.gz', curl_log.read_text())
+        self.assertIn('https://github.com/XiaoLong-Taiwan/XPayincus/releases/download/v1.0.5/'
+                      'xpayincus-dashboard-v1.0.5-compose.tar.gz', curl_log.read_text())
         self.assertIn("--proto =https --proto-redir =https", curl_log.read_text())
         self.assertFalse(marker.exists())
         self.assertFalse((self.base / 'new/.bootstrap/current').exists())

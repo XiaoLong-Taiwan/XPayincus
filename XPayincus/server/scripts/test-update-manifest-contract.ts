@@ -28,7 +28,7 @@ const repository = process.env.SYSTEM_UPDATE_RELEASE_REPOSITORY
 try {
   const agentRoute = readFileSync(new URL('../src/routes/agent.ts', import.meta.url), 'utf8')
   assert.ok(agentRoute.includes('published[0]?.url || published[0]?.browser_download_url'))
-  assert.ok(agentRoute.includes("fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/octet-stream')"))
+  assert.ok(agentRoute.includes("fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/octet-stream', agentReleaseFetchTimeoutMs)"))
   const requests: { url: string; headers: Headers }[] = []
   globalThis.fetch = (async (input, init) => {
     requests.push({ url: String(input), headers: new Headers(init?.headers) })

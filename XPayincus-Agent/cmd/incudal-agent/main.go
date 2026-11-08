@@ -16,7 +16,7 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/upgrade"
 )
 
-var version = "v1.0.4"
+var version = "v1.0.5"
 
 func main() {
 	configPath := flag.String("config", "/etc/incudal-agent/config.yaml", "agent config file")

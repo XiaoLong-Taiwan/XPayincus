@@ -1,6 +1,6 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前為 `v1.0.3`。歷史交接檔中的線上版本不代表統一版本已部署。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前為 `v1.0.5`。歷史交接檔中的線上版本不代表統一版本已部署。
 
 ## 目錄與能力
 
@@ -30,7 +30,7 @@ bash deploy/compose/panel.sh init https://pay.example.org https://admin.example.
 bash deploy/compose/panel.sh up
 ```
 
-Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Agent、RFW 或 ZFS，也不需要 Redis。v1.0.3 以 `docker-compose.yml` 引用 `compose.yaml`，支援 Nginx（預設）、Cloudflare Tunnel 或外部 HTTPS 代理；前端預設監聽 `127.0.0.1:3000`、`127.0.0.1:3001`，API 與 DB 不發布宿主埠。容器內 `127.0.0.1` 不是宿主 Incus 端點。
+Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Agent、RFW 或 ZFS，也不需要 Redis。v1.0.5 以 `docker-compose.yml` 引用 `compose.yaml`，支援 Nginx（預設）、Cloudflare Tunnel 或外部 HTTPS 代理；前端預設監聽 `127.0.0.1:3000`、`127.0.0.1:3001`，API 與 DB 不發布宿主埠。容器內 `127.0.0.1` 不是宿主 Incus 端點。
 
 所有部署都必須遵守：
 

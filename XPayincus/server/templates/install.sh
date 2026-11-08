@@ -138,8 +138,11 @@ DEFAULT_IFACE=""
 IS_PURE_IPV6="false"
 AGENT_INSTALL_STATUS="未安装"
 AGENT_HEARTBEAT_INTERVAL_SECONDS="30"
-ZFS_ARC_MAX_GB=""
-ZFS_ARC_MIN_GB=""
+ZFS_ARC_MAX_GB="${ZFS_ARC_MAX_GB:-}"
+ZFS_ARC_MIN_GB="${ZFS_ARC_MIN_GB:-}"
+ZFS_ARC_MAX_BYTES=""
+ZFS_ARC_MIN_BYTES=""
+UNINSTALL_DELETE_DATA="false"
 LISTEN_PORT=""
 IPV6_SUBNET=""
 IPV6_IFACE=""
@@ -640,111 +643,53 @@ configure_agent_heartbeat_interval() {
     fi
 }
 
+# 裸數字與 GB 沿用舊版的 GiB 解讀；運算前先檢查範圍。
+parse_binary_size() {
+    local value="${1^^}" number unit factor
+    [[ "$value" =~ ^([0-9]{1,12})(M|MIB|MB|G|GIB|GB)?$ ]] || return 1
+    number="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    number=$((10#$number))
+    case "$unit" in M|MIB|MB) factor=1048576 ;; *) factor=1073741824 ;; esac
+    (( number > 0 && number <= 9223372036854775807 / factor )) || return 1
+    printf '%s\n' "$((number * factor))"
+}
+
 configure_zfs_arc_memory() {
-    if [[ "$OS_ID" != "debian" && "$OS_ID" != "ubuntu" ]]; then
-        return 0
-    fi
-
-    local total_mem_kb=0
-    total_mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")
-    if [[ "$total_mem_kb" -lt 1048576 ]]; then
-        info "系统内存不足 1GB，跳过 ZFS ARC 配置（ZFS 将使用默认值）"
-        return 0
-    fi
-
-    local total_mem_gb=$(( total_mem_kb / 1048576 ))
-    local default_max_gb=$(( total_mem_gb / 2 ))
-    local default_min_gb=$(( total_mem_gb / 8 ))
-    [[ "$default_max_gb" -lt 1 ]] && default_max_gb=1
-    [[ "$default_min_gb" -lt 1 ]] && default_min_gb=1
-    if [[ "$default_max_gb" -gt 32 ]]; then
-        default_max_gb=32
-    fi
-
-    if [[ ! -t 0 ]]; then
-        ZFS_ARC_MAX_GB=""
-        ZFS_ARC_MIN_GB=""
-        info "非交互环境，跳过 ZFS ARC 内存配置（使用系统默认值）"
-        return 0
-    fi
-
-    echo ""
-    divider
-    echo -e "  ${BOLD}ZFS ARC 内存配置（可选）${NC}"
-    divider
-    echo ""
-    echo -e "  ZFS 使用 ARC (Adaptive Replacement Cache) 作为文件系统缓存。"
-    echo -e "  合理设置 ARC 可以在 ZFS 性能和系统可用内存之间取得平衡。"
-    echo -e ""
-    echo -e "  检测到系统总内存: ${GREEN}${total_mem_gb} GB${NC}"
-    echo -e "  推荐 ARC 最大值: ${GREEN}${default_max_gb} GB${NC} (约为总内存的一半，上限 32GB)"
-    echo -e "  推荐 ARC 最小值: ${GREEN}${default_min_gb} GB${NC} (约为总内存的 1/8)"
-    echo -e ""
-    echo -e "  ${DIM}说明:${NC}"
-    echo -e "    • 留空回车 = 使用上方推荐值"
-    echo -e "    • 专用存储节点可适当增大（如总内存 75%）"
-    echo -e "    • 需同时运行大量容器时建议保守（如总内存 25%-50%）"
-    echo ""
-
-    local arc_max_input=""
-    local arc_min_input=""
-
-    while true; do
-        echo -ne "  ${BOLD}ARC 最大值 (GB) [回车使用推荐值: ${default_max_gb}]: ${NC}"
-        read -r arc_max_input
-        if [[ -z "$arc_max_input" ]]; then
-            ZFS_ARC_MAX_GB="$default_max_gb"
-            break
+    local maximum="${ZFS_ARC_MAX:-${ZFS_ARC_MAX_GB:-}}"
+    local minimum="${ZFS_ARC_MIN:-${ZFS_ARC_MIN_GB:-}}"
+    local total_mem_kb total_bytes
+    total_mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    [[ "$total_mem_kb" =~ ^[0-9]{1,13}$ ]] || { error "无法读取总 RAM"; return 1; }
+    total_bytes=$((10#$total_mem_kb * 1024))
+    info "ARC 是缓存限制，并非 ZFS 总内存硬上限；其他 ZFS 分配仍会使用 RAM。"
+    if [[ -z "$maximum" && -z "$minimum" ]]; then
+        if [[ ! -t 0 ]]; then
+            info "未明确设置 ARC，保留 /etc/modprobe.d/99-zfs-arc.conf 或系统默认值"
+            return 0
         fi
-        if [[ "$arc_max_input" =~ ^[0-9]+$ ]] && [[ "$arc_max_input" -ge 1 ]] && [[ "$arc_max_input" -le "$total_mem_gb" ]]; then
-            ZFS_ARC_MAX_GB="$arc_max_input"
-            break
-        fi
-        warn "请输入 1-${total_mem_gb} 之间的整数，或回车使用推荐值"
-    done
-
-    if [[ -n "$ZFS_ARC_MAX_GB" ]]; then
-        while true; do
-            echo -ne "  ${BOLD}ARC 最小值 (GB) [回车默认: ${default_min_gb}，必须 ≤ 最大值]: ${NC}"
-            read -r arc_min_input
-            if [[ -z "$arc_min_input" ]]; then
-                ZFS_ARC_MIN_GB="$default_min_gb"
-                if [[ "$ZFS_ARC_MIN_GB" -gt "$ZFS_ARC_MAX_GB" ]]; then
-                    ZFS_ARC_MIN_GB="$ZFS_ARC_MAX_GB"
-                fi
-                break
-            fi
-            if [[ "$arc_min_input" =~ ^[0-9]+$ ]] && [[ "$arc_min_input" -ge 1 ]] && [[ "$arc_min_input" -le "$ZFS_ARC_MAX_GB" ]]; then
-                ZFS_ARC_MIN_GB="$arc_min_input"
-                break
-            fi
-            warn "请输入 1-${ZFS_ARC_MAX_GB} 之间的整数，或回车使用推荐值"
-        done
-    else
-        ZFS_ARC_MIN_GB=""
+        read -r -p "ARC 最大值 (MiB/GiB，如 512M、2G；回车保留现有设置): " maximum
+        [[ -n "$maximum" ]] || return 0
     fi
-
-    if [[ -n "$ZFS_ARC_MAX_GB" ]]; then
-        echo ""
-        info "ZFS ARC 配置已选择:"
-        echo -e "    最大值: ${GREEN}${ZFS_ARC_MAX_GB} GB${NC}"
-        echo -e "    最小值: ${GREEN}${ZFS_ARC_MIN_GB} GB${NC}"
+    ZFS_ARC_MAX_BYTES=$(parse_binary_size "$maximum") || { error "ARC 最大值无效"; return 1; }
+    if [[ -z "$minimum" && -t 0 ]]; then
+        read -r -p "ARC 最小值 (MiB/GiB；回车取最大值的 1/4): " minimum
+    fi
+    if [[ -n "$minimum" ]]; then
+        ZFS_ARC_MIN_BYTES=$(parse_binary_size "$minimum") || { error "ARC 最小值无效"; return 1; }
     else
-        echo ""
-        info "未设置 ARC 限制，ZFS 将使用系统默认策略自动管理内存"
+        ZFS_ARC_MIN_BYTES=$((ZFS_ARC_MAX_BYTES / 4))
+    fi
+    if (( ZFS_ARC_MIN_BYTES <= 0 || ZFS_ARC_MIN_BYTES > ZFS_ARC_MAX_BYTES || ZFS_ARC_MAX_BYTES >= total_bytes )); then
+        error "ARC 必须满足 0 < min <= max < 总 RAM"
+        return 1
     fi
 }
 
 apply_zfs_arc_config() {
-    if ! command -v zpool >/dev/null 2>&1 && ! modprobe zfs 2>/dev/null; then
-        return 0
-    fi
-    if [[ -z "$ZFS_ARC_MAX_GB" ]]; then
-        return 0
-    fi
-
-    local arc_max_bytes=$(( ZFS_ARC_MAX_GB * 1024 * 1024 * 1024 ))
-    local arc_min_bytes=$(( ZFS_ARC_MIN_GB * 1024 * 1024 * 1024 ))
+    [[ -n "$ZFS_ARC_MAX_BYTES" ]] || return 0
+    local arc_max_bytes="$ZFS_ARC_MAX_BYTES"
+    local arc_min_bytes="$ZFS_ARC_MIN_BYTES"
     local modprobe_file="/etc/modprobe.d/99-zfs-arc.conf"
 
     info "写入 ZFS ARC 内存配置..."
@@ -756,19 +701,34 @@ EOF_MODPROBE
     chmod 0644 "$modprobe_file"
     info "已写入模块参数: ${modprobe_file}"
 
-    if [[ -w /sys/module/zfs/parameters/zfs_arc_max ]]; then
-        printf '%s' "$arc_max_bytes" > /sys/module/zfs/parameters/zfs_arc_max || true
-    fi
-    if [[ -w /sys/module/zfs/parameters/zfs_arc_min ]]; then
-        printf '%s' "$arc_min_bytes" > /sys/module/zfs/parameters/zfs_arc_min || true
+    if [[ -d /sys/module/zfs ]]; then
+        local current_min
+        current_min=$(< /sys/module/zfs/parameters/zfs_arc_min)
+        # 若最大值將降至目前最小值以下，先降低最小值；否則先提高最大值。
+        if (( arc_max_bytes < current_min )); then
+            if ! printf '%s' "$arc_min_bytes" > /sys/module/zfs/parameters/zfs_arc_min ||
+               ! printf '%s' "$arc_max_bytes" > /sys/module/zfs/parameters/zfs_arc_max; then
+                warn "ARC 即时套用失败；配置已保存，请检查模块参数并重启"
+            fi
+        else
+            if ! printf '%s' "$arc_max_bytes" > /sys/module/zfs/parameters/zfs_arc_max ||
+               ! printf '%s' "$arc_min_bytes" > /sys/module/zfs/parameters/zfs_arc_min; then
+                warn "ARC 即时套用失败；配置已保存，请检查模块参数并重启"
+            fi
+        fi
+    else
+        warn "ZFS 模块未加载；ARC 配置将在下次加载时生效"
     fi
 
-    if lsinitramfs /boot/initrd.img-$(uname -r) >/dev/null 2>&1 && command -v update-initramfs >/dev/null 2>&1; then
-        info "更新 initramfs 以包含 ZFS 模块参数（约需 1-2 分钟）..."
-        update-initramfs -u -k $(uname -r) >/dev/null 2>&1 || true
+    if command -v update-initramfs >/dev/null 2>&1; then
+        if ! update-initramfs -u -k "$(uname -r)"; then
+            warn "initramfs 更新失败；启动镜像可能仍包含旧 ARC 参数，请手动修复"
+        fi
+    else
+        warn "缺少 update-initramfs，请确认启动镜像中的 ARC 参数"
     fi
 
-    log "ZFS ARC 内存配置完成: 最大 ${ZFS_ARC_MAX_GB}GB / 最小 ${ZFS_ARC_MIN_GB}GB"
+    log "ZFS ARC 配置已保存: 最大 ${arc_max_bytes} bytes / 最小 ${arc_min_bytes} bytes"
 }
 
 # ========================== 安装确认 ==========================
@@ -803,10 +763,10 @@ confirm_install() {
     if [[ "$AGENT_ENABLED" == "true" && ( -n "$AGENT_INSTALL_TOKEN" || ( -n "$AGENT_ID" && -n "$AGENT_SECRET" ) ) ]]; then
         echo -e "  Agent     :  ${GREEN}${AGENT_HEARTBEAT_INTERVAL_SECONDS} 秒上报${NC}"
     fi
-    if [[ -n "$ZFS_ARC_MAX_GB" ]]; then
-        echo -e "  ZFS ARC   :  ${GREEN}最大 ${ZFS_ARC_MAX_GB}GB / 最小 ${ZFS_ARC_MIN_GB}GB${NC}"
+    if [[ -n "$ZFS_ARC_MAX_BYTES" ]]; then
+        echo -e "  ZFS ARC   :  ${GREEN}最大 ${ZFS_ARC_MAX_BYTES} bytes / 最小 ${ZFS_ARC_MIN_BYTES} bytes${NC}"
     else
-        echo -e "  ZFS ARC   :  ${DIM}使用系统默认${NC}"
+        echo -e "  ZFS ARC   :  ${DIM}保留现有配置或系统默认${NC}"
     fi
     
     if [[ "$IS_PURE_IPV6" == "true" ]]; then
@@ -819,6 +779,10 @@ confirm_install() {
     
     divider
     echo ""
+    if [[ ! -t 0 ]]; then
+        info "非交互安装：使用明确参数与以上保留策略"
+        return 0
+    fi
     echo -ne "  ${YELLOW}确认开始安装？${NC}[y/N]: "
     read -r confirm
     if [[ ! "$confirm" =~ ^[yY]$ ]]; then
@@ -1480,7 +1444,7 @@ install_deps() {
     fi
 
     # 安装基础依赖
-    apt-get install -y -qq curl gpg >/dev/null 2>&1
+    apt-get install -y -qq curl gpg python3 >/dev/null 2>&1
 
     # ---- Debian ZFS 安装策略 ----
     # 优先级: 预编译包(秒级) → DKMS 编译(分钟级) → 跳过(使用 dir 存储池)
@@ -1873,13 +1837,98 @@ SRC
     log "Incus 安装完成"
 }
 
+zfs_storage_available() {
+    command -v zpool >/dev/null 2>&1 && command -v zfs >/dev/null 2>&1 &&
+        modprobe zfs && [[ -c /dev/zfs ]] && zpool list -H >/dev/null 2>&1
+}
+
+ensure_incus_storage() {
+    local profile root_device root_pool pools selected="${INCUS_STORAGE_POOL:-}"
+    local driver="${INCUS_STORAGE_DRIVER:-auto}" size="${INCUS_STORAGE_SIZE:-10GiB}"
+    profile=$(incus profile show default --format json) || return 1
+    root_device=$(printf '%s' "$profile" | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next((n for n,v in d.items() if v.get("type")=="disk" and v.get("path")=="/"), ""))') || return 1
+    root_pool=$(printf '%s' "$profile" | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next((v.get("pool", "") for v in d.values() if v.get("type")=="disk" and v.get("path")=="/"), ""))') || return 1
+    pools=$(incus storage list --format csv -c n) || return 1
+    pools=$(printf '%s\n' "$pools" | LC_ALL=C sort)
+    if [[ -n "$root_device" ]]; then
+        [[ -n "$root_pool" ]] && incus storage show "$root_pool" >/dev/null || {
+            error "default profile 已有 root 但没有可用 pool；保留原配置，请先手动修复"; return 1;
+        }
+        info "沿用 default profile root pool: ${root_pool}（忽略其他储存选择，不修改现有 root）"
+        return 0
+    fi
+    if [[ -z "$selected" ]]; then
+        if printf '%s\n' "$pools" | grep -Fxq default; then
+            selected=default
+        elif [[ -n "$pools" ]]; then
+            selected="${pools%%$'\n'*}"
+            if [[ -t 0 && "$pools" == *$'\n'* ]]; then
+                printf '现有储存池（不会清理）：\n%s\n' "$pools"
+                read -r -p "选择池名称 [${selected}]: " root_pool
+                selected="${root_pool:-$selected}"
+            else
+                info "按名称排序选择现有池: ${selected}；可用 INCUS_STORAGE_POOL 指定"
+            fi
+        else
+            selected=default
+        fi
+    fi
+    [[ "$selected" =~ ^[A-Za-z][A-Za-z0-9_-]{0,62}$ ]] || { error "储存池名称无效"; return 1; }
+    if printf '%s\n' "$pools" | grep -Fxq -- "$selected"; then
+        info "沿用现有储存池 ${selected}，不更改其配置"
+    else
+        [[ -z "$pools" ]] || { error "指定池不存在；有现有池时只允许选择现有池"; return 1; }
+        if [[ -t 0 ]]; then
+            if [[ -z "${INCUS_STORAGE_POOL:-}" ]]; then
+                read -r -p "新储存池名称 [${selected}]: " root_pool
+                selected="${root_pool:-$selected}"
+            fi
+            if [[ -z "${INCUS_STORAGE_DRIVER:-}" ]]; then
+                read -r -p "新池 driver (auto/zfs/dir) [auto]: " driver
+                driver="${driver:-auto}"
+            fi
+        fi
+        [[ "$selected" =~ ^[A-Za-z][A-Za-z0-9_-]{0,62}$ ]] || { error "储存池名称无效"; return 1; }
+        if [[ "$driver" == auto ]]; then
+            if zfs_storage_available; then driver=zfs; else driver=dir; fi
+            info "自动选择储存 driver: ${driver}"
+        fi
+        case "$driver" in
+            zfs)
+                zfs_storage_available || { error "ZFS 工具、模块或 /dev/zfs 不可用"; return 1; }
+                if [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
+                    read -r -p "ZFS loop 大小 [10GiB]: " size
+                    size="${size:-10GiB}"
+                fi
+                local bytes available
+                bytes=$(parse_binary_size "$size") || { error "loop 大小无效"; return 1; }
+                available=$(df -B1 --output=avail /var/lib/incus | awk 'NR==2 {print $1}')
+                [[ "$available" =~ ^[0-9]{1,18}$ ]] || return 1
+                if (( bytes < 1073741824 || bytes > available / 2 )); then
+                    error "ZFS loop 至少 1GiB，且不得超过 Incus 数据磁盘剩余空间的一半；请指定较小大小或 dir"; return 1
+                fi
+                incus storage create "$selected" zfs "size=${bytes}" || return 1
+                ;;
+            dir) incus storage create "$selected" dir || return 1 ;;
+            *) error "只允许 auto/zfs/dir；不接受磁盘或 source 参数"; return 1 ;;
+        esac
+    fi
+    incus storage show "$selected" >/dev/null || return 1
+    # 不取代任何既有裝置，包括名稱為 root 的非根裝置。
+    if incus profile device get default root type >/dev/null 2>&1; then
+        error "default profile 已有名为 root 的非根设备；请手动添加根磁盘"; return 1
+    fi
+    incus profile device add default root disk path=/ "pool=${selected}"
+}
+
 # 步骤 4: 初始化 Incus
 init_incus() {
     step "步骤 [4/5]  初始化 Incus..."
 
     # 幂等性：网桥已存在则跳过
     if incus network show "$BRIDGE_NAME" &>/dev/null; then
-        info "网桥 ${BRIDGE_NAME} 已存在，跳过初始化"
+        info "网桥 ${BRIDGE_NAME} 已存在，保留网络并检查储存池"
+        ensure_incus_storage || return 1
         return 0
     fi
 
@@ -1980,7 +2029,8 @@ profiles: []
 cluster: null
 YAML
 
-    incus admin init --preseed < "$PRESEED_FILE"
+    incus admin init --preseed < "$PRESEED_FILE" || return 1
+    ensure_incus_storage || return 1
     log "Incus 初始化完成"
 }
 
@@ -3031,6 +3081,23 @@ confirm_uninstall() {
 
 # 执行卸载
 do_uninstall() {
+    if [[ "$UNINSTALL_DELETE_DATA" != "true" ]]; then
+        info "保留资料卸载：停止并禁用节点服务；保留实例、镜像、池、profile、网络、套件及全部配置"
+        warn "停止节点服务可能影响实例运行；恢复时重新启用 Incus 与 Agent 服务。面板端宿主机记录不会自动删除。"
+        if [[ -t 0 ]]; then
+            local reply=""
+            read -r -p "确认停止节点并保留全部资料？[y/N]: " reply
+            [[ "$reply" =~ ^[yY]$ ]] || return 0
+        fi
+        local service
+        for service in "$AGENT_SERVICE_NAME" incus-v6-guardian.service incus.socket incus-user.socket incus-startup.service incus-user.service incus.service incus-lxcfs.service; do
+            if systemctl cat "$service" >/dev/null 2>&1; then
+                systemctl disable --now "$service" || { error "停止服务失败: ${service}；未执行资料清理"; return 1; }
+            fi
+        done
+        log "节点服务已停用，全部资料已保留；未执行 purge 或资料删除"
+        return 0
+    fi
     confirm_uninstall
 
     echo ""
@@ -3508,8 +3575,10 @@ main() {
             --port|-p)
                 if [[ $# -lt 2 ]]; then error "$1 缺少参数值"; exit 1; fi
                 LISTEN_PORT="$2"; shift 2 ;;
-            --uninstall)
+            --uninstall|--uninstall-keep-data)
                 ACTION="uninstall"; shift ;;
+            --delete-data)
+                UNINSTALL_DELETE_DATA="true"; shift ;;
             --agent|--agent-menu)
                 ACTION="agent"; shift ;;
             # ==================== RFW 独立可控模式 ====================
@@ -3568,7 +3637,12 @@ main() {
                 echo "  --ipv6-subnet <CIDR>    IPv6 子网段（例如 2001:db8::/64）"
                 echo "  --ipv6-iface <IFACE>    IPv6 路由父网卡（例如 eth0）"
                 echo "  --port <PORT>           自定义 Incus 运行端口 (默认 8443)"
-                echo "  --uninstall             卸载 Incus 节点并还原系统"
+                echo "  --uninstall             停用节点服务并保留全部资料与套件"
+                echo "  --uninstall-keep-data   同 --uninstall，明确保留资料"
+                echo "  --delete-data           仅配合 --uninstall：进入旧完整清除流程，仍需双重确认"
+                echo "环境变量：ZFS_ARC_MAX/MIN=512MiB/2GiB（裸整数及旧 *_GB 为 GiB）；留空保留 ARC"
+                echo "储存：INCUS_STORAGE_POOL、INCUS_STORAGE_DRIVER=auto|zfs|dir、INCUS_STORAGE_SIZE=10GiB"
+                echo "自动优先沿用 profile root、现有 default、名称排序首池；仅无池时新建，不清理磁盘"
                 echo "  --agent                 打开 Agent 安装 / 更新菜单"
                 echo "  --help, -h              显示帮助信息"
                 echo ""
@@ -3639,6 +3713,11 @@ main() {
     fi
     if [[ -n "$LISTEN_PORT" ]] && ! is_valid_port "$LISTEN_PORT"; then
         error "--port 必须为 1-65535 的整数"
+        exit 1
+    fi
+
+    if [[ "$UNINSTALL_DELETE_DATA" == "true" && "$ACTION" != "uninstall" ]]; then
+        error "--delete-data 必须配合 --uninstall"
         exit 1
     fi
 
@@ -3767,6 +3846,9 @@ main() {
     fi
 
     # 端口修改逻辑
+    if [[ -z "${LISTEN_PORT:-}" && ! -t 0 ]]; then
+        LISTEN_PORT="8443"
+    fi
     if [[ -z "${LISTEN_PORT:-}" ]]; then
         echo -e "\n${CYAN}==> (可选) 自定义通信端口${NC}"
         echo -e "  ${DIM}默认 8443，若被防火墙屏蔽可改为 10000+ 端口${NC}"

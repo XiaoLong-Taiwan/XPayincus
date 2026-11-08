@@ -1,8 +1,14 @@
 # 統一發行
 
-根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，目前為 `v1.0.4`。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
+根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，目前為 `v1.0.5`。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
 
 GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent 內兩個宿主元件須納入實際來源，不能只有 gitlink 或 submodule。Git 工作區是否已提交、推送及遠端 CI 是否成功，需另以當次紀錄確認，不應把文件中的工作區描述當作即時狀態。來源碼上傳不等於建立 GitHub Release，也不代表已部署。
+
+## v1.0.5 版本準備
+
+- 同步根／Agent／ZFS VERSION、四份 package.json、RFW 三個自家 crate 與 Cargo.lock、Go Agent 預設版本、Compose 映像／建置標籤及現行發行 fixtures 與文件。
+- 修正 Agent 遠端 manifest／gzip 持久快取說明，保留歷史版本紀錄、既有資產釘選與 `minimumUpdaterVersion`。
+- 本次僅修改來源並靜態核對，未執行本機測試、建置、提交、發布或部署。
 
 ## v1.0.4 版本準備
 
@@ -37,9 +43,9 @@ GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent �
 
 ## GHCR 映像發布
 
-`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（目前 `v1.0.4`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
+`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（目前 `v1.0.5`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
 
-API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。目前版本標籤為 `:v1.0.4`。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
+API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。目前版本標籤為 `:v1.0.5`。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
 
 發布前同時核對 API／web：既有版本 index 的 revision、version、source 與兩種架構必須符合，且內容必須與該 commit 的 SHA index 完全一致，缺少 SHA 證據或不同 commit 一律失敗。所有 Docker workflow 共用 concurrency group 且不取消執行中的發布；重跑保留既有 SHA index，不以新建置覆寫它，再補上尚未發布的版本標籤。手動發布後，之後同版本 Git tag 必須指向相同 commit；若 main 已新增 commit，須升版，不能重新指定舊版映像。兩個 GHCR package 的標籤更新不是跨 package 原子交易，失敗可能留下部分完成標籤，可在同 commit 重跑補齊。
 
@@ -91,16 +97,16 @@ bash panel.sh status
 | --- | --- |
 | Dashboard Compose 原始碼 | `xpayincus-dashboard-${VERSION}-compose.tar.gz` |
 | Compose bootstrap 入口 | `xpayincus-compose-${VERSION}.sh` |
-| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.3-linux-{amd64,arm64}.tar.gz` |
-| Agent | `xpayincus-agent-v1.0.3-linux-{amd64,arm64}` 與單檔 `.gz` |
+| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.5-linux-{amd64,arm64}.tar.gz` |
+| Agent | `xpayincus-agent-v1.0.5-linux-{amd64,arm64}` 與單檔 `.gz` |
 | Agent 舊格式 manifest | `manifest.json`，保留 `files.linux-amd64/linux-arm64`、`name/sha256/size/gzip` |
-| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.3-ota-manifest.json`，schemaVersion 1 |
-| RFW | `xpayincus-rfw-v1.0.3-linux-{amd64,arm64}` |
-| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.3-source.tar.gz`，不是核心模組 |
+| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.5-ota-manifest.json`，schemaVersion 1 |
+| RFW | `xpayincus-rfw-v1.0.5-linux-{amd64,arm64}` |
+| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.5-source.tar.gz`，不是核心模組 |
 | 統一索引 | `release-manifest.json`，包含 ZFS source-only 狀態與執行需求 |
 | 雜湊 | 個別產物 `.sha256` 與 `SHA256SUMS`，後者涵蓋產物及三份新增 JSON manifest，不自我雜湊 |
 
-表中的 `v1.0.3` 是目前根 VERSION 的範例，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
+表中的 `v1.0.5` 是目前根 VERSION 的範例，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
 
 manifest 產生前目錄必須恰有 12 個一般檔案：Dashboard 包、Compose bootstrap 腳本、ZFS source 包、兩個 panel tarball、兩個 Agent 二進位與兩個 `.gz`、兩個 RFW 二進位、Agent `manifest.json`。多餘檔案（含舊版、異名、既有 checksum／輸出 manifest）、缺件、目錄及符號連結均拒絕。Agent manifest 的 `files` 必須恰為 `linux-amd64` 與 `linux-arm64`，每項名稱、壓縮檔 SHA256、大小與 `gzip: true` 均核對。完成後再次核對原始 12 件、12 份個別 checksum、三份新增 JSON 與 `SHA256SUMS`，共 28 件。統一索引另記錄 Compose 包名、override、專案名及映像名稱；不將 Compose 包或 bootstrap 混入 OTA。
 
@@ -124,7 +130,9 @@ SHA256 由 workflow 對實際建置檔案計算。tag 流程將彙整後的 28 �
 
 Agent 安裝模板沒有固定 GitHub 倉庫，維持 `/api/agent/manifest.json` 與 `/api/agent/binary` 同源代理；宿主安裝模板也使用這條路徑。無需將 release token 注入宿主機。靜態 production readiness 現在也接受統一來源。`INCUDAL_AGENT_RELEASE_DIR`、自訂 binary URL + SHA256 及舊配置均保留。修改來源後需重啟後端；面板 OTA 倉庫另以 `SYSTEM_UPDATE_RELEASE_REPOSITORY` 設定，不會隱式變更。Compose 的 `.env` 支援 `INCUDAL_RELEASE_REPOSITORY` 與 `INCUDAL_AGENT_RELEASE_REPOSITORY`，並明確傳入 API；其他額外 API 設定仍須透過部署設定明確注入。
 
-遠端代理仍要求兩架構未壓縮二進位 `xpayincus-agent-${VERSION}-linux-amd64` 與 `xpayincus-agent-${VERSION}-linux-arm64`，並自行串流計算與校驗 SHA256；會略過 draft 及缺少任一架構的 Release。只有 `.gz`、`manifest.json`、統一 manifest 或 Actions artifacts 都不足以提供遠端 Agent 更新。發布時仍應一併提供 `.gz`、Agent `manifest.json` 與 SHA256 清單供離線及下載校驗使用。私有倉庫沿用 `INCUDAL_AGENT_RELEASE_TOKEN`。
+遠端代理優先讀取 Release 的 Agent `manifest.json`，核對版本、schema、`minimumUpdaterVersion` 格式、雙架構檔名及資產大小，按 manifest 下載兩架構資產，支援 `xpayincus-agent-${VERSION}-linux-{amd64,arm64}.gz`；SHA256 對應壓縮檔位元組，保留 manifest 的 `gzip` 語意，由安裝器／Agent 校驗後解壓。只有缺少 Agent manifest 時，才回退到兩架構未壓縮二進位並自行計算 SHA256；無效 manifest 或資產驗證失敗會直接拒絕。統一 manifest 與 Actions artifacts 不取代 Agent manifest；統一 Release 仍須提供完整 28 件資產。私有倉庫沿用 `INCUDAL_AGENT_RELEASE_TOKEN`。
+
+首次 manifest／安裝或更新下載請求會按需取得資產，兩架構全部通過版本、大小與 SHA256 驗證後才原子發布持久快取；後續 binary 由本地提供，重啟後仍可使用。快取以 repository、tag prefix 與版本隔離，保留舊版本供已發出的更新 URL 使用，目前不自動清除。`INCUDAL_AGENT_CACHE_DIR` 可指定服務帳號可寫的絕對目錄；預設為 `$XDG_CACHE_HOME/xpayincus-agent`，未設定 XDG 時為 `~/.cache/xpayincus-agent`。Compose 使用 `/opt/incudal/config/agent-cache`，沿用 `./config` 持久掛載及 UID 1000 權限。最新 Release 每五分鐘按請求重新探索；探索網路失敗時可沿用已驗證快取，無效 manifest／資產不會被舊快取繞過。`INCUDAL_AGENT_RELEASE_DIR` 仍優先讀取手動準備的完整本地資產，設定後不自動覆寫；無效本地 manifest 直接拒絕。
 
 宿主安裝模板的 RFW 與 ZFS 舊獨立倉庫引用仍是已核驗舊版資產來源：RFW 需相符的版本及預先核驗 SHA256，ZFS 需匹配核心的實際模組。統一 Release 發布不會自動切換這些釘選來源，也不會以 ZFS builder 原始碼取代核心模組。
 
@@ -132,7 +140,7 @@ Agent 安裝模板沒有固定 GitHub 倉庫，維持 `/api/agent/manifest.json`
 
 ZFS 核心模組依賴 Debian 版本、CPU 架構、目標 kernel ABI、完整 matching headers、DKMS 與實際 ZFS 版本，不能由通用 Ubuntu runner 宣稱建置成功。統一發行僅封裝產品 VERSION、builder 與 README，manifest 明示 `kernelModulesBuilt: false`。需在專用 Debian 編譯主機另行執行既有 `zfs-builder.sh --kernel <kernel>`，該腳本仍會詢問確認，並安裝套件及 DKMS 模組，不適合直接嵌入無人值守 CI。
 
-待取得實際模組後，另記錄 ZFS 真實版本、kernel、architecture、vermagic 與 SHA256；不能把 ZFS 模組版本硬改為產品 v1.0.3，也不能跨 kernel 使用。Secure Boot 環境可能需要模組簽章。載入與實機驗證應在專用主機進行，不在面板 Compose 內執行。
+待取得實際模組後，另記錄 ZFS 真實版本、kernel、architecture、vermagic 與 SHA256；不能把 ZFS 模組版本硬改為產品 v1.0.5，也不能跨 kernel 使用。Secure Boot 環境可能需要模組簽章。載入與實機驗證應在專用主機進行，不在面板 Compose 內執行。
 
 RFW 產物名稱以根 VERSION 表示統一發行版本，Rust 三個自家 crate 版本由各自 Cargo.toml 維護，共用入口要求與根版本一致，建置腳本不會自動改寫；執行仍需 Linux 5.15+、XDP 支援及足夠權限。既有宿主安裝腳本仍釘選既有 RFW 版本與 SHA256，不會自動切換為統一 Release 產物。
 

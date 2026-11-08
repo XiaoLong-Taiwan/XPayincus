@@ -1,8 +1,8 @@
-# 面板 Compose v1.0.4 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.5 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-本文件描述統一版 v1.0.4 的 Compose 配置；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.5 的 Compose 配置；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
 
@@ -17,7 +17,7 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 可使用完整倉庫，或解壓 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。也可只複製完整 `deploy/compose/` 目錄，直接執行 init 與預設 pull 部署。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。API 固定使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.4`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.4`；Web 的 Docker target 仍為 `web`，新 package 避開歷史套件寫入權限。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。映像必須由根 Docker workflow 事先發布且支援目標架構，成功狀態以對應 Actions 與 registry 驗證為準。若 GHCR 尚無此 tag 或無權限，pull 會失敗並保留舊服務；可明確選擇 build。私有映像請先用安全方式登入 GHCR。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。API 固定使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.5`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.5`；Web 的 Docker target 仍為 `web`，新 package 避開歷史套件寫入權限。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。映像必須由根 Docker workflow 事先發布且支援目標架構，成功狀態以對應 Actions 與 registry 驗證為準。若 GHCR 尚無此 tag 或無權限，pull 會失敗並保留舊服務；可明確選擇 build。私有映像請先用安全方式登入 GHCR。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -36,6 +36,8 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 API 映像保留根 `node_modules` 的 pnpm store、`server/node_modules` 連結、已產生的 Prisma client 與 Prisma CLI；不要只複製 `server/dist/`。建置用的 `DATABASE_URL` 為無實際資料庫的佔位 URL，供 Prisma generate 載入設定；建置不執行 migration、不需要正式 DB 密碼。
 
+Agent Release 首次被 manifest／安裝或更新下載請求使用時，API 會從已設定的可信 GitHub repository 按需下載 manifest 與雙架構 binary，全部通過版本、大小及 SHA-256 驗證後才原子發布。Compose 設定 `INCUDAL_AGENT_CACHE_DIR=/opt/incudal/config/agent-cache`，沿用既有 `./config` 持久掛載與 UID 1000 寫入權限，不需新增 volume；首次請求較慢且需連線 GitHub，後續 binary 由本地提供。每五分鐘按請求檢查最新 Release；探索 GitHub 失敗時可繼續使用已驗證快取，無效 manifest／資產不會被舊版繞過。原生部署可設定同一環境變數為服務帳號可寫的絕對目錄，預設為 `$XDG_CACHE_HOME/xpayincus-agent`（未設定 XDG 時為服務帳號的 `~/.cache/xpayincus-agent`）。快取按 repository、tag prefix 及版本分開，保留舊版供已發出的更新 URL 使用，目前不自動清除舊版。`INCUDAL_AGENT_RELEASE_DIR` 仍優先讀取手動／本機建置的完整資產，設定後不自動覆寫；無效本地 manifest 直接拒絕。安裝腳本 URL 仍為 `/api/agent/install.sh`；此快取改善後續資產下載，不能修正代理本身造成的腳本 404。
+
 網路測試僅出現在登入後的商品購買畫面，顯示管理員核准且綁定該商品／host 的 DNS 目標。舊目標須在管理設定重新建立綁定，未綁定設定不會提供給客戶。瀏覽器直接請求目標的 `https://hostname/.well-known/network-probe`；節點須提供有效 TLS、小型 2xx 回應、`Cache-Control: no-store` 及允許使用者前端來源的 CORS，避免 CDN／反向代理至其他節點。此數字是瀏覽器 HTTPS 回應標頭耗時，非 TCP／ICMP RTT。瀏覽器自行解析 DNS，API 無法鎖定瀏覽器的解析結果；目標 DNS 必須由可信管理員維護，不能委託不受信任的租戶控制。
 
 TCP／ICMP 提供可複製的公開 IP 指令，請客戶於本機或自己已授權主機執行；目前 Agent 沒有遠端測試任務協定，平台不收集執行結果。原 API `/network-probe/test` 僅保留管理員診斷，來源仍標示 `panel-api`。API 使用 `iputils-ping`，以 node GID 1000 搭配 `net.ipv4.ping_group_range: '1000 1000'` 開啟非特權 ICMP socket，保留移除 `NET_RAW` 及 `no-new-privileges`；主機須支援此 namespaced sysctl。目標防火牆封鎖 ICMP 仍會回報無回應。
@@ -47,7 +49,7 @@ TCP／ICMP 提供可複製的公開 IP 指令，請客戶於本機或自己已�
 Release 提供版本化的 `xpayincus-compose-vX.Y.Z.sh`（原始碼為 `download.sh`）；需要 Linux、Bash、Python 3、curl、sha256sum、flock、find 與 mktemp。來源固定為 `XiaoLong-Taiwan/XPayincus` 的固定版本 Release Dashboard Compose 資產，不接受 main、latest 或自訂下載 URL。先從可信發行紀錄取得入口腳本及 Dashboard archive 各自的 SHA256；必須由獨立可信管道確認預期值，不能下載後自行計算就視為驗證。不使用 `curl | bash`。Debian／Ubuntu 可先安裝 `sudo apt-get install bash python3 curl ca-certificates coreutils util-linux findutils openssl`。
 
 ```bash
-VERSION=v1.0.4
+VERSION=v1.0.5
 BOOTSTRAP_SHA256='填入可信的入口腳本64位小寫SHA256'
 ARCHIVE_SHA256='填入可信的Dashboard封裝64位小寫SHA256'
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \

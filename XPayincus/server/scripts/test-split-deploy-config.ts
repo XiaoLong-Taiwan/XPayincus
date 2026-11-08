@@ -347,8 +347,8 @@ assert.ok(
   agentRoute.includes("const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus-Agent'") &&
     agentRoute.includes('configured || process.env.INCUDAL_RELEASE_REPOSITORY?.trim() || defaultAgentReleaseRepository') &&
     agentRoute.includes("? '' : 'agent-'") &&
-    agentRoute.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(version), assetName)') &&
-    agentRoute.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(input.version), assetName)') &&
+    agentRoute.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(validated.version), assetName)') &&
+    agentRoute.includes('loadRemoteAgentRelease(input.version)') &&
     !agentRoute.includes('getAgentReleaseAssetUrl(`agent-${') &&
     releaseDoc.includes('兩者皆未設定時仍使用原獨立倉庫'),
   'Agent releases must preserve the independent repository fallback and use the configured tag prefix for listing and fallback downloads'
