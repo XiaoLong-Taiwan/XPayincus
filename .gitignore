@@ -16,3 +16,5 @@ Thumbs.db
 audits/
 artifacts/
 *.err
+__pycache__/
+*.py[cod]
