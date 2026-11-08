@@ -8,7 +8,6 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '@/api'
-import adminApi from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
@@ -101,6 +100,7 @@ interface CustomerSelfServiceApi {
 }
 
 const customerSelfServiceApi = api as typeof api & CustomerSelfServiceApi
+const adminApi = api as typeof api & Pick<typeof import('@/api/admin').default, 'instancePorts'>
 
 // 获取返回路径：如果是从宿主机页面进入，则返回到宿主机页面
 function getReturnPath(): string {
