@@ -137,20 +137,22 @@ assert.ok(
   'certificate failures must return actionable guidance without logging raw key or crypto errors'
 )
 assert.ok(
-  apiEntrypoint.includes('[ ! -e "$cert_file" ] && [ ! -L "$cert_file" ] && [ ! -e "$key_file" ] && [ ! -L "$key_file" ]') &&
-    apiEntrypoint.includes('gosu node openssl req -x509 -newkey rsa:4096 -nodes -days 3650') &&
-    apiEntrypoint.includes('ln "$cert_tmp/client.key" "$key_file"') &&
-    apiEntrypoint.includes('ln "$cert_tmp/client.crt" "$cert_file"') &&
-    !apiEntrypoint.includes('ln -f') &&
-    apiEntrypoint.includes('trap \'rm -rf "$cert_tmp"\' EXIT'),
+  apiEntrypoint.includes('gosu node node dist/scripts/ensure-panel-certificate.js') &&
+    startupCertificate.includes('!pathExists(certPath) && !pathExists(keyPath)') &&
+    startupCertificate.includes('mkdtempSync(join(certDir,') &&
+    startupCertificate.includes("'req', '-x509', '-newkey', 'rsa:4096', '-nodes', '-days', '3650'") &&
+    startupCertificate.includes('linkSync(temporaryKey, keyPath)') &&
+    startupCertificate.includes('linkSync(temporaryCert, certPath)') &&
+    startupCertificate.includes('finally {\n      rmSync(temporaryDir, { recursive: true, force: true })'),
   'Compose must generate only an entirely absent pair in a private temporary directory and publish without overwriting existing files'
 )
 assert.ok(
-  apiEntrypoint.includes('if ! gosu node node --input-type=module') &&
-    apiEntrypoint.includes('checkPrivateKey(createPrivateKey({ key, passphrase: \'\' }))') &&
-    apiEntrypoint.includes('createSecureContext({ cert, key })') &&
-    apiEntrypoint.includes('Never delete a partial pair to regenerate') &&
-    apiEntrypoint.indexOf('if ! gosu node node') < apiEntrypoint.indexOf('pnpm exec prisma migrate deploy'),
+  apiEntrypoint.includes('set -eu') &&
+    apiEntrypoint.includes('gosu node node dist/scripts/ensure-panel-certificate.js') &&
+    startupCertificate.includes('readPanelCertificatePair(certPath, keyPath)') &&
+    startupCertificate.includes('do not delete a partial pair to regenerate') &&
+    startupCertificate.includes('process.exit(1)') &&
+    apiEntrypoint.indexOf('gosu node node dist/scripts/ensure-panel-certificate.js') < apiEntrypoint.indexOf('pnpm exec prisma migrate deploy'),
   'Compose must reject missing, unreadable and invalid pairs as the API user before migrations and app startup'
 )
 
