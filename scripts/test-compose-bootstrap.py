@@ -220,6 +220,7 @@ class PanelCommandTests(unittest.TestCase):
         shutil.copyfile(COMPOSE / 'panel.sh', self.base / 'panel.sh')
         shutil.copyfile(COMPOSE / 'update.py', self.base / 'update.py')
         shutil.copyfile(COMPOSE / 'compose.yaml', self.base / 'compose.yaml')
+        shutil.copyfile(COMPOSE / 'docker-compose.yml', self.base / 'docker-compose.yml')
         (self.base / 'compose.release.yaml').write_bytes(release_override())
         (self.base / '.env').write_text('COMPOSE_PROFILES=\n')
         (self.base / 'secrets').mkdir()
@@ -229,29 +230,33 @@ class PanelCommandTests(unittest.TestCase):
                 'printf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
                 'if [[ "$1 $2" == "buildx imagetools" ]]; then printf \'{"digest":"sha256:%064d"}\\n\' 0; exit 0; fi\n'
                 'if [[ "$1 $2" == "image inspect" ]]; then printf \'[]\\n\'; exit 0; fi\n'
-                'if [[ " $* " == *" pull "* ]]; then exit "${PULL_EXIT:-0}"; fi')]:
+                'if [[ " $* " == *" pull "* && " $* " == *"${PULL_MATCH:-pull}"* ]]; then exit "${PULL_EXIT:-0}"; fi')]:
             target = self.bin / name
             target.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n', newline='\n')
             target.chmod(0o755)
 
-    def run_panel(self, pull_exit):
+    def run_panel(self, pull_exit, mode=None, profile='', pull_match='pull'):
+        self.log.write_text('')
         bin_path = self.bin.as_posix()
         if os.name == 'nt':
             bin_path = '/' + bin_path[0].lower() + bin_path[2:]
         env = dict(os.environ, DOCKER_LOG=self.log.as_posix(), PULL_EXIT=str(pull_exit),
-                   COMPOSE_PROFILES='')
-        result = subprocess.run([BASH, '-c', 'export PATH="$1:$PATH"; bash "$2" up',
-                                 'test', bin_path, (self.base / 'panel.sh').as_posix()],
+                   COMPOSE_PROFILES=profile, PULL_MATCH=pull_match)
+        result = subprocess.run([BASH, '-c', 'export PATH="$1:$PATH"; shift; bash "$@"',
+                                 'test', bin_path, (self.base / 'panel.sh').as_posix(), 'up',
+                                 *([mode] if mode else [])],
                                 env=env, capture_output=True, text=True)
         commands = self.log.read_text().splitlines()
         return result, commands
 
+    @unittest.skipIf(os.name == 'nt', '官方映像解析需要 Linux fd 繼承')
     def test_pull_failure_does_not_stop_services(self):
         result, commands = self.run_panel(42)
         self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
         self.assertTrue(any('pull --policy always' in line for line in commands))
         self.assertFalse(any(' stop ' in line or ' up ' in line or ' down' in line for line in commands))
 
+    @unittest.skipIf(os.name == 'nt', '官方映像解析需要 Linux fd 繼承')
     def test_success_pulls_before_stop_and_up(self):
         result, commands = self.run_panel(0)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -261,6 +266,76 @@ class PanelCommandTests(unittest.TestCase):
         self.assertLess(pull, stop)
         self.assertLess(stop, up)
         self.assertIn('--no-build --pull never --wait', commands[up])
+
+    def test_manual_pull_uses_existing_compose_without_update_tools(self):
+        (self.base / 'compose.release.yaml').unlink()
+        (self.base / 'update.py').unlink()
+        compose = self.base / 'compose.yaml'
+        compose.write_text(compose.read_text().replace('ghcr.io/xiaolong-taiwan/', 'private.example/custom/'))
+        private = {path: path.read_bytes() for path in self.base.rglob('*')
+                   if path.is_file() and path != self.log}
+        for mode in [None, 'pull']:
+            with self.subTest(mode=mode):
+                result, commands = self.run_panel(0, mode=mode)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(private, {path: path.read_bytes() for path in private})
+                self.assertFalse(any('buildx' in line or ' build ' in line or 'image inspect' in line for line in commands))
+                pulls = [i for i, line in enumerate(commands) if ' pull ' in line]
+                stop = next(i for i, line in enumerate(commands) if ' stop ' in line)
+                self.assertTrue(pulls)
+                self.assertLess(max(pulls), stop)
+                self.assertTrue(all(line.endswith(' pull --policy always') for line in (commands[i] for i in pulls)))
+                self.assertTrue(all('/docker-compose.yml pull --policy always' in commands[i] for i in pulls))
+                self.assertTrue(any('up -d --no-build --pull never --wait' in line for line in commands))
+
+    def test_manual_pull_supports_legacy_compose_entry(self):
+        (self.base / 'compose.release.yaml').unlink()
+        (self.base / 'docker-compose.yml').unlink()
+        result, commands = self.run_panel(0)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any('/compose.yaml pull --policy always' in line for line in commands))
+        self.assertFalse(any('/docker-compose.yml' in line for line in commands))
+
+    def test_manual_pull_failure_does_not_stop_services(self):
+        (self.base / 'compose.release.yaml').unlink()
+        for mode in [None, 'pull']:
+            with self.subTest(mode=mode):
+                result, commands = self.run_panel(42, mode=mode)
+                self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+                self.assertTrue(any(line.endswith(' pull --policy always') for line in commands))
+                self.assertFalse(any(' stop ' in line or ' up ' in line or ' down' in line for line in commands))
+
+    def test_manual_pull_retains_preflight_checks(self):
+        (self.base / 'compose.release.yaml').unlink()
+        for profile in ['nginx', 'cloudflare', 'nginx,cloudflare']:
+            with self.subTest(profile=profile):
+                result, commands = self.run_panel(0, profile=profile)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(' pull ' in line or ' stop ' in line or ' up ' in line for line in commands))
+        (self.base / 'secrets/jwt_secret').unlink()
+        result, commands = self.run_panel(0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(' pull ' in line or ' stop ' in line or ' up ' in line for line in commands))
+
+    @unittest.skipIf(os.name == 'nt', '官方映像解析需要 Linux fd 繼承')
+    def test_official_supporting_image_failure_does_not_stop_services(self):
+        for profile, pull_match in [('', 'db init'), ('nginx', 'missing nginx'),
+                                    ('cloudflare', 'missing tunnel-origin cloudflared')]:
+            with self.subTest(profile=profile):
+                for name in ['user/fullchain.pem', 'user/privkey.pem', 'admin/fullchain.pem', 'admin/privkey.pem']:
+                    target = self.base / 'tls' / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text('fixture')
+                (self.base / 'secrets/cloudflare_tunnel_token').write_text('fixture')
+                result, commands = self.run_panel(42, profile=profile, pull_match=pull_match)
+                self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+                self.assertFalse(any(' stop ' in line or ' up ' in line or ' down' in line for line in commands))
+
+    def test_empty_release_is_not_treated_as_manual_deployment(self):
+        (self.base / 'compose.release.yaml').write_text('')
+        result, commands = self.run_panel(0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(commands, [])
 
     def test_download_rejects_unpinned_input(self):
         for version, checksum in [('latest', 'a' * 64), ('main', 'a' * 64),

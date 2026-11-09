@@ -152,6 +152,7 @@ export default async function oauthRoutes(fastify: FastifyInstance) {
     const configs = await db.getOAuthConfigs()
 
     return {
+      customerBaseUrl: getConfiguredCustomerBaseUrl(),
       configs: configs.map(c => ({
         provider: c.provider,
         clientId: c.client_id,

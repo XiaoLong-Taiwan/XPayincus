@@ -5,13 +5,14 @@ import api from '@/api/admin'
 import { useToast } from '@/stores/toast'
 import { useThemeStore } from '@/stores/theme'
 import type { AdminOAuthAuthorization, OAuthClientApp, OAuthConfig, PublicApiScope, PublicApiScopeMetadata, UpdateOAuthConfigRequest } from '@/types/api'
-import { buildPublicApiUrl } from '@/utils/api-url'
+import { CUSTOMER_BASE_URL } from '@/utils/runtime-config'
 
 const { t } = useI18n()
 const toast = useToast()
 const themeStore = useThemeStore()
 
 const loading = ref<boolean>(true)
+const customerBaseUrl = ref<string | null>(null)
 interface ProviderConfig {
   clientId: string
   clientSecret: string
@@ -81,9 +82,13 @@ async function loadOAuthScopes(): Promise<void> {
 
 async function loadConfigs(): Promise<void> {
   loading.value = true
+  customerBaseUrl.value = null
   try {
     const response = await api.oauth.getConfigs()
     const data: { configs: OAuthConfig[] } = response
+    customerBaseUrl.value = response.customerBaseUrl === undefined
+      ? CUSTOMER_BASE_URL || null
+      : response.customerBaseUrl
     
     // Reset configs
     configs.value = {
@@ -355,7 +360,14 @@ const providerInfo = computed<Record<ProviderType, ProviderInfo>>(() => {
 // }
 
 function getCallbackUrl(path?: string): string {
-  return path ? buildPublicApiUrl(path) : ''
+  if (!path || !customerBaseUrl.value) return ''
+  try {
+    const baseUrl = new URL(customerBaseUrl.value)
+    if (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') return ''
+    return new URL(`/api${path}`, baseUrl.origin).toString()
+  } catch {
+    return ''
+  }
 }
 
 function formatScopeRisk(risk: PublicApiScopeMetadata['risk']): string {

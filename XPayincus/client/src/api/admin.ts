@@ -1964,7 +1964,7 @@ const api = {
 
   // OAuth 配置（管理员）
   oauth: {
-    getConfigs: (): Promise<{ configs: OAuthConfig[] }> => http.get('/oauth/configs'),
+    getConfigs: (): Promise<{ configs: OAuthConfig[]; customerBaseUrl?: string | null }> => http.get('/oauth/configs'),
     updateConfig: (provider: 'github' | 'google' | 'discord', data: UpdateOAuthConfigRequest): Promise<{ message: string }> =>
       http.put(`/oauth/configs/${provider}`, data),
     deleteConfig: (provider: 'github' | 'google' | 'discord'): Promise<void> =>

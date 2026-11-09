@@ -53,7 +53,12 @@ assert.match(api, /image: ghcr\.io\/xiaolong-taiwan\/xpayincus-api:v[0-9]+\.[0-9
 assert.equal((compose.match(/image: ghcr\.io\/xiaolong-taiwan\/xpayincus-panel-web:v[0-9]+\.[0-9]+\.[0-9]+/g) || []).length, 2)
 const up = section(cli, '\n  up)', '\n  down)')
 assert.ok(up.includes('deployment_mode="${1:-pull}"') && up.includes('compose.build.yaml'))
+assert.ok(up.includes('elif [[ -f "$base/compose.release.yaml" ]]; then\n      python3'), 'Official release deployments must retain digest validation')
+assert.ok(up.includes('else\n      "${compose[@]}" pull --policy always\n    fi'), 'Manual deployments must pull existing Compose images without requiring adoption or build')
+assert.ok(!up.includes('預設 pull 需要官方 compose.release.yaml'), 'Missing release overrides must not block pull')
 const stop = up.indexOf('"${compose[@]}" stop user admin api')
+const manualPull = up.indexOf('"${compose[@]}" pull --policy always\n')
+assert.ok(stop >= 0 && manualPull >= 0 && manualPull < stop, 'Manual pull must succeed before stopping services')
 for (const preparation of ['build api user admin', 'pull --ignore-buildable', 'resolve-images', 'pull --policy always api user admin', 'pull --policy missing --ignore-buildable db init', 'pull --policy missing nginx', 'pull --policy missing tunnel-origin cloudflared']) {
   assert.ok(up.indexOf(preparation) >= 0 && up.indexOf(preparation) < stop, `${preparation} must succeed before stopping services`)
 }

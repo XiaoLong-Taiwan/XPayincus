@@ -18,7 +18,7 @@ usage() {
     'bash deploy/compose/panel.sh update VERSION SHA256  (驗證 Release 並準備部署檔案；完成後另執行 up)' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
-    'bash deploy/compose/panel.sh up [pull|build]  (預設核對部署釘選版本的映像 digest；換版請用 update)' \
+    'bash deploy/compose/panel.sh up [pull|build]  (預設依 Compose 拉取映像；有官方 release 檔時核對 digest)' \
     'bash deploy/compose/panel.sh down|status' \
     'bash deploy/compose/panel.sh logs [init|db|api|user|admin|nginx|tunnel-origin|cloudflared]' \
     'bash deploy/compose/panel.sh export [/absolute/path/panel.dump]  (預設 ./backups)' \
@@ -115,6 +115,7 @@ if [[ "$command_name" == init ]]; then
   build_context='../..'
   if [[ "$source_root" == "$base/source" ]]; then build_context='./source'; fi
   compose_files='docker-compose.yml'
+  if [[ ! -e "$base/$compose_files" && ! -L "$base/$compose_files" ]]; then compose_files='compose.yaml'; fi
   if [[ -f "$base/compose.release.yaml" ]]; then compose_files='compose.yaml:compose.release.yaml'; fi
   printf 'FRONTEND_URL=%s\nADMIN_FRONTEND_URL=%s\nADMIN_EMAIL=%s\nUSER_PORT=3000\nADMIN_PORT=3001\nCOMPOSE_PROFILES=%s\nCOMPOSE_FILE=%s\nBUILD_CONTEXT=%s\nHTTPS_PORT=443\nINCUDAL_RELEASE_REPOSITORY=\nINCUDAL_AGENT_RELEASE_REPOSITORY=\n' "$1" "$2" "$3" "$selected_profile" "$compose_files" "$build_context" >"$base/.env"
   if [[ "$selected_profile" == cloudflare ]]; then
@@ -130,9 +131,10 @@ fi
 [[ -f "$base/.env" ]] || die '請先執行 init。'
 command -v docker >/dev/null || die '需要 Docker 與 Compose v2.20.0 以上。'
 compose_entry="$base/docker-compose.yml"
+if [[ ! -e "$compose_entry" && ! -L "$compose_entry" ]]; then compose_entry="$base/compose.yaml"; fi
 if [[ -f "$base/compose.release.yaml" ]]; then compose_entry="$base/compose.yaml"; fi
 if [[ "$command_name" == up && "${1:-pull}" == build ]]; then compose_entry="$base/compose.yaml"; fi
-if [[ "$command_name" == up && "${1:-pull}" != build ]]; then
+if [[ "$command_name" == up && "${1:-pull}" != build && -f "$base/compose.release.yaml" ]]; then
   command -v python3 >/dev/null || die '需要 Python 3。'
   [[ ! -L "$base/.state" ]] || die '操作狀態目錄不可為符號連結。'
   mkdir -p -- "$base/.state"
@@ -214,8 +216,7 @@ case "$command_name" in
     if [[ "$deployment_mode" == build ]]; then
       "${compose[@]}" build api user admin
       "${compose[@]}" pull --ignore-buildable
-    else
-      [[ "$compose_entry" == "$base/compose.yaml" && -f "$base/compose.release.yaml" ]] || die '預設 pull 需要官方 compose.release.yaml；自訂／手動映像設定請使用 up build 或先以 update 安全納管。'
+    elif [[ -f "$base/compose.release.yaml" ]]; then
       python3 "$base/update.py" resolve-images "$base" "$compose_entry" || die '無法解析官方映像 digest；未停止現有服務。'
       if [[ -s "$base/.state/pull-required" ]]; then
         "${compose[@]}" pull --policy always api user admin
@@ -226,6 +227,8 @@ case "$command_name" in
         nginx) "${compose[@]}" pull --policy missing nginx ;;
         cloudflare) "${compose[@]}" pull --policy missing tunnel-origin cloudflared ;;
       esac
+    else
+      "${compose[@]}" pull --policy always
     fi
     "${compose[@]}" stop user admin api
     "${compose[@]}" --profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared

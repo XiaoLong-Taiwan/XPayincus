@@ -2,7 +2,7 @@
 
 使用繁體中文溝通。面板相關規範另見 `XPayincus/AGENTS.md`。
 
-- 根 `VERSION` 是整體發行版本，目前為 `v1.0.6`（未發布）。
+- 根 `VERSION` 是整體發行版本，目前為 `v1.0.7`（未發布）。
 - Server 端包含 `XPayincus/client` Dashboard 與 `XPayincus/server` API。
 - Agent 端包含 `XPayincus-Agent`，宿主元件位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`；以 bundle／管理文件整合，Go Agent 不直接載入 eBPF 或 ZFS 核心模組。
 - Docker Compose 僅用於面板、單一 API 與資料庫；宿主機元件不容器化。
