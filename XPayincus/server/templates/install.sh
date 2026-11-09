@@ -1856,9 +1856,33 @@ zfs_storage_available() {
 ensure_incus_storage() {
     local profile root_device root_pool pools selected="${INCUS_STORAGE_POOL:-}"
     local driver="${INCUS_STORAGE_DRIVER:-auto}" size="${INCUS_STORAGE_SIZE:-10GiB}"
-    profile=$(incus profile show default --format json) || return 1
-    root_device=$(printf '%s' "$profile" | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next((n for n,v in d.items() if v.get("type")=="disk" and v.get("path")=="/"), ""))') || return 1
-    root_pool=$(printf '%s' "$profile" | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next((v.get("pool", "") for v in d.values() if v.get("type")=="disk" and v.get("path")=="/"), ""))') || return 1
+    profile=$(incus query /1.0/profiles/default) || return 1
+    profile=$(printf '%s' "$profile" | python3 -c '
+import json,sys
+try:
+    profile = json.load(sys.stdin)
+    if not isinstance(profile, dict):
+        raise ValueError()
+    devices = profile["devices"]
+    if not isinstance(devices, dict):
+        raise ValueError()
+    root = ("", "")
+    for name, device in devices.items():
+        if not isinstance(device, dict):
+            raise ValueError()
+        if device.get("type") == "disk" and device.get("path") == "/":
+            pool = device.get("pool", "")
+            if not name or not isinstance(pool, str) or any(c in name + pool for c in "\r\n\t") or root[0]:
+                raise ValueError()
+            root = (name, pool)
+    print(root[0])
+    print(root[1])
+except (ValueError, KeyError, TypeError):
+    sys.exit("Invalid Incus default profile JSON")
+') || return 1
+    root_device="${profile%%$'\n'*}"
+    root_pool=""
+    if [[ "$profile" == *$'\n'* ]]; then root_pool="${profile#*$'\n'}"; fi
     pools=$(incus storage list --format csv -c n) || return 1
     pools=$(printf '%s\n' "$pools" | LC_ALL=C sort)
     if [[ -n "$root_device" ]]; then

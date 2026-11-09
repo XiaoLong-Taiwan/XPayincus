@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const hostInstallScript = readFileSync(resolve(__dirname, '../templates/install.sh'), 'utf8')
+const hostInstallScript = readFileSync(resolve(__dirname, '../templates/install.sh'), 'utf8').replace(/\r\n/g, '\n')
 const caddyInstallScript = readFileSync(resolve(__dirname, '../templates/caddy.sh'), 'utf8')
 const hostRoutes = readFileSync(resolve(__dirname, '../src/routes/hosts.ts'), 'utf8')
 const zhCnLocale = readFileSync(resolve(__dirname, '../../client/src/locales/zh-CN.ts'), 'utf8')
@@ -17,7 +17,7 @@ const installPanel = readFileSync(resolve(__dirname, '../../scripts/install-pane
 const systemctlWrapper = readFileSync(resolve(__dirname, '../../deploy/incudal-systemctl-wrapper.sh.example'), 'utf8')
 const apiEntrypoint = readFileSync(resolve(__dirname, '../../deploy/compose/api-entrypoint.sh'), 'utf8')
 const panelCertificate = readFileSync(resolve(__dirname, '../src/lib/incus/panel-certificate.ts'), 'utf8')
-const startupCertificate = readFileSync(resolve(__dirname, '../src/scripts/ensure-panel-certificate.ts'), 'utf8')
+const startupCertificate = readFileSync(resolve(__dirname, '../src/scripts/ensure-panel-certificate.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 assert.ok(
   startupCertificate.includes('lstatSync(path)') &&
@@ -309,28 +309,64 @@ info() { :; }
 error() { :; }
 ${shellFunction('parse_binary_size')}
 ${shellFunction('ensure_incus_storage')}
-# Incus 與所有宿主機變更均使用模擬實作，不會呼叫真實服務。
-python3() {
-  if [[ "$2" == *'n for n,v'* ]]; then echo "$ROOT_DEVICE"; else echo "$ROOT_POOL"; fi
-}
+${process.platform === 'win32' ? 'python3() { command python "$@"; }' : ''}
 incus() {
   case "$*" in
-    'profile show default --format json') echo '{}' ;;
+    'profile show default --format json') printf 'Error: unknown flag: --format\n' >&2; return 1 ;;
+    'query /1.0/profiles/default')
+      [[ "$QUERY_STATUS" == 0 ]] || return "$QUERY_STATUS"
+      printf '%s' "$PROFILE_JSON" ;;
     'storage list --format csv -c n') printf '%s' "$POOLS" ;;
-    'storage show '*) return 0 ;;
-    'profile device get default root type') return 1 ;;
+    'storage show '*) return "$POOL_STATUS" ;;
+    'profile device get default root type') return "$ROOT_NAME_STATUS" ;;
     'profile device add '*|'storage create '*) printf '%s\\n' "$*" ;;
-    *) return 91 ;;
+    *) printf 'unexpected Incus command: %s\\n' "$*" >&2; return 91 ;;
   esac
 }
 zfs_storage_available() { return 1; }
-ROOT_DEVICE=""
-ROOT_POOL=""
+PROFILE_JSON='{"name":"default","config":{},"devices":{}}'
+QUERY_STATUS=0
+POOL_STATUS=0
+ROOT_NAME_STATUS=1
 POOLS=""
 `
 assert.equal(runShell(`${storageHarness}
-ROOT_DEVICE=disk0 ROOT_POOL=custom POOLS=custom ensure_incus_storage
+PROFILE_JSON='{"name":"default","devices":{"eth0":{"type":"nic","network":"incusbr0"},"data":{"type":"disk","path":"/data","pool":"other"},"disk0":{"type":"disk","path":"/","pool":"custom"}}}'
+POOLS=$'default\\ncustom' INCUS_STORAGE_POOL=missing INCUS_STORAGE_DRIVER=/dev/sda ensure_incus_storage
 `), '', 'existing profile root must not be modified')
+for (const profile of [
+  '', '{', 'null', '[]', '{}',
+  '{"devices":null}', '{"devices":[]}', '{"devices":{"root":null}}',
+  '{"devices":{"root":{"type":"disk","path":"/","pool":null}}}',
+  '{"devices":{"root":{"type":"disk","path":"/","pool":42}}}',
+  '{"devices":{"root":{"type":"disk","path":"/","pool":"bad\\nname"}}}',
+  '{"devices":{"a":{"type":"disk","path":"/","pool":"one"},"b":{"type":"disk","path":"/","pool":"two"}}}'
+]) {
+  assert.equal(runShell(`${storageHarness}
+PROFILE_JSON='${profile}'
+if ensure_incus_storage; then exit 92; fi
+`), '', 'invalid profile JSON must fail without creating storage or modifying devices')
+}
+for (const device of [
+  '{"type":"disk","path":"/"}',
+  '{"type":"disk","path":"/","pool":""}',
+  '{"type":"disk","path":"/","pool":"missing"}'
+]) {
+  assert.equal(runShell(`${storageHarness}
+PROFILE_JSON='{"devices":{"disk0":${device}}}'
+POOL_STATUS=1
+if ensure_incus_storage; then exit 92; fi
+`), '', 'existing root with missing or unavailable pool must fail without mutation')
+}
+assert.equal(runShell(`${storageHarness}
+QUERY_STATUS=1
+if ensure_incus_storage; then exit 92; fi
+`), '', 'Incus API failure must propagate without storage changes')
+assert.equal(runShell(`${storageHarness}
+PROFILE_JSON='{"devices":{"root":{"type":"disk","path":"/data","pool":"existing"}}}'
+POOLS=existing ROOT_NAME_STATUS=0
+if ensure_incus_storage; then exit 92; fi
+`), '', 'a non-root device named root must never be replaced')
 assert.match(runShell(`${storageHarness}
 POOLS=$'other\\ndefault' ensure_incus_storage
 `), /profile device add default root disk path=\/ pool=default/)
