@@ -1,6 +1,6 @@
 # XPayincus
 
-統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，本次發行目標為 `v1.0.8`；正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準，歷史子專案發行紀錄保留原版本，不代表目前部署版本。
+統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，本次未發布發行目標為 `v1.0.9`；正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準，歷史子專案發行紀錄保留原版本，不代表目前部署版本。
 
 | 邏輯端 | 來源目錄 | 部署方式 |
 | --- | --- | --- |
@@ -10,6 +10,30 @@
 | Agent 儲存元件 | `XPayincus-Agent/components/zfs` | Debian 宿主機核心相依建置 |
 
 前後端業務說明見 [面板 README](XPayincus/README.md)，宿主元件分別見 [Agent](XPayincus-Agent/README.md)、[RFW](XPayincus-Agent/components/rfw/README.md) 與 [ZFS](XPayincus-Agent/components/zfs/README.md)。宿主元件 bundle 與管理邊界見 [元件管理](XPayincus-Agent/components/README.md)；Go Agent 不直接載入 eBPF 或 ZFS 核心模組。pnpm workspace 位於 `XPayincus/`，不是統一倉庫根目錄。
+
+## 統一管理入口
+
+在完整倉庫根目錄執行 `bash scripts/manage.sh`：`1` 開啟 Dashboard / Compose 選單、`2` 開啟 Agent 選單、`0` 退出；子選單正常返回後會再次顯示頂層選單，子入口失敗則保留非零退出狀態。互動輸入使用 `/dev/tty`，可相容 `curl | bash`；建議使用以下先下載成功才執行的方式，避免下載中斷時執行不完整正文。
+
+**以下 main raw URL 的新增入口尚未發布，須將這些變更整合至官方 main 後才可使用；本地完成不代表遠端已可用。** 在有 Bash 的 Linux 主機擇一執行，每行都使用私人暫存目錄並在結束時清除：
+
+```bash
+(umask 077; t=$(mktemp -d) && trap 'rm -rf -- "$t"' EXIT && curl -q -fsSL --proto '=https' --proto-redir '=https' -o "$t/manage.sh" https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/manage.sh && bash "$t/manage.sh")
+(umask 077; t=$(mktemp -d) && trap 'rm -rf -- "$t"' EXIT && wget --no-config --https-only -O "$t/manage.sh" https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/manage.sh && bash "$t/manage.sh")
+```
+
+完整倉庫優先讀取本地 [Dashboard 子入口](XPayincus/deploy/compose/download.sh) 或 [Agent 子入口](scripts/agent-menu.sh)；遠端單檔只用 curl 或 wget 下載所選的官方 raw main 子入口至私人暫存目錄，再以 Bash 執行，離開或收到中斷訊號時清除，不需要 git clone。main 是入口腳本來源；`latest` 指 GitHub 最新正式 Release，排除 draft／prerelease，不代表 main、未發布的發行目標或任意快取版本。Agent 沿用面板安裝器的正式 Release／版本快取規則，快取不等於 latest，不能用快取存在推定它就是最新正式版。
+
+可用 `--dashboard` 或 `--agent` 直接路由，其餘參數原樣傳給子入口；指定子操作可免除選單互動，也能接在上述下載命令的 `bash "$t/manage.sh"` 後：
+
+```bash
+bash scripts/manage.sh --dashboard menu /srv/incudal-panel
+bash scripts/manage.sh --dashboard install /srv/incudal-panel latest
+bash scripts/manage.sh --agent --action status
+sudo bash scripts/manage.sh --agent --action install --panel-url https://admin.example.org --token-file /root/agent-token
+```
+
+頂層不會自動 sudo；Agent 安裝／重裝／更新需 root，應自行對 Agent 路由使用 sudo。Dashboard 部署目錄由子選單詢問或切換，也可直接傳入；請選擇目前帳號可寫入的目錄。無 `/dev/tty` 時須指定路由及完整子操作參數。HTTPS／HTTP 下載錯誤會中止，不執行下載失敗的正文；403 可能涉及 repository／token 權限、組織 SSO、出口 IP 或代理政策，替代下載工具與正式 Release 解析都不能保證讓 403 消失。
 
 ## 面板 Docker Compose
 
@@ -46,9 +70,9 @@ v1.0.2 新增 [舊宿主匯出與首次匯入指南](XPayincus/server/scripts/LE
 
 根 `.github/workflows` 是 GitHub Actions 入口；子目錄 workflow 僅保留歷史參考。GitHub 執行統一 CI，涵蓋版本核對、面板型別檢查與守衛、前後端建置、Agent 測試與跨架構建置，以及 Compose 映像建置。
 
-根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，先等待統一 CI 與版本檢查，再呼叫可重用的 `.github/workflows/docker.yml`，使用原生 amd64／arm64 runner 發布 API 與 web 多架構映像。彙整與 GitHub Release 發布均等待映像成功，再逐一附加完整 28 件資產；手動執行 release workflow 須選 `main`，會發布映像與 Actions artifacts，但不建立 GitHub Release。Release 發布不會自動部署或執行正式 OTA。
+根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，先等待統一 CI 與版本檢查，再呼叫可重用的 `.github/workflows/docker.yml`，使用原生 amd64／arm64 runner 發布 API 與 web 多架構映像。彙整與 GitHub Release 發布均等待映像成功，再逐一附加完整 30 件資產；手動執行 release workflow 須選 `main`，會發布映像與 Actions artifacts，但不建立 GitHub Release。Release 發布不會自動部署或執行正式 OTA。
 
-可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.8`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
+可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.9`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
 
 版本同步、產物命名、SHA256 manifests、Agent 來源與舊 OTA 格式見 [RELEASE.md](RELEASE.md)。ZFS 僅提供 builder 原始碼包，並非已建置的核心模組。宿主安裝器仍可能使用明示釘選的歷史 RFW／ZFS 資產或 DKMS 回退，統一來源版本不代表二進位已重新發布。
 

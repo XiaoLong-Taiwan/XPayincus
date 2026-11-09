@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/panel"
 )
@@ -80,6 +81,48 @@ func TestRejectedDownloadPreservesBinary(t *testing.T) {
 			body, _ := os.ReadFile(path)
 			if string(body) != "old" {
 				t.Fatal("changed binary on rejected download")
+			}
+		})
+	}
+}
+
+func TestNetworkFailurePreservesBinary(t *testing.T) {
+	for _, mode := range []string{"forbidden", "timeout", "redirect", "truncated"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "agent")
+			if err := os.WriteFile(path, []byte("old"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch mode {
+				case "forbidden":
+					w.WriteHeader(http.StatusForbidden)
+				case "timeout":
+					<-r.Context().Done()
+				case "redirect":
+					http.Redirect(w, r, "https://outside.invalid/agent", http.StatusFound)
+				case "truncated":
+					w.Header().Set("Content-Length", "100")
+					_, _ = w.Write([]byte("short"))
+				}
+			}))
+			defer server.Close()
+			client := server.Client()
+			client.Timeout = 100 * time.Millisecond
+			runner := Runner{BinaryPath: path, LockPath: filepath.Join(dir, "lock"), AllowedBaseURL: server.URL, HTTPClient: client,
+				Restart: func(context.Context, string) error { t.Fatal("restart after failed download"); return nil }}
+			err := runner.Apply(context.Background(), panel.UpgradeInstruction{Available: true, Version: "v1.1.0", URL: server.URL, SHA256: sha256Hex([]byte("payload"))}, "v1.0.3")
+			if err == nil {
+				t.Fatal("accepted failed download")
+			}
+			body, err := os.ReadFile(path)
+			if err != nil || string(body) != "old" {
+				t.Fatalf("changed old binary: %q %v", body, err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("left lock or temporary binary: %v %v", entries, err)
 			}
 		})
 	}

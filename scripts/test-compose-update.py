@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -172,11 +174,16 @@ class UpdateTests(unittest.TestCase):
             self.commands.append(('stage', selected))
             return self.official, 'a' * 64
 
+        def activate(*args):
+            if failure == 'activate':
+                raise OSError('fixture switch failed')
+            self.commands.append(('activate',))
+
         with patch.object(sys, 'argv', ['update', str(self.base)]), \
                 patch.object(update, 'fetch', side_effect=fetch), \
                 patch.object(update, 'stage', side_effect=stage), \
                 patch.object(update, 'validate_containers'), \
-                patch.object(update, 'activate', side_effect=lambda *args: self.commands.append(('activate',))), \
+                patch.object(update, 'activate', side_effect=activate), \
                 patch.object(update, 'run', side_effect=run), patch.dict(os.environ, {}, clear=True):
             try:
                 update.main()
@@ -206,9 +213,54 @@ class UpdateTests(unittest.TestCase):
         self.assertNotIn(('activate',), self.commands)
         self.assertFalse(any(command[-1] == 'up' for command in self.commands))
 
+    def test_compose_validation_failure_never_backs_up_or_activates(self):
+        self.run_flow(failure='--quiet')
+        self.assertNotIn(('activate',), self.commands)
+        self.assertFalse(any('export' in command or command[-1] == 'up' for command in self.commands))
+
+    def test_download_failure_never_activates(self):
+        with patch.object(update, 'run', side_effect=subprocess.CalledProcessError(22, ['bash'])), \
+                self.assertRaises(SystemExit) as caught:
+            update.fetch(f'https://api.github.com/repos/{update.REPOSITORY}/releases/latest', self.base / 'metadata')
+        self.assertIn('最新正式 Release 查詢', str(caught.exception))
+        self.assertIn('未切換', str(caught.exception))
+
     def test_up_failure_retains_backup(self):
         self.run_flow(failure='up')
         self.assertTrue(list((self.base / 'backups').glob('before-update-*/panel.dump')))
+
+    def test_switch_failure_retains_backup_and_does_not_start(self):
+        self.run_flow(failure='activate')
+        self.assertTrue(list((self.base / 'backups').glob('before-update-*/panel.dump')))
+        self.assertFalse(any(command[-1] == 'up' for command in self.commands))
+
+    @unittest.skipIf(os.name == 'nt', '需要 Linux 原生符號連結')
+    def test_manual_switch_failure_restores_original_files(self):
+        store = self.base / '.bootstrap'
+        store.mkdir()
+        scratch = self.base / 'scratch'
+        scratch.mkdir()
+        backup = self.base / 'backup'
+        backup.mkdir()
+        target = self.base / 'target'
+        release = target / '.bootstrap/release-fixture'
+        release.mkdir(parents=True)
+        (target / '.bootstrap/current').symlink_to(release.name)
+        before = {name: (self.base / name).read_bytes() for name in update.FILES}
+        for name, content in before.items():
+            (backup / name).write_bytes(content)
+            (release / name).write_bytes(content)
+        replace = os.replace
+
+        def fail_switch(source, destination):
+            if Path(destination).name == 'panel.sh':
+                raise OSError('fixture switch failed')
+            return replace(source, destination)
+
+        with patch.object(update.os, 'replace', side_effect=fail_switch), self.assertRaises(OSError):
+            update.activate(self.base, target, scratch, backup)
+        self.assertEqual(before, {name: (self.base / name).read_bytes() for name in before})
+        self.assertFalse((store / 'current').exists())
 
     def test_downgrade_and_prerelease_rejected_before_download(self):
         for version, prerelease in [('v1.0.4', False), ('v01.0.5', False), ('main', False), ('v1.0.5', True)]:
@@ -261,6 +313,151 @@ class UpdateTests(unittest.TestCase):
             self.assertNotIn('另一個', caught.exception.stderr)
             competitor = subprocess.run(['flock', '-n', str(state / 'operation.lock'), 'true'])
             self.assertNotEqual(competitor.returncode, 0)
+
+
+class DownloadTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        code = (COMPOSE / 'download.sh').read_text(encoding='utf-8').split("<<'DOWNLOAD_PY'\n", 1)[1].split('\nDOWNLOAD_PY\n', 1)[0]
+        self.module = {'__name__': 'download_fixture'}
+        exec(compile(code, 'download-fixture', 'exec'), self.module)
+        self.calls = []
+        self.responses = []
+        self.target = self.base / 'download'
+        self.env = patch.dict(os.environ, {}, clear=True)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def curl(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        status, headers, body = self.responses.pop(0)
+        Path(args[args.index('--dump-header') + 1]).write_text('HTTP/2 ' + str(status) + '\n' + headers)
+        Path(args[args.index('--output') + 1]).write_bytes(body)
+        return subprocess.CompletedProcess(args, 0, str(status), 'untrusted signed query must not print')
+
+    def download(self, url=None):
+        with patch('subprocess.run', side_effect=self.curl):
+            self.module['download'](url or self.module['API'] + '/latest', self.target, 2097152, 'fixture 階段')
+
+    def test_rate_limit_and_permission_diagnostics(self):
+        for status, headers, expected in [(403, 'x-ratelimit-remaining: 0\nx-ratelimit-reset: 123\n', '限流'),
+                                           (403, '', '權限'), (401, '', '認證失敗'), (429, 'retry-after: 60\n', '限流')]:
+            self.responses = [(status, headers, b'private response')]
+            with self.assertRaises(self.module['DownloadError']) as caught:
+                self.download()
+            message = str(caught.exception)
+            self.assertIn(expected, message)
+            self.assertIn('HTTP ' + str(status), message)
+            self.assertIn('fixture 階段', message)
+            self.assertNotIn('private response', message)
+            self.assertFalse(self.target.exists())
+
+    def test_token_only_in_stdin_for_exact_api_origin_and_stripped_on_redirect(self):
+        token = self.base / 'token'
+        token.write_text('fixture_secret')
+        token.chmod(0o600)
+        os.environ['XPAYINCUS_GITHUB_TOKEN_FILE'] = str(token)
+        self.responses = [(302, 'location: https://release-assets.githubusercontent.com/asset?signature=secret\n', b''), (200, '', b'asset')]
+        self.download()
+        self.assertIn('fixture_secret', self.calls[0][1]['input'])
+        self.assertEqual(self.calls[1][1]['input'], '')
+        self.assertTrue(all('fixture_secret' not in str(args) for args, kwargs in self.calls))
+        self.assertNotIn('--location', self.calls[0][0])
+        self.assertEqual(self.target.read_bytes(), b'asset')
+
+    def test_untrusted_redirect_rejected_without_token_leak(self):
+        self.responses = [(302, 'location: https://evil.example/path?signature=secret\n', b'')]
+        with self.assertRaises(self.module['DownloadError']) as caught:
+            self.download()
+        self.assertNotIn('signature', str(caught.exception))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_invalid_token_is_rejected_before_network(self):
+        token = self.base / 'token'
+        token.write_text('fixture\nheader-injection')
+        token.chmod(0o600)
+        os.environ['XPAYINCUS_GITHUB_TOKEN_FILE'] = str(token)
+        with self.assertRaises(self.module['DownloadError']):
+            self.download()
+        self.assertEqual(self.calls, [])
+
+    def test_transport_failure_is_sanitized_and_keeps_previous_file(self):
+        self.target.write_bytes(b'previous')
+        with patch('subprocess.run', return_value=subprocess.CompletedProcess([], 28, '000', 'token signed-query')), \
+                self.assertRaises(self.module['DownloadError']) as caught:
+            self.module['download'](self.module['API'] + '/latest', self.target, 1024, 'fixture')
+        self.assertIn('curl exit=28', str(caught.exception))
+        self.assertNotIn('signed-query', str(caught.exception))
+        self.assertEqual(self.target.read_bytes(), b'previous')
+
+    def test_official_asset_fallback_is_pinned_and_does_not_authenticate_browser_url(self):
+        version = 'v1.0.8'
+        metadata = {'tag_name': version, 'draft': False, 'prerelease': False,
+                    'assets': [{'name': 'SHA256SUMS', 'id': 123}]}
+        self.responses = [(403, '', b'blocked'), (200, '', json.dumps(metadata).encode()), (200, '', b'checksums')]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.download(self.module['RELEASES'] + version + '/SHA256SUMS')
+        self.assertEqual(self.calls[0][1]['input'], '')
+        self.assertEqual(self.calls[1][0][-1], self.module['API'] + '/tags/' + version)
+        self.assertEqual(self.calls[2][0][-1], self.module['API'] + '/assets/123')
+        self.assertEqual(self.target.read_bytes(), b'checksums')
+
+    def test_fallback_rejects_wrong_version_and_missing_asset(self):
+        for metadata in [{'tag_name': 'v0.0.1', 'draft': False, 'prerelease': False},
+                         {'tag_name': 'v1.0.8', 'draft': False, 'prerelease': False, 'assets': []}]:
+            self.responses = [(403, '', b''), (200, '', json.dumps(metadata).encode())]
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(self.module['DownloadError']):
+                self.download(self.module['RELEASES'] + 'v1.0.8/SHA256SUMS')
+            self.assertFalse(self.target.exists())
+
+    def test_http_error_removes_query_and_preserves_existing_target(self):
+        self.target.write_bytes(b'previous')
+        self.responses = [(302, 'location: https://release-assets.githubusercontent.com/file?signature=secret\n', b''), (403, '', b'private')]
+        with self.assertRaises(self.module['DownloadError']) as caught:
+            self.download()
+        self.assertNotIn('signature', str(caught.exception))
+        self.assertEqual(self.target.read_bytes(), b'previous')
+
+    def test_latest_resolves_once_and_pins_minimal_bundle_checksum(self):
+        version = 'v1.0.8'
+        artifact = f'xpayincus-compose-{version}.tar.gz'
+        metadata = {'tag_name': version, 'draft': False, 'prerelease': False, 'assets': [{'name': artifact}]}
+        self.responses = [(200, '', json.dumps(metadata).encode()), (200, '', ('a' * 64 + '  ' + artifact + '\n').encode())]
+        with patch('subprocess.run', side_effect=self.curl):
+            self.assertEqual(self.module['resolve']('latest'), version + ' ' + 'a' * 64)
+        self.assertEqual([args[-1] for args, kwargs in self.calls], [self.module['API'] + '/latest', self.module['RELEASES'] + version + '/SHA256SUMS'])
+
+    def test_latest_rejects_prerelease_missing_bundle_and_duplicate_checksum(self):
+        artifact = 'xpayincus-compose-v1.0.8.tar.gz'
+        valid = {'tag_name': 'v1.0.8', 'draft': False, 'prerelease': False, 'assets': [{'name': artifact}]}
+        for metadata in [{**valid, 'prerelease': True}, {**valid, 'tag_name': 'main'}, {**valid, 'assets': []}]:
+            self.responses = [(200, '', json.dumps(metadata).encode())]
+            with patch('subprocess.run', side_effect=self.curl), self.assertRaises(self.module['DownloadError']):
+                self.module['resolve']('latest')
+        entry = ('a' * 64 + '  ' + artifact + '\n').encode()
+        self.responses = [(200, '', json.dumps(valid).encode()), (200, '', entry * 2)]
+        with patch('subprocess.run', side_effect=self.curl), self.assertRaises(self.module['DownloadError']):
+            self.module['resolve']('latest')
+
+    def test_minimal_bundle_403_uses_pinned_api_asset(self):
+        artifact = 'xpayincus-compose-v1.0.8.tar.gz'
+        metadata = {'tag_name': 'v1.0.8', 'draft': False, 'prerelease': False, 'assets': [{'name': artifact, 'id': 789}]}
+        self.responses = [(403, '', b'blocked'), (200, '', json.dumps(metadata).encode()), (200, '', b'bundle')]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.download(self.module['RELEASES'] + 'v1.0.8/' + artifact)
+        self.assertEqual(self.calls[-1][0][-1], self.module['API'] + '/assets/789')
+
+    def test_target_stage_only_requests_minimal_bundle(self):
+        def fetch(url, target):
+            target.write_text('a' * 64 + '  xpayincus-compose-v1.0.8.tar.gz\n')
+        destination = self.base / 'target'
+        destination.mkdir()
+        (destination / 'update.py').write_text('fixture')
+        with patch.object(update, 'fetch', side_effect=fetch), patch.object(update, 'run') as run:
+            update.stage(COMPOSE, 'v1.0.8', self.base, 'target')
+        self.assertEqual(run.call_args.args[0][2], 'install-bundle')
 
 
 if __name__ == '__main__':

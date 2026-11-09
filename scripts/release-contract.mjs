@@ -61,8 +61,19 @@ export const composeImageTag = version => {
 }
 export const composeImages = version => Object.fromEntries(['api', 'user', 'admin'].map(service => [service, `ghcr.io/xiaolong-taiwan/xpayincus-${service === 'api' ? 'api' : 'panel-web'}:${composeImageTag(version)}`]))
 
+export const composeBundleFiles = [
+  'VERSION',
+  ...[
+    'docker-compose.yml', 'compose.yaml', 'compose.build.yaml', 'panel.sh',
+    'download.sh', 'README.md', 'https-proxy.conf.example', 'origin-entrypoint.sh',
+    'edge-nginx.conf.template', 'tunnel-nginx.conf.template',
+    'Dockerfile', 'Dockerfile.dockerignore', 'api-entrypoint.sh',
+    'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml', 'update.py'
+  ].map(name => `XPayincus/deploy/compose/${name}`)
+]
+
 export function artifactNames(version) {
-  const names = ['manifest.json', `xpayincus-zfs-builder-${version}-source.tar.gz`, `xpayincus-dashboard-${version}-compose.tar.gz`, `xpayincus-compose-${version}.sh`]
+  const names = ['manifest.json', `xpayincus-zfs-builder-${version}-source.tar.gz`, `xpayincus-dashboard-${version}-compose.tar.gz`, `xpayincus-compose-${version}.tar.gz`, `xpayincus-compose-${version}.sh`]
   for (const arch of ['amd64', 'arm64']) {
     names.push(`xpayincus-panel-${version}-linux-${arch}.tar.gz`)
     names.push(`xpayincus-agent-${version}-linux-${arch}`, `xpayincus-agent-${version}-linux-${arch}.gz`)

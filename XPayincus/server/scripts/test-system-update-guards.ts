@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './test-native-panel-download.js'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

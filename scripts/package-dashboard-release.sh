@@ -8,6 +8,7 @@ OUTPUT="$DIST_DIR/xpayincus-dashboard-${VERSION}-compose.tar.gz"
 BOOTSTRAP="$DIST_DIR/xpayincus-compose-${VERSION}.sh"
 require_new "$OUTPUT"
 require_new "$BOOTSTRAP"
+require_new "$DIST_DIR/xpayincus-compose-${VERSION}.tar.gz"
 STAGING="$(mktemp -d "$DIST_DIR/.dashboard.XXXXXXXX")"
 trap 'rm -rf -- "$STAGING"' EXIT
 mkdir "$STAGING/source"
@@ -35,5 +36,6 @@ done
 node "$ROOT_DIR/scripts/prepare-compose-release.mjs" "$STAGING/source"
 bash -n "$STAGING/source/XPayincus/deploy/compose/download.sh"
 tar -czf "$STAGING/archive.tar.gz" -C "$STAGING/source" .
+node "$ROOT_DIR/scripts/package-compose-bundle.mjs" "$STAGING/source" "$DIST_DIR"
 publish_file "$STAGING/archive.tar.gz" "$OUTPUT"
 publish_file "$STAGING/source/XPayincus/deploy/compose/download.sh" "$BOOTSTRAP"

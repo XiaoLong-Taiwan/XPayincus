@@ -2,7 +2,7 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.8`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.9`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
 
 ## 宿主元件整合
 
@@ -41,6 +41,17 @@ go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml
 
 ### 獨立互動與參數入口
 
+數字選單入口為根 `scripts/agent-menu.sh`，可單獨下載或由 `scripts/manage.sh` 以 `bash agent-menu.sh` 呼叫。提供新裝、保留設定重裝、更新至最新穩定版、本地 binary 重裝、status 及最近 100 行 logs；從 `/dev/tty` 讀取選項，管線下載仍可互動。選單只從指定面板下載 `/api/agent/install.sh` 單檔，不 clone 倉庫，不簽發憑證，不管理 Incus／ZFS／RFW。
+
+```bash
+curl -q -fsS --proto '=https' https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh -o agent-menu.sh
+sudo bash agent-menu.sh
+```
+
+亦可用 `wget --https-only -O agent-menu.sh https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh`。非互動介面：`--action install|reinstall|update|local|status|logs`；新裝接受 `--panel-url`、`--token-file`（未提供 TOKEN 時由 installer 隱藏輸入），`local` 接受 `--binary`，下載模式接受 `--version latest|vSemVer`。重裝／更新讀取既有設定並保留憑證，不接受新面板地址。installer 仍需 curl；manifest／版本檢查需要 python3，缺少時明確停止，不自動安裝套件。首次使用新版版本守衛時，若舊 binary 不支援 `-version`，應先核對可信本地 binary 再使用本地重裝，避免無法判定版本時盲目降版。
+
+預設來源為統一倉庫 `XiaoLong-Taiwan/XPayincus` 的穩定 `/releases/latest`，明確指定其他 Agent repository 時仍保留 `agent-` 前綴相容；可用 `INCUDAL_AGENT_RELEASE_TAG_PREFIX` 明確覆寫。403／離線回退會顯示實際快取版本及「無法確認最新」，不將快取版標為 latest。顯式 `--version` 透過面板取得指定版本 manifest，下載固定版本與 SHA256；已安裝版本較新或低於 minimumUpdaterVersion 時拒絕遠端替換。
+
 先從可信的面板下載模板再執行，避免把 TOKEN 放進下載 URL 或 shell 歷史；正式環境使用 HTTPS。以下指令在 Linux 宿主機執行，需要 root、Bash、systemd 及 curl：
 
 ```bash
@@ -72,6 +83,7 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 ### 失敗與重試
 
+- 主控向可信已設定 GitHub repository 讀取 Agent Release 時，每次請求含重新導向及回應本文共用 15 秒逾時；連線／本文傳輸中斷及 502／503／504 最多補試一次。403／429 不立即重試、不移除憑證改用匿名請求；探索、manifest 或 binary 網路失敗時，僅使用已完整驗證的持久快取，沒有快取則報錯。無效 schema、版本、大小、SHA256 或不可信重新導向直接拒絕，不藉舊快取繞過驗證。磁碟快取保留原完整版本，下載失敗不發布半套資產。
 - manifest／binary 下載使用連線逾時 10 秒、單次最多 120 秒，curl 對暫時性錯誤最多重試 2 次、間隔 2 秒，重試視窗 360 秒；永久 HTTP 錯誤、SHA256 不符及解壓失敗不盲目重試。
 - 預檢、下載及 SHA256 檢查在 TOKEN 兌換前完成。此階段失敗可修正網路、權限或檔案後重跑，TOKEN 仍受原本 30 分鐘時效限制。
 - TOKEN 兌換只有一次請求，連線逾時 10 秒、總逾時 30 秒。403／404、兌換回應遺失、格式不符或後續冒煙失敗時，先確認原因，再從管理後台產生新 Agent TOKEN；不自動重送或儲存兌換後的秘密供續跑。
@@ -89,7 +101,7 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 宿主詳情的 Agent 區塊在 Agent 在線、啟用且發現較新版本時顯示「一鍵更新 Agent」。確認視窗列出目前及目標版本，明確授權替換 Agent binary 並重啟 Agent 服務；只有宿主擁有者或管理員可操作。不輪換憑證，不更新 Incus／RFW／ZFS 或 systemd unit。
 
-`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.8" }`（版本僅為範例）。後端重新驗證目標版本、平台與最低 updater 版本，固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
+`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.9" }`（版本僅為範例）。後端重新驗證目標版本、平台與最低 updater 版本，固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
 
 未授權心跳不再自動下發新版。每次授權只下發一次，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`（等待心跳）、`delivered`（已下發）、`succeeded`（後續 HMAC 心跳版本達到目標或更新）、`unconfirmed`（逾時未確認），附目標、請求／下發及到期時間。成功只代表新版心跳，並不證明所有宿主功能健康。
 
@@ -109,9 +121,9 @@ INCUDAL_AGENT_RELEASE_REPOSITORY=
 INCUDAL_AGENT_RELEASE_TAG_PREFIX=
 ```
 
-舊 `INCUDAL_AGENT_RELEASE_REPOSITORY` 非空時優先且預設使用 `agent-v*` tag；統一來源預設 `v*`。明確空前綴代表 `v*`，`agent-` 代表舊格式。兩個來源均未設定仍沿用舊獨立倉庫預設值。私有來源使用 `INCUDAL_AGENT_RELEASE_TOKEN`，修改後重啟後端。Compose 需另將設定注入 API 容器。
+`INCUDAL_AGENT_RELEASE_REPOSITORY` 非空時優先；選中官方統一倉庫或與統一設定相同的倉庫時使用 `v*`，其他 Agent 專用來源預設 `agent-v*`。明確空前綴代表 `v*`，`agent-` 代表舊格式。兩個來源均未設定時使用 `XiaoLong-Taiwan/XPayincus`。私有來源使用 `INCUDAL_AGENT_RELEASE_TOKEN`，修改後重啟後端。Compose 已傳入兩個 repository 設定；前綴與 token 等額外設定需另行注入 API 容器。
 
-遠端代理要求同一 Release 具備兩架構的未壓縮二進位 `xpayincus-agent-${VERSION}-linux-{amd64,arm64}`。只有 `.gz`、manifest、原始碼 zip 或 Actions artifacts 不足以使用遠端更新。也可設定 `INCUDAL_AGENT_RELEASE_DIR=/opt/incudal/agent-release`，將既有格式 `manifest.json` 與其列出的兩架構 `.gz` 一起放入該目錄。
+遠端代理優先讀取同一 Release 的版本化 Agent manifest，沒有時讀取 `manifest.json`，依其雙架構檔名、大小與 SHA256 驗證 `.gz` 或未壓縮二進位。只有缺少 manifest 時才回退到兩架構未壓縮二進位 `xpayincus-agent-${VERSION}-linux-{amd64,arm64}` 並計算雜湊；無效 manifest 不回退。原始碼 zip 或 Actions artifacts 不能取代 Release 資產。也可設定 `INCUDAL_AGENT_RELEASE_DIR=/opt/incudal/agent-release`，將既有格式 `manifest.json` 與其列出的兩架構 `.gz` 一起放入該目錄。
 
 ## 建置與發行
 

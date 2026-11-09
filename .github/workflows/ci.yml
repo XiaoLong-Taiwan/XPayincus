@@ -27,8 +27,11 @@ jobs:
       - name: Test Compose release and bootstrap contracts
         run: |
           node scripts/test-compose-release.mjs
+          python3 scripts/test-compose-bundle.py
           python3 scripts/test-compose-bootstrap.py
           python3 scripts/test-compose-update.py
+          python3 scripts/test-compose-wizard.py
+          python3 scripts/test-manage-menu.py
           python3 scripts/test-agent-installer.py
           python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
   panel:
@@ -57,6 +60,7 @@ jobs:
       - run: pnpm test
       - run: pnpm --filter server test:panel-backup-guards
       - run: pnpm --filter server test:update-manifest-contract
+      - run: pnpm --filter server test:native-panel-download
       - run: bash scripts/test-install-panel-guards.sh
       - run: pnpm build
   agent:

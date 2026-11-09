@@ -52,6 +52,7 @@ outputs.set('release-manifest.json', json({
   schemaVersion: 1, product: 'xpayincus', releaseChannel: 'unified-v1', version, buildTime, artifacts: records,
   compose: {
     artifact: `xpayincus-dashboard-${version}-compose.tar.gz`,
+    bundle: `xpayincus-compose-${version}.tar.gz`,
     projectName: 'incudal-panel',
     override: 'XPayincus/deploy/compose/compose.release.yaml',
     defaultMode: 'pull',

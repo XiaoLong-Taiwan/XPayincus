@@ -27,6 +27,8 @@ Agent 限制初始 URL 與每次重新導向都在已設定面板 origin；保�
 
 面板 Release 下載只接受 HTTPS GitHub 可信主機，每次重新導向重新驗證；token 只送到 GitHub API origin。下載逾時 120 秒，artifact 硬上限 2 GiB，超限中止，失敗移除暫存檔；大小與 SHA-256 通過後才交給既有 staging 檢查。Manifest 與資產由可信 Release／面板提供，SHA-256 不等於獨立數位簽章。
 
+原生面板優先透過 Release asset 的 `url`（同一倉庫的 `https://api.github.com/repos/<owner>/<repo>/releases/assets/<id>`）以 `Accept: application/octet-stream` 下載 manifest 與 artifact，支援已授權的私有 Release。沒有 API URL 的舊回應沿用 `browser_download_url`；明確提供非法 API URL 時拒絕。Manifest 的 artifact `url` 仍須精確符合公開下載路徑與 Release asset，執行時的可選 `downloadUrl` 由已驗證的 Release 回應產生，不接受 manifest 注入。HTTP 錯誤與逾時標示 metadata、manifest 或 artifact 下載階段；下載失敗不切換 current、不遷移資料庫、不重啟服務。
+
 ## 本地契約檢查
 
 在 `XPayincus/server` 執行：
@@ -34,6 +36,7 @@ Agent 限制初始 URL 與每次重新導向都在已設定面板 origin；保�
 ```powershell
 node --import tsx scripts/test-update-manifest-contract.ts
 node --import tsx scripts/test-system-update-guards.ts
+node --import tsx scripts/test-native-panel-download.ts
 node --import tsx scripts/test-agent-install-command-guards.ts
 node node_modules/typescript/bin/tsc --noEmit
 ```

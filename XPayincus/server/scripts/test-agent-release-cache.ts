@@ -31,7 +31,7 @@ function controller() {
     return match[0]
   }).join('\n')
   const source = `${helpers}
-const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus-Agent'
+const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus'
 const githubApiBaseUrl = 'https://api.github.com'
 const githubDownloadBaseUrl = 'https://github.com'
 const agentReleaseCacheTtlMs = 300000
@@ -41,11 +41,14 @@ const agentBinaryNamePattern = /^xpayincus-agent-v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0
 const agentReleaseBinaryNamePattern = /^xpayincus-agent-v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?-linux-(amd64|arm64)$/
 let agentReleaseManifestCache = null, agentReleaseBinaryCache = null, diskAgentReleaseCache = null
 ${route.slice(route.indexOf('function getAgentReleaseRepository()'), route.indexOf('async function getLatestAgentVersion()'))}
-return { manifest: readAgentUpgradeManifest, binary: downloadAgentReleaseBinary }
+return { manifest: readAgentUpgradeManifest, binary: downloadAgentReleaseBinary, repository: getAgentReleaseRepository, prefix: getAgentReleaseTagPrefix, latest: fetchLatestAgentRelease }
 `
   const dependencies = { process: { env }, createHash, existsSync, readFileSync, statSync, isAbsolute, join, homedir, AgentReleaseCache, readBoundedAgentResponse, validateCachedAgentManifest, fetchRelease, readReleaseJson }
   return new Function(...Object.keys(dependencies), ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }))(...Object.values(dependencies)) as {
     manifest: () => Promise<ReturnType<typeof fixture>>
+    repository: () => string
+    prefix: () => string
+    latest: () => Promise<{ tag_name?: string } | null>
     binary: (input: { version: string; name: string; expectedSha256: string }) => Promise<Buffer>
   }
 }
@@ -58,6 +61,7 @@ let rawLegacy = false
 function mock() {
   globalThis.fetch = (async (input, init) => {
     const url = String(input)
+    if (url.endsWith('/latest')) return new Response(null, { status: 404 })
     requests.push(url)
     assert.equal(init?.redirect, 'manual')
     assert.ok(init?.signal)
@@ -77,6 +81,27 @@ function mock() {
 }
 
 try {
+  delete env.INCUDAL_AGENT_RELEASE_REPOSITORY
+  assert.equal(controller().repository(), 'XiaoLong-Taiwan/XPayincus')
+  assert.equal(controller().prefix(), '')
+  env.INCUDAL_RELEASE_REPOSITORY = 'fixture/unified'
+  env.INCUDAL_AGENT_RELEASE_REPOSITORY = 'XiaoLong-Taiwan/XPayincus'
+  assert.equal(controller().prefix(), '')
+  env.INCUDAL_AGENT_RELEASE_REPOSITORY = 'fixture/unified'
+  assert.equal(controller().prefix(), '')
+  delete env.INCUDAL_RELEASE_REPOSITORY
+  env.INCUDAL_AGENT_RELEASE_REPOSITORY = 'fixture/agent'
+  assert.equal(controller().prefix(), 'agent-')
+  env.INCUDAL_AGENT_RELEASE_TAG_PREFIX = ''
+  assert.equal(controller().prefix(), '')
+  delete env.INCUDAL_AGENT_RELEASE_TAG_PREFIX
+  globalThis.fetch = (async input => {
+    assert.ok(String(input).endsWith('/latest'))
+    return Response.json({ tag_name: 'agent-v1.2.3', assets: Object.values(fixture().files) })
+  }) as typeof fetch
+  assert.equal((await controller().latest())?.tag_name, 'agent-v1.2.3')
+  globalThis.fetch = (async () => Response.json({ tag_name: 'agent-v1.2.3-rc.1', prerelease: true, assets: [] })) as typeof fetch
+  assert.equal(await controller().latest(), null)
   const semverRoot = join(root, 'semver')
   const semverCache = new AgentReleaseCache(semverRoot, 'fixture')
   for (const version of ['v1.2.3+build.001', 'v1.2.3-rc.1+build.002']) {
@@ -118,6 +143,47 @@ try {
   await assert.rejects(restarted.binary({ ...input, version: '../escape' }), /version/)
 
   const namespace = (await readdir(root))[0]!
+  for (const [path, failure] of [['/releases', '403'], ['/manifest', '403'], ['/0', '403'], ['/manifest', '429'], ['/manifest', 'timeout'], ['/0', 'interrupted']] as const) {
+    mock()
+    const upstream = globalThis.fetch
+    let failures = 0
+    globalThis.fetch = (async (url, init) => {
+      if (String(url).endsWith(path)) {
+        failures++
+        if (failure === 'timeout') throw new DOMException('mock timeout', 'TimeoutError')
+        if (failure === 'interrupted') return new Response(new ReadableStream({ start(stream) { stream.error(new TypeError('terminated')) } }))
+        return new Response('unavailable', { status: Number(failure) })
+      }
+      if (String(url).endsWith('/manifest')) return Response.json(fixture('v1.2.4'))
+      const response = await upstream(url, init)
+      if (String(url).endsWith('/releases')) {
+        const releases = await response.json() as { tag_name: string; assets: { name: string }[] }[]
+        releases[0]!.tag_name = 'agent-v1.2.4'
+        for (const asset of releases[0]!.assets) asset.name = asset.name.replace('v1.2.3', 'v1.2.4')
+        return Response.json(releases)
+      }
+      return response
+    }) as typeof fetch
+    assert.equal((await controller().manifest()).version, 'v1.2.3')
+    assert.equal(failures, ['timeout', 'interrupted'].includes(failure) ? 2 : 1)
+    assert.equal(await readFile(join(root, namespace, 'current'), 'utf8'), 'v1.2.3')
+    assert.deepEqual((await readdir(join(root, namespace))).sort(), ['current', 'v1.2.3'])
+  }
+  mock()
+  const upstream = globalThis.fetch
+  let transient = 0
+  globalThis.fetch = (async (url, init) => {
+    if (String(url).endsWith('/releases') && transient++ === 0) return new Response(null, { status: 503 })
+    return upstream(url, init)
+  }) as typeof fetch
+  assert.equal((await controller().manifest()).version, 'v1.2.3')
+  assert.equal(transient, 2)
+  mock()
+  const validUpstream = globalThis.fetch
+  globalThis.fetch = (async (url, init) => String(url).endsWith('/manifest')
+    ? Response.json({ ...fixture(), schemaVersion: 2 }) : validUpstream(url, init)) as typeof fetch
+  await assert.rejects(controller().manifest(), /schemaVersion/)
+
   await writeFile(join(root, namespace, 'v1.2.3', file.name), 'tampered')
   await assert.rejects(controller().manifest(), /size|sha256/)
 

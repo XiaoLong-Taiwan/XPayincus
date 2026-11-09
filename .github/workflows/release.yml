@@ -147,7 +147,8 @@ jobs:
       - run: node scripts/collect-release-artifacts.mjs dist/incoming dist/unified
       - name: Package Agent ZFS host component source
         run: bash scripts/package-zfs-source.sh
-      - run: bash scripts/package-dashboard-release.sh
+      - name: Package Dashboard sources, minimal Compose bundle and bootstrap
+        run: bash scripts/package-dashboard-release.sh
       - run: node scripts/generate-release-manifests.mjs dist/unified
       - uses: actions/upload-artifact@v4
         with:
@@ -174,6 +175,8 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           cd release-assets
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 28
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 30
+          test -s "xpayincus-compose-${VERSION}.tar.gz"
+          test -s "xpayincus-compose-${VERSION}.tar.gz.sha256"
           sha256sum --check SHA256SUMS
           gh release create "$VERSION" ./* --verify-tag --title "XPayincus $VERSION" --generate-notes --latest

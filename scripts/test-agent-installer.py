@@ -1,4 +1,6 @@
 import os
+import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -123,6 +125,20 @@ class AgentInstallerTests(unittest.TestCase):
         self.assertEqual(events.count('curl'), 1)
         self.assertFalse((self.base / 'request').exists())
 
+    def test_staging_write_failure_precedes_exchange(self):
+        self.credentials()
+        self.shim('install', 'for arg in "$@"; do [[ "$arg" != *.download.*.tmp ]] || exit 73; done\n/usr/bin/install "$@"')
+        _, events = self.run_installer(*self.local_args(), success=False)
+        self.assertNotIn('curl', events)
+        self.assertEqual((self.base / 'agent').read_text(), 'old binary')
+
+    def test_failed_atomic_copy_does_not_publish_partial_binary(self):
+        before = {p: (self.base / p).read_bytes() for p in ['agent', 'config.yaml', 'agent.service']}
+        self.shim('install', 'args=(); while (($#)); do case "$1" in -o|-g) shift 2;; *) args+=("$1"); shift;; esac; done\nlast="${args[${#args[@]}-1]}"\nif [[ "$last" == */agent.new ]]; then printf partial > "$last"; exit 73; fi\n/usr/bin/install "${args[@]}"')
+        self.run_installer('--reinstall', *self.local_args(), success=False)
+        for path, content in before.items():
+            self.assertEqual((self.base / path).read_bytes(), content)
+
     def test_invalid_origin_rejected(self):
         self.credentials()
         for url in ['https://user:password@panel.example.org', 'https://panel.example.org/path', 'https://panel.example.org?token=private']:
@@ -154,6 +170,37 @@ class AgentInstallerTests(unittest.TestCase):
         self.credentials()
         self.shim('curl', 'for arg in "$@"; do [[ "$arg" != *ait_* ]] || exit 90; done\nwhile (($#)); do if [ "$1" = -o ]; then cp "$TEST_BASE/response" "$2"; shift; fi; shift; done\ncat > "$TEST_BASE/request"')
         self.run_installer(*self.local_args())
+
+    def test_manifest_version_guards_and_cache_notice(self):
+        source = SOURCE.read_text()
+        function = re.search(r'^select_manifest\(\) \{.*?^\}', source, re.M | re.S).group()
+        manifest_path = self.base / 'manifest.json'
+        manifest = {'version': 'v1.2.3', 'schemaVersion': 1, 'minimumUpdaterVersion': 'v1.0.0',
+                    'source': 'cache', 'files': {'linux-amd64': {'name': 'xpayincus-agent-v1.2.3-linux-amd64.gz', 'sha256': 'a' * 64, 'size': 42, 'gzip': True}}}
+        self.shim('python3', 'exec python "$@"')
+        self.shim('current-agent', 'echo v1.1.0')
+        function_script = self.base / 'select.sh'
+        function_script.write_text('set -eu\nfail() { echo "$*" >&2; exit 1; }\n' + function + '\nselect_manifest\n', newline='\n')
+        self.env.update(MANIFEST_PATH=self.path(manifest_path), OS='linux', ARCH='amd64', TARGET_VERSION='latest',
+                        BIN_PATH=self.path(self.bin / 'current-agent'), TEST_TOOLS=self.path(self.bin))
+        for mutation, accepted in [({}, True), ({'version': 'v0.9.0'}, False), ({'schemaVersion': 2}, False), ({'minimumUpdaterVersion': 'v2.0.0'}, False)]:
+            manifest_path.write_text(json.dumps({**manifest, **mutation}))
+            result = subprocess.run([BASH, '-c', 'export PATH="$TEST_TOOLS:$PATH"; bash "$1"', 'test', self.path(function_script)], env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode == 0, accepted, result.stderr)
+            if accepted:
+                self.assertEqual(result.stdout.splitlines()[0], 'v1.2.3')
+                self.assertEqual(result.stdout.splitlines()[-1], 'cache')
+
+    def test_menu_downloads_only_installer_and_preserves_reinstall(self):
+        self.shim('id', 'echo 0')
+        self.shim('curl', 'printf "%s\\n" "$@" > "$TEST_BASE/download-args"\nwhile (($#)); do if [ "$1" = -o ]; then cp "$TEST_BASE/fixture-installer" "$2"; shift; fi; shift; done')
+        (self.base / 'fixture-installer').write_text('printf "%s\\n" "$@" > "$TEST_BASE/installer-args"\n', newline='\n')
+        self.env['TEST_TOOLS'] = self.path(self.bin)
+        menu = self.path(ROOT / 'scripts/agent-menu.sh')
+        result = subprocess.run([BASH, '-c', 'export PATH="$TEST_TOOLS:$PATH"; bash "$1" --action update', 'test', menu], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / 'installer-args').read_text().splitlines(), ['--reinstall', '--version', 'latest'])
+        self.assertIn('https://panel.example.org/api/agent/install.sh', (self.base / 'download-args').read_text())
 
 
 if __name__ == '__main__':

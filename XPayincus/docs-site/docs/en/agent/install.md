@@ -23,9 +23,9 @@ INCUDAL_AGENT_RELEASE_TAG_PREFIX=
 INCUDAL_AGENT_RELEASE_TOKEN=
 ```
 
-Configure these on the panel. A nonempty legacy `INCUDAL_AGENT_RELEASE_REPOSITORY` takes priority over the unified source. When the tag prefix is unset, the legacy source defaults to `agent-` and the unified source to an empty prefix; explicitly empty means `v*` tags. Compose requires an override or equivalent to inject these variables into the API container; setting the Compose `.env` alone is insufficient.
+Configure these on the panel. The default repository is `XiaoLong-Taiwan/XPayincus`. A nonempty `INCUDAL_AGENT_RELEASE_REPOSITORY` takes priority over the unified source. When the tag prefix is unset, the official unified repository or a source matching the unified setting uses an empty prefix; other Agent repositories default to `agent-`. An explicitly empty prefix means `v*` tags. Compose passes both repository settings to the API; additional variables such as the prefix and token still require an override or equivalent injection.
 
-Remote releases must include both amd64 and arm64 uncompressed binaries. Gzip files, manifests, tags, or Actions artifacts alone are insufficient. Downloads remain behind the panel same-origin `/api/agent/manifest.json` and `/api/agent/binary` proxy; private tokens stay on the panel. Agent, Incus, RFW, and ZFS do not run in panel Compose.
+Remote releases must include assets for both architectures. The proxy prefers the versioned Agent manifest, falling back to `manifest.json`, and validates version, size, and SHA256 for gzip or uncompressed binaries. Only a missing manifest permits fallback to both uncompressed binaries; an invalid manifest is rejected. Tags or Actions artifacts cannot replace Release assets. Downloads remain behind the panel same-origin `/api/agent/manifest.json` and `/api/agent/binary` proxy; private tokens stay on the panel. Agent, Incus, RFW, and ZFS do not run in panel Compose.
 
 If GitHub Agent releases are unavailable, use a local release directory containing the legacy `manifest.json` and both architecture `.gz` files; manifest SHA256 values cover the compressed bytes:
 

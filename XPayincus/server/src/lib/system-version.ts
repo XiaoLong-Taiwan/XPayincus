@@ -39,6 +39,7 @@ export interface OtaArtifactInfo {
   platform: string
   arch: string
   url: string
+  downloadUrl?: string
   sha256: string
   size: number | null
 }
@@ -52,6 +53,7 @@ export interface OtaReleaseInfo {
 
 interface GitHubReleaseAsset {
   name?: string
+  url?: string
   size?: number
   browser_download_url?: string
 }
@@ -211,12 +213,27 @@ export async function readReleaseJson<T>(response: Response): Promise<T> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetchRelease(url)
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+function getAssetDownloadUrl(asset: GitHubReleaseAsset, repository: string): string {
+  if (asset.url === undefined) return asset.browser_download_url || ''
+  const prefix = `https://api.github.com/repos/${repository}/releases/assets/`
+  if (!asset.url.startsWith(prefix) || !/^[1-9]\d*$/.test(asset.url.slice(prefix.length))) {
+    throw new Error('Invalid release asset API URL')
   }
-  return await readReleaseJson<T>(response)
+  return asset.url
+}
+
+async function fetchJson<T>(url: string, stage = 'release metadata', accept?: string): Promise<T> {
+  try {
+    const response = await fetchRelease(url, getReleaseToken(), accept)
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new Error(`HTTP ${response.status}`)
+    }
+    return await readReleaseJson<T>(response)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${stage}: ${message}`)
+  }
 }
 
 export async function getOtaReleaseInfo(tag: string, currentVersion?: string): Promise<OtaReleaseInfo> {
@@ -252,7 +269,7 @@ export async function getOtaReleaseInfo(tag: string, currentVersion?: string): P
       version?: unknown
       gitTag?: unknown
       artifacts?: unknown
-    } | null>(manifestUrl)
+    } | null>(getAssetDownloadUrl(manifestAsset!, repository), 'OTA manifest download', 'application/octet-stream')
     if (!manifest || manifest.schemaVersion !== 1 || manifest.product !== 'xpayincus' ||
       manifest.releaseChannel !== 'unified-v1' || manifest.version !== tag || manifest.gitTag !== tag ||
       !Array.isArray(manifest.artifacts)) {
@@ -280,6 +297,9 @@ export async function getOtaReleaseInfo(tag: string, currentVersion?: string): P
         matchingAssets[0]?.browser_download_url !== artifact.url ||
         (artifact.size !== null && matchingAssets[0]?.size !== undefined && artifact.size !== matchingAssets[0]?.size)) {
         throw new Error('Panel artifact does not match release asset')
+      }
+      if (matchingAssets[0]!.url !== undefined) {
+        artifact.downloadUrl = getAssetDownloadUrl(matchingAssets[0]!, repository)
       }
     }
 

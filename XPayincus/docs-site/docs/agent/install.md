@@ -23,9 +23,9 @@ INCUDAL_AGENT_RELEASE_TAG_PREFIX=
 INCUDAL_AGENT_RELEASE_TOKEN=
 ```
 
-上述設定放在面板端。舊 `INCUDAL_AGENT_RELEASE_REPOSITORY` 非空時優先於統一來源；前綴未設定時舊來源預設 `agent-`，統一來源預設空值，明確空值代表 `v*` tag。Compose 需透過 override 等方式將變數傳入 API 容器，僅寫入 Compose `.env` 不會自動注入。
+上述設定放在面板端；未設定來源時預設使用 `XiaoLong-Taiwan/XPayincus`。`INCUDAL_AGENT_RELEASE_REPOSITORY` 非空時優先於統一來源；前綴未設定時，官方統一倉庫或與統一設定相同的來源使用空值，其他 Agent 專用來源預設 `agent-`，明確空值代表 `v*` tag。Compose 已傳入兩個 repository 設定；前綴與 token 等額外變數仍需透過 override 等方式注入 API 容器。
 
-遠端 Release 必須同時包含 amd64、arm64 未壓縮二進位；只有 `.gz`、manifest、tag 或 Actions artifact 不足。下載維持面板同源 `/api/agent/manifest.json` 與 `/api/agent/binary` 代理，私有 token 不下發宿主。Agent、Incus、RFW、ZFS 不在面板 Compose 內執行。
+遠端 Release 須包含雙架構資產；優先依版本化 Agent manifest（沒有時使用 `manifest.json`）核對 `.gz` 或未壓縮二進位的版本、大小與 SHA256。只有缺少 manifest 時才回退至兩架構未壓縮二進位；無效 manifest 直接拒絕。tag 或 Actions artifact 不能取代 Release 資產。下載維持面板同源 `/api/agent/manifest.json` 與 `/api/agent/binary` 代理，私有 token 不下發宿主。Agent、Incus、RFW、ZFS 不在面板 Compose 內執行。
 
 如果暫時沒有 GitHub Agent Release，也可以使用本地 release 目錄，放置舊格式 `manifest.json` 與兩架構 `.gz`；manifest 的 SHA256 對應壓縮檔：
 

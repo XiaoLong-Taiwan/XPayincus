@@ -37,7 +37,7 @@ class BootstrapTests(unittest.TestCase):
         self.bin.mkdir()
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                         FIXTURE_ARCHIVE=str(self.archive), DOCKER_LOG=str(self.log))
-        self.shim('curl', 'while (($#)); do if [[ "$1" == --output ]]; then output="$2"; shift; fi; shift; done\ncp -- "$FIXTURE_ARCHIVE" "$output"')
+        self.shim('curl', 'while (($#)); do if [[ "$1" == --output ]]; then output="$2"; shift; fi; shift; done\ncp -- "$FIXTURE_ARCHIVE" "$output"\nprintf 200')
         self.shim('docker', 'printf "%s\\n" "$*" >> "$DOCKER_LOG"\nexit 99')
         self.make_archive()
 
@@ -152,7 +152,7 @@ class ArchiveCoreTests(BootstrapTests):
     __unittest_skip__ = False
     __unittest_skip_why__ = ''
 
-    def run_bootstrap(self, action='install', checksum=None, success=True, panel=False):
+    def run_bootstrap(self, action='install', checksum=None, success=True, panel=False, bundle=False):
         self.destination.mkdir(exist_ok=True)
         store = self.destination / '.bootstrap'
         store.mkdir(exist_ok=True)
@@ -165,6 +165,8 @@ class ArchiveCoreTests(BootstrapTests):
         code = script.split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
         args = ['bootstrap', str(scratch), str(self.destination), action,
                 VERSION, checksum or '0' * 64]
+        artifact = f'xpayincus-compose-{VERSION}.tar.gz' if bundle else f'xpayincus-dashboard-{VERSION}-compose.tar.gz'
+        args.append(artifact)
         links = {}
 
         def symlink(target, location):
@@ -178,7 +180,7 @@ class ArchiveCoreTests(BootstrapTests):
                 self.assertEqual(syntax.call_count, 5)
                 receipt = json.loads(next(store.glob('release-*/receipt.json')).read_text())
                 self.assertEqual(receipt['version'], VERSION)
-                self.assertEqual(receipt['artifact'], f'xpayincus-dashboard-{VERSION}-compose.tar.gz')
+                self.assertEqual(receipt['artifact'], artifact)
                 override = json.loads(next(store.glob('release-*/compose.release.yaml')).read_text())
                 self.assertEqual(override, json.loads(release_override()))
                 self.assertTrue((store / 'current').exists())
@@ -207,6 +209,28 @@ class ArchiveCoreTests(BootstrapTests):
     def test_download_failure_and_lock_keep_current(self):
         self.make_archive(missing='download.sh')
         self.run_bootstrap(success=False)
+
+    def test_minimal_bundle_installs_and_records_artifact(self):
+        import ast
+        allowed = ast.literal_eval('(' + (COMPOSE / 'update.py').read_text().split('FILES = (', 1)[1].split('\n)', 1)[0] + ')')
+        with tarfile.open(self.archive, 'r:gz') as original:
+            entries = [(member, original.extractfile(member).read()) for member in original
+                       if member.isfile() and (member.name == './VERSION' or member.name.rsplit('/', 1)[-1] in allowed)]
+        with tarfile.open(self.archive, 'w:gz') as archive:
+            for member, content in entries:
+                archive.addfile(member, io.BytesIO(content))
+        self.run_bootstrap(bundle=True)
+
+    def test_minimal_bundle_rejects_source_files(self):
+        with tarfile.open(self.archive, 'r:gz') as original:
+            entries = [(member, original.extractfile(member).read()) for member in original if member.isfile()]
+        with tarfile.open(self.archive, 'w:gz') as archive:
+            for member, content in entries:
+                archive.addfile(member, io.BytesIO(content))
+            source = tarfile.TarInfo('XPayincus/client/package.json')
+            source.size = 2
+            archive.addfile(source, io.BytesIO(b'{}'))
+        self.run_bootstrap(bundle=True, success=False)
 
 
 class PanelCommandTests(unittest.TestCase):
@@ -302,6 +326,8 @@ class PanelCommandTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 result, commands = self.run_panel(42, mode=mode)
                 self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+                self.assertIn('建置／拉取全部必要映像', result.stderr)
+                self.assertIn('尚未停止既有服務', result.stderr)
                 self.assertTrue(any(line.endswith(' pull --policy always') for line in commands))
                 self.assertFalse(any(' stop ' in line or ' up ' in line or ' down' in line for line in commands))
 
@@ -349,32 +375,79 @@ class PanelCommandTests(unittest.TestCase):
     def test_checksum_failure_never_runs_archive_code(self):
         fixture = self.base / 'fixture.tar.gz'
         fixture.write_bytes(b'untrusted archive')
-        curl_log = self.base / 'curl.log'
         marker = self.base / 'python-ran'
-        for name, body in [('curl',
-                'printf "%s\\n" "$*" > "$CURL_LOG"\n'
-                'while (($#)); do if [[ "$1" == --output ]]; then output="$2"; shift; fi; shift; done\n'
-                'cp -- "$FIXTURE_ARCHIVE" "$output"'),
-                ('python3', 'touch -- "$PYTHON_MARKER"')]:
+        for name, body in [('python3',
+                'if [[ "$2" == --fetch ]]; then cp -- "$FIXTURE_ARCHIVE" "$4"; else touch -- "$PYTHON_MARKER"; fi')]:
             target = self.bin / name
             target.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n', newline='\n')
             target.chmod(0o755)
         bin_path = self.bin.as_posix()
         if os.name == 'nt':
             bin_path = '/' + bin_path[0].lower() + bin_path[2:]
-        env = dict(os.environ, CURL_LOG=curl_log.as_posix(), FIXTURE_ARCHIVE=fixture.as_posix(),
+        env = dict(os.environ, FIXTURE_ARCHIVE=fixture.as_posix(),
                    PYTHON_MARKER=marker.as_posix())
         result = subprocess.run([BASH, '-c',
             'export PATH="$1:$PATH"; bash "$2" install "$3" v1.0.5 "$4"', 'test',
             bin_path, (COMPOSE / 'download.sh').as_posix(),
             (self.base / 'new').as_posix(), '0' * 64], env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('https://github.com/XiaoLong-Taiwan/XPayincus/releases/download/v1.0.5/'
-                      'xpayincus-dashboard-v1.0.5-compose.tar.gz', curl_log.read_text())
-        self.assertIn("--proto =https --proto-redir =https", curl_log.read_text())
+        self.assertIn('下載校驗失敗', result.stderr)
         self.assertFalse(marker.exists())
         self.assertFalse((self.base / 'new/.bootstrap/current').exists())
         self.assertEqual(list((self.base / 'new/.bootstrap').glob('.staging.*')), [])
+
+    def test_menu_dispatches_literal_arguments_and_survives_failure(self):
+        code = (COMPOSE / 'download.sh').read_text(encoding='utf-8').split('dashboard_menu() {\n', 1)[1].split('\n}\ncase ', 1)[0]
+        code = '\n'.join(line for line in code.splitlines() if 'exec 8<>/dev/tty' not in line)
+        code = code.replace('<&8', '').replace('>&8', '>&2')
+        panel = self.base / 'panel.sh'
+        panel.write_text('printf "<%s>" "$@" >> "$MENU_LOG"\nprintf "\\n" >> "$MENU_LOG"\nif [[ "$1" == update ]]; then exit 42; fi\n', newline='\n')
+        log = self.base / 'menu.log'
+        directory = self.base.as_posix()
+        if os.name == 'nt':
+            directory = '/' + directory[0].lower() + directory[2:]
+        script = 'set -Eeuo pipefail\ndashboard_menu() {\n' + code + '\n}\ndashboard_menu "$1"'
+        result = subprocess.run([BASH, '-c', script, 'test', directory],
+                                input=b'3\n4\n5\n2\n0\n',
+                                env=dict(os.environ, MENU_LOG=log.as_posix()), capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('<update>', log.read_text())
+        self.assertIn('<up><pull>', log.read_text())
+        self.assertIn('<status>', log.read_text())
+        self.assertIn('<wizard>', log.read_text())
+        self.assertIn('更新失敗'.encode(), result.stderr)
+        self.assertFalse((ROOT / 'forbidden').exists())
+
+    @unittest.skipIf(os.name == 'nt', '需要 Linux controlling tty 與 pty')
+    def test_menu_uses_tty_with_piped_stdin(self):
+        import pty
+        import select
+        import time
+        pid, descriptor = pty.fork()
+        if pid == 0:
+            os.execv(BASH, [BASH, '-c', 'bash "$1" menu </dev/null', 'test', str(COMPOSE / 'download.sh')])
+        output = b''
+        deadline = time.monotonic() + 10
+        try:
+            while time.monotonic() < deadline:
+                if select.select([descriptor], [], [], 0.1)[0]:
+                    try:
+                        output += os.read(descriptor, 65536)
+                    except OSError:
+                        break
+                    if b'Compose' in output:
+                        os.write(descriptor, b'0\n')
+                ended, status = os.waitpid(pid, os.WNOHANG)
+                if ended:
+                    self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+                    break
+            else:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                self.fail('menu tty fixture timeout')
+        finally:
+            os.close(descriptor)
+        self.assertIn(b'Compose', output)
 
 
 if __name__ == '__main__':

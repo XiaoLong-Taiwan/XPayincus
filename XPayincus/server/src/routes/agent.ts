@@ -83,6 +83,7 @@ interface AgentUpgradeManifestFile {
 }
 
 interface AgentUpgradeManifest {
+  source?: 'local' | 'release' | 'cache'
   schemaVersion?: number
   minimumUpdaterVersion?: string
   version?: string
@@ -98,6 +99,7 @@ interface GitHubReleaseAsset {
 }
 
 interface GitHubRelease {
+  prerelease?: boolean
   draft?: boolean
   tag_name?: string
   name?: string
@@ -126,7 +128,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const agentBinaryNamePattern = /^xpayincus-agent-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?-linux-(amd64|arm64)(?:\.gz)?$/
 const agentReleaseBinaryNamePattern = /^xpayincus-agent-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?-linux-(amd64|arm64)$/
-const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus-Agent'
+const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus'
 const githubApiBaseUrl = 'https://api.github.com'
 const githubDownloadBaseUrl = 'https://github.com'
 const agentReleaseCacheTtlMs = 5 * 60 * 1000
@@ -391,8 +393,9 @@ function getAgentReleaseTagPrefix(): string {
     return prefix
   }
   const unifiedRepository = process.env.INCUDAL_RELEASE_REPOSITORY?.trim()
-  return !process.env.INCUDAL_AGENT_RELEASE_REPOSITORY?.trim() &&
-    unifiedRepository && getAgentReleaseRepository() === unifiedRepository
+  const repository = getAgentReleaseRepository()
+  return !process.env.INCUDAL_AGENT_RELEASE_REPOSITORY?.trim() ||
+    repository === defaultAgentReleaseRepository || repository === unifiedRepository
     ? '' : 'agent-'
 }
 
@@ -554,23 +557,45 @@ function releaseAssetNameToAgentPlatform(name: string, version: string): 'linux-
   return null
 }
 
-async function fetchJsonFromGitHub<T>(url: string): Promise<T> {
+async function readAgentReleaseResponse<T>(url: string, accept: string, read: (response: Response) => Promise<T>): Promise<T> {
   assertTrustedAgentReleaseDownloadUrl(url)
-  let response: Response
-  try {
-    response = await fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/vnd.github+json', agentReleaseFetchTimeoutMs)
-  } catch (error) {
-    if (error instanceof Error && /Untrusted|redirect/i.test(error.message)) throw error
-    throw new AgentReleaseNetworkError('Agent release discovery failed')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response
+    try {
+      response = await fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, accept, agentReleaseFetchTimeoutMs)
+    } catch (error) {
+      if (error instanceof Error && /Untrusted|redirect/i.test(error.message)) throw error
+      if (attempt === 0) continue
+      throw new AgentReleaseNetworkError('Agent release connection failed')
+    }
+    if (!response.ok) {
+      await response.body?.cancel()
+      if (attempt === 0 && [502, 503, 504].includes(response.status)) continue
+      throw new AgentReleaseNetworkError(`Agent release HTTP ${response.status}`)
+    }
+    try {
+      return await read(response)
+    } catch (error) {
+      if (!(error instanceof Error) || !['AbortError', 'TimeoutError', 'TypeError'].includes(error.name)) throw error
+      if (attempt === 0) continue
+      throw new AgentReleaseNetworkError('Agent release response interrupted')
+    }
   }
-  if (!response.ok) {
-    throw new AgentReleaseNetworkError(`GitHub request failed: ${response.status}`)
-  }
-  return await readReleaseJson<T>(response)
+  throw new AgentReleaseNetworkError('Agent release unavailable')
+}
+
+async function fetchJsonFromGitHub<T>(url: string): Promise<T> {
+  return readAgentReleaseResponse(url, 'application/vnd.github+json', response => readReleaseJson<T>(response))
 }
 
 async function fetchLatestAgentRelease(): Promise<GitHubRelease | null> {
-  const releases = await fetchJsonFromGitHub<unknown>(getAgentReleaseApiUrl())
+  let latest: unknown
+  try {
+    latest = await fetchJsonFromGitHub<unknown>(`${getAgentReleaseApiUrl()}/latest`)
+  } catch (error) {
+    if (!(error instanceof AgentReleaseNetworkError) || !error.message.endsWith('404')) throw error
+  }
+  const releases = isRecord(latest) ? [latest] : await fetchJsonFromGitHub<unknown>(getAgentReleaseApiUrl())
   if (!Array.isArray(releases)) {
     return null
   }
@@ -581,7 +606,7 @@ async function fetchLatestAgentRelease(): Promise<GitHubRelease | null> {
     }
     const version = normalizeAgentReleaseVersion(sanitizeShortString(release.tag_name, 128) ?? undefined)
     const assets = Array.isArray(release.assets) ? release.assets : []
-    if (version && !release.draft && ['amd64', 'arm64'].every(arch =>
+    if (version && !version.includes('-') && !release.draft && !release.prerelease && ['amd64', 'arm64'].every(arch =>
       assets.some(asset => isRecord(asset) && (asset.name === `xpayincus-agent-${version}-linux-${arch}` || asset.name === `xpayincus-agent-${version}-linux-${arch}.gz`))
     )) {
       return release as GitHubRelease
@@ -595,28 +620,15 @@ async function fetchAgentReleaseAssetSha256(asset: GitHubReleaseAsset): Promise<
   if (!downloadUrl) {
     return null
   }
-  assertTrustedAgentReleaseDownloadUrl(downloadUrl)
-
-  const response = await fetchRelease(downloadUrl, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/octet-stream', agentReleaseFetchTimeoutMs)
-  if (!response.ok || !response.body) {
-    throw new Error(`Agent release asset download failed: ${response.status} ${response.statusText}`)
-  }
-
-  const hash = createHash('sha256')
-  let totalBytes = 0
-  for await (const chunk of response.body) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    totalBytes += buffer.length
-    if (totalBytes > agentBinaryDownloadLimitBytes) {
-      throw new Error('Agent release asset exceeds download limit')
-    }
-    hash.update(buffer)
-  }
-  return hash.digest('hex')
+  const binary = await readAgentReleaseResponse(downloadUrl, 'application/octet-stream', readBoundedAgentResponse)
+  return createHash('sha256').update(binary).digest('hex')
 }
 
 async function readAgentUpgradeManifest(): Promise<AgentUpgradeManifest | null> {
-  if (getLocalAgentReleaseDir()) return readLocalAgentUpgradeManifest()
+  if (getLocalAgentReleaseDir()) {
+    const local = await readLocalAgentUpgradeManifest()
+    return local ? { ...local, source: 'local' } : null
+  }
   if (agentReleaseManifestCache && agentReleaseManifestCache.expiresAt > Date.now()) {
     return agentReleaseManifestCache.manifest
   }
@@ -626,9 +638,10 @@ async function readAgentUpgradeManifest(): Promise<AgentUpgradeManifest | null> 
   let manifest: AgentUpgradeManifest | null
   try {
     manifest = await cache.ensure('latest', () => loadRemoteAgentRelease(), true)
+    if (manifest) manifest = { ...manifest, source: 'release' }
   } catch (error) {
     if (!(error instanceof AgentReleaseNetworkError) || !current) throw error
-    manifest = current
+    manifest = { ...current, source: 'cache' }
   }
   if (manifest) agentReleaseManifestCache = { expiresAt: Date.now() + agentReleaseCacheTtlMs, manifest }
   return manifest
@@ -659,15 +672,14 @@ async function loadRemoteAgentRelease(exactVersion?: string) {
     files: {}
   }
   const assets = new Map<string, GitHubReleaseAsset>()
-  const published = release.assets.filter(asset => asset.name === 'manifest.json')
+  const namedManifest = release.assets.filter(asset => asset.name === `xpayincus-agent-${version}-manifest.json`)
+  const published = namedManifest.length ? namedManifest : release.assets.filter(asset => asset.name === 'manifest.json')
   if (published.length > 1) throw new Error('Ambiguous Agent manifest assets')
   if (published.length === 1) {
     const url = published[0]?.url || published[0]?.browser_download_url
     if (!url) throw new Error('Missing Agent manifest URL')
     assertTrustedAgentReleaseDownloadUrl(url)
-    const response = await fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/octet-stream', agentReleaseFetchTimeoutMs)
-    if (!response.ok) throw new Error(`Agent manifest HTTP ${response.status}`)
-    const raw = await readReleaseJson<unknown>(response)
+    const raw = await readAgentReleaseResponse(url, 'application/octet-stream', response => readReleaseJson<unknown>(response))
     if (!isRecord(raw)) throw new Error('Invalid published Agent manifest')
     validateCachedAgentManifest(raw)
     if (raw.version !== version) throw new Error('Agent manifest release version mismatch')
@@ -698,13 +710,7 @@ async function loadRemoteAgentRelease(exactVersion?: string) {
       continue
     }
     if (assets.has(name)) throw new Error('Ambiguous Agent binary assets')
-    let sha256: string | null = null
-    try {
-      sha256 = await fetchAgentReleaseAssetSha256(asset as GitHubReleaseAsset)
-    } catch (error) {
-      console.warn('[AgentRelease] Failed to hash Agent release asset', { name, error })
-      continue
-    }
+    const sha256 = await fetchAgentReleaseAssetSha256(asset as GitHubReleaseAsset)
     if (!sha256) {
       continue
     }
@@ -736,8 +742,7 @@ function prepareRemoteAgentRelease(manifest: AgentUpgradeManifest, assets: Map<s
       if (!assetName) throw new Error('Invalid Agent release asset name')
       const url = asset.url || asset.browser_download_url || getAgentReleaseAssetUrl(getAgentReleaseTag(validated.version), assetName)
       assertTrustedAgentReleaseDownloadUrl(url)
-      const response = await fetchRelease(url, process.env.INCUDAL_AGENT_RELEASE_TOKEN?.trim() || null, 'application/octet-stream', agentReleaseFetchTimeoutMs)
-      const binary = await readBoundedAgentResponse(response)
+      const binary = await readAgentReleaseResponse(url, 'application/octet-stream', readBoundedAgentResponse)
       if (binary.length !== asset.size) throw new Error('Agent release asset size mismatch')
       return binary
     }
@@ -1066,8 +1071,13 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       .send(script)
   })
 
-  fastify.get('/manifest.json', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const manifest = await readAgentUpgradeManifest()
+  fastify.get<{ Querystring: { version?: string } }>('/manifest.json', async (request, reply: FastifyReply) => {
+    const version = request.query.version
+    if (version !== undefined && !normalizeAgentBinaryVersion(version)) return reply.code(400).send({ error: 'Invalid Agent version' })
+    const manifest = version && !getLocalAgentReleaseDir()
+      ? await getDiskAgentReleaseCache().ensure(version, () => loadRemoteAgentRelease(version))
+      : await readAgentUpgradeManifest()
+    if (version && manifest?.version !== version) return reply.code(404).send({ error: 'Requested Agent version not available' })
     if (!manifest) {
       return reply.code(404).send({ error: 'Agent manifest not found', code: 'AGENT_MANIFEST_NOT_FOUND' })
     }

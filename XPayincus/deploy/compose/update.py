@@ -18,6 +18,13 @@ FILES = (
     'Dockerfile', 'Dockerfile.dockerignore', 'api-entrypoint.sh',
     'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml',
 )
+PHASE = '更新前置檢查'
+
+
+def phase(message):
+    global PHASE
+    PHASE = message
+    print(f'更新階段：{message}', flush=True)
 
 
 def fail(message):
@@ -29,16 +36,18 @@ def run(args, **kwargs):
 
 
 def fetch(url, target):
-    run(['curl', '--fail', '--silent', '--show-error', '--location',
-         '--proto', '=https', '--proto-redir', '=https', '--connect-timeout', '20',
-         '--max-time', '300', '--retry', '2', '--max-filesize', '2097152',
-         '--output', str(target), url])
+    label = '最新正式 Release 查詢' if url.endswith('/latest') else '固定版本 SHA256SUMS 下載'
+    try:
+        run(['bash', str(Path(__file__).with_name('download.sh')), '--fetch', url,
+             str(target), '2097152', label])
+    except subprocess.CalledProcessError as error:
+        fail(f'{label}失敗（exit={error.returncode}）；請依前述 HTTP 狀態處理。部署檔及現有服務未切換。')
 
 
-def checksum(version, scratch):
+def checksum(version, scratch, bundle=False):
     target = scratch / 'SHA256SUMS'
     fetch(f'{RELEASES}/{version}/SHA256SUMS', target)
-    artifact = f'xpayincus-dashboard-{version}-compose.tar.gz'
+    artifact = f'xpayincus-compose-{version}.tar.gz' if bundle else f'xpayincus-dashboard-{version}-compose.tar.gz'
     entries = [line.split() for line in target.read_text().splitlines()]
     matches = [entry for entry in entries if len(entry) == 2 and entry[1] == artifact]
     if len(matches) != 1 or not re.fullmatch('[0-9a-f]{64}', matches[0][0]):
@@ -47,9 +56,17 @@ def checksum(version, scratch):
 
 
 def stage(base, version, scratch, name):
-    digest = checksum(version, scratch)
+    phase(f'下載與驗證 {name} {version} 部署工具')
+    bundle = name == 'target'
+    receipt = base / '.bootstrap/current/receipt.json'
+    if name == 'previous' and receipt.is_file():
+        bundle = json.loads(receipt.read_text()).get('artifact') == f'xpayincus-compose-{version}.tar.gz'
+    digest = checksum(version, scratch, bundle=bundle)
     destination = scratch / name
-    run(['bash', str(base / 'download.sh'), 'install', str(destination), version, digest])
+    try:
+        run(['bash', str(base / 'download.sh'), 'install-bundle' if bundle else 'install', str(destination), version, digest])
+    except subprocess.CalledProcessError as error:
+        fail(f'{PHASE}失敗（exit={error.returncode}）；請檢查前述下載／SHA256／封裝錯誤，原部署未切換。')
     if name == 'target' and not (destination / 'update.py').is_file():
         fail('目標 Release 尚未交付宿主一鍵更新工具。')
     return destination, digest
@@ -258,6 +275,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='.update-', dir=store) as temporary:
         scratch = Path(temporary)
         metadata = scratch / 'release.json'
+        phase('查詢最新正式 Release')
         fetch(f'https://api.github.com/repos/{REPOSITORY}/releases/latest', metadata)
         release = json.loads(metadata.read_text())
         version = release.get('tag_name', '')
@@ -267,19 +285,27 @@ def main():
             fail('拒絕自動降版。')
         target, digest = stage(base, version, scratch, 'target')
         official = target if version == old_version else stage(base, old_version, scratch, 'previous')[0]
+        phase('核對本機部署檔與容器身分')
         validate_files(base, official)
         validate_containers(base)
+        phase('驗證目標 Compose')
         update_compose(base, target)
         backup = base / 'backups'
         backup.mkdir(exist_ok=True)
         backup = Path(tempfile.mkdtemp(prefix='before-update-', dir=backup))
+        phase(f'備份原部署檔與資料庫至 {backup}')
         for name in FILES:
             if (base / name).is_file():
                 shutil.copyfile(base / name, backup / name)
         run(['bash', str(base / 'panel.sh'), 'export', str(backup / 'panel.dump')])
-        activate(base, target, scratch, backup)
+        phase('切換已驗證部署工具')
+        try:
+            activate(base, target, scratch, backup)
+        except OSError:
+            fail(f'部署檔切換失敗；尚未執行 up。原部署檔與 DB 備份保留於 {backup}；請檢查入口與 .bootstrap/current，依備份修復後重試。')
         print(f'已固定官方 {version}，SHA256={digest}；備份：{backup}', flush=True)
         try:
+            phase('拉取映像並啟動目標版本')
             run(['bash', str(base / 'panel.sh'), 'up'])
         except subprocess.CalledProcessError:
             fail(f'更新啟動失敗；部署檔與 DB 備份保留於 {backup}。請檢查 status/logs；不自動回滾資料庫。')
@@ -289,4 +315,5 @@ if __name__ == '__main__':
     try:
         dispatch()
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
-        fail(f'更新失敗（{type(error).__name__}）；請檢查網路、部署及備份，未自動回滾。')
+        detail = f'命令 exit={error.returncode}' if isinstance(error, subprocess.CalledProcessError) else '檔案權限／回應格式錯誤'
+        fail(f'更新階段「{PHASE}」失敗：{detail}；請檢查前述輸出及備份。未自動回滾資料庫。')

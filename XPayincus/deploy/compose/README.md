@@ -1,8 +1,8 @@
-# 面板 Compose v1.0.8 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.9 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-本文件描述統一版 v1.0.8 Compose 配置（發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.9 Compose 配置（尚未發布；發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
 
@@ -17,7 +17,7 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 可使用完整倉庫執行 `up` 或 `up build`，或解壓已發布的 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。使用官方發行包時保留附帶的 `compose.release.yaml`；也可只複製該包完整 `deploy/compose/` 目錄，執行 init 與預設 pull 部署。手動／自訂部署沒有該 release 檔時，`up` 與 `up pull` 直接依既有 Compose 的 image 拉取，不要求先以 `update` 納管或改用 build。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.8`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.8`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.9`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.9`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。缺少新入口的舊部署，CLI 與 `init` 回退使用 `compose.yaml`；已存在但損壞的入口不會被忽略。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -48,10 +48,38 @@ TCP／ICMP 提供可複製的公開 IP 指令，請客戶於本機或自己已�
 
 ### 安全下載入口（建議 pull 部署）
 
-Release 提供版本化的 `xpayincus-compose-vX.Y.Z.sh`（原始碼為 `download.sh`）；需要 Linux、Bash、Python 3、curl、sha256sum、flock、find 與 mktemp。來源固定為 `XiaoLong-Taiwan/XPayincus` 的固定版本 Release Dashboard Compose 資產，不接受 main、latest 或自訂下載 URL。先從可信發行紀錄取得入口腳本及 Dashboard archive 各自的 SHA256；必須由獨立可信管道確認預期值，不能下載後自行計算就視為驗證。不使用 `curl | bash`。Debian／Ubuntu 可先安裝 `sudo apt-get install bash python3 curl ca-certificates coreutils util-linux findutils openssl`。
+Release 提供版本化的 `xpayincus-compose-vX.Y.Z.sh`（原始碼為 `download.sh`）；需要 Linux、Bash、Python 3.9 以上、curl、sha256sum、flock、find 與 mktemp。latest 僅解析官方 `XiaoLong-Taiwan/XPayincus` 正式 Release，下載前固定為 `vX.Y.Z`；不接受自訂下載 URL。Debian／Ubuntu 可先安裝 `sudo apt-get install bash python3 curl ca-certificates coreutils util-linux findutils openssl`。
+
+先下載入口到私有暫存目錄、檢查 Bash 語法，再啟動 Dashboard 數字選單：
 
 ```bash
-VERSION=v1.0.8
+bash -c 'set -eu; d=$(mktemp -d); trap '\''rm -rf -- "$d"'\'' EXIT; curl --fail --silent --show-error --location --proto =https --proto-redir =https --output "$d/compose.sh" https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/XPayincus/deploy/compose/download.sh; bash -n "$d/compose.sh"; bash "$d/compose.sh" menu'
+```
+
+wget 入口（後續下載仍需 curl）：
+
+```bash
+bash -c 'set -eu; d=$(mktemp -d); trap '\''rm -rf -- "$d"'\'' EXIT; wget --https-only --timeout=30 --tries=3 -qO "$d/compose.sh" https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/XPayincus/deploy/compose/download.sh; bash -n "$d/compose.sh"; bash "$d/compose.sh" menu'
+```
+
+便利入口信任官方 HTTPS 與 main 維護權限；main 只提供入口，部署內容只下載正式 Release。`bash -n` 是語法檢查，不是來源驗證；需要獨立驗證時使用下方固定版本可信 SHA256 模式。不要 source 網路正文或 `curl | bash`。選單使用 `/dev/tty`，標準輸入被管線佔用時仍可操作；無終端時使用非互動 CLI。此入口只提供 Dashboard，頂層 Dashboard／Agent 選擇由統一入口整合。
+
+選單數字：1 安裝最新 bundle 後自動進入設定精靈並啟動、2 對已下載但尚未初始化的部署執行精靈、3 更新既有部署、4 拉取映像並啟動、5 狀態、6 日誌、7 匯出 DB、8 切換部署目錄、0 離開。可執行 `bash download.sh menu /srv/incudal-panel` 或已安裝的 `bash panel.sh menu`。單獨進入精靈為 `bash panel.sh wizard`；舊 `setup`／`init` 非互動 CLI 保持只初始化、不啟動的行為。
+
+安裝精靈依序詢問：入口（1 Nginx／2 Cloudflare Tunnel／3 external）、前站 HTTPS origin、管理站 HTTPS origin、管理員電子郵件、管理員密碼及確認。公開網址沿用 HTTPS 政策，不接受 HTTP、路徑、尾斜線或同 hostname；密碼沿用 8–128 字元且需大寫、小寫與數字的政策。管理員帳號為 `admin`，輸入的郵件用於 ADMIN_EMAIL。密碼與 Tunnel token 從 `/dev/tty` 隱藏讀取，不放進 argv、環境變數或輸出；不要開啟終端錄製或輸入記錄。
+
+Nginx 接著詢問兩個網域各自的 fullchain.pem 與 privkey.pem 來源路徑。可重複輸入同一組涵蓋兩個網域的 wildcard 憑證路徑；精靈使用 OpenSSL 檢查有效期、系統信任鏈、hostname 及公私鑰配對，只接受不需互動解密的私鑰，驗證通過才複製至 `tls/user/`、`tls/admin/`。不自動簽發、不產生假 TLS，也不把自簽憑證直接當成受信任；私有 CA 須事先安全安裝到作業系統信任庫。使用者須自行完成 DNS、443 入口及憑證續期。
+
+Cloudflare 接著隱藏詢問 Tunnel token，寫入 `secrets/cloudflare_tunnel_token`，權限 0600。請在 Cloudflare 設定前站與管理站兩個公開 hostname，兩者 Service 均為 `http://tunnel-origin:80`，保留原 Host header；Cloudflare 提供公開 TLS。精靈不呼叫 Cloudflare 管理 API，不要求 API key、不自動建立 DNS／Tunnel 規則。external 模式則由使用者既有代理終止 TLS。
+
+所有輸入與 TLS 驗證完成後才寫入 `.env`、獨立 secrets 及所需 TLS，檔案權限 0600、私密目錄 0700。若已有 `.env`、`secrets`、`tls`、`data`、`certs`、`config` 或 `backups`，直接拒絕覆蓋；設定失敗／取消不執行 up，暫存私密資料會清理。成功寫入後自動執行 `up pull`，只有健康檢查通過才顯示精靈完成。pull／啟動失敗保留設定，修正後以選單 4 或 `bash panel.sh up pull` 重試；不要重新初始化。容器健康不等同 DNS、外網 TLS 或登入驗收，也不承諾 DB 自動回滾。
+
+非互動最新安裝為 `bash download.sh install /srv/incudal-panel latest`，可省略 latest。自動取得同 repository 的 SHA256SUMS，無須手動找 SHA，但這不是獨立簽章。只下載 `xpayincus-compose-vX.Y.Z.tar.gz` 最小 bundle；缺少資產會停止，不退回完整來源包、不 git clone。bundle 格式為根 `VERSION` 與 `XPayincus/deploy/compose/` 固定部署檔，必須有 `update.py`、`compose.release.yaml`；不得含 client/server 來源或私人資料。此資產須由官方打包／發布流程交付，本機入口修改不代表線上已存在。
+
+固定版本可信 SHA256 模式仍相容；請從獨立可信管道確認入口與 archive 的預期值，不能下載後自行計算就視為驗證：
+
+```bash
+VERSION=v1.0.9
 BOOTSTRAP_SHA256='填入可信的入口腳本64位小寫SHA256'
 ARCHIVE_SHA256='填入可信的Dashboard封裝64位小寫SHA256'
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
@@ -61,7 +89,7 @@ printf '%s  %s\n' "$BOOTSTRAP_SHA256" "xpayincus-compose-$VERSION.sh" | sha256su
   bash "xpayincus-compose-$VERSION.sh" install /srv/incudal-panel "$VERSION" "$ARCHIVE_SHA256"
 ```
 
-此處使用 v1.0.8 範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
+此處使用尚未發布的 v1.0.9 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
 
 ```bash
 cd /srv/incudal-panel
@@ -72,7 +100,7 @@ bash panel.sh setup https://pay.example.org https://admin.example.org admin@exam
 
 下載先驗證整包 SHA256，再核對包內根 `VERSION`、必要檔案、映像 override 與 Bash 語法。只寫入固定部署檔案清單，拒絕 traversal、重複路徑、符號／硬連結及特殊檔案，並限制下載及解壓大小。完整成功後，使用同一檔案系統內的 rename 原子切換 `.bootstrap/current`；根入口連結均固定指向該指標。版本、資產名與 checksum 記錄於 `.bootstrap/current/receipt.json`，舊 release 保留供人工檢查，不自動清理。
 
-此模式下載完整 Dashboard archive，但只取出 Compose 部署檔案，不安裝 build source 或 `.env.example`；使用預設 pull。`.env`、`secrets/`、`certs/`、`tls/`、`data/`、`backups/`、`config/`、本機 `source/` 都不在更新清單內。部署目錄須為可信、同一操作帳號獨占寫入的 Linux 目錄；請從根 `panel.sh` 連結操作，不從 `.bootstrap/` 內直接執行。SHA256 保護封裝內容；映像依版本標籤選取，未以 digest 釘選，須信任 GHCR 發布者不覆寫標籤。
+舊 `install DIRECTORY VERSION SHA256` 仍下載完整 Dashboard archive，但只取出部署檔；選單／latest 使用最小 bundle。可信 SHA 的最小 bundle 介面為 `install-bundle DIRECTORY VERSION SHA256`，顯式 bootstrap 檔案更新為 `update-bundle DIRECTORY VERSION SHA256`。不安裝 build source 或 `.env.example`。`.env`、`secrets/`、`certs/`、`tls/`、`data/`、`backups/`、`config/`、本機 `source/` 都不在更新清單內。部署目錄須為可信、同一操作帳號獨占寫入的 Linux 目錄；請從根 `panel.sh` 連結操作，不從 `.bootstrap/` 內直接執行。SHA256 保護封裝內容；映像依版本標籤選取，須信任 GHCR 發布者不覆寫標籤。
 
 宿主安全自主更新（需 Python 3.9 以上、Docker Buildx 及本版 `panel.sh`／`update.py`／`download.sh`）：
 
@@ -80,9 +108,24 @@ bash panel.sh setup https://pay.example.org https://admin.example.org admin@exam
 bash panel.sh update
 ```
 
-無參數模式只向官方 `XiaoLong-Taiwan/XPayincus` 的 GitHub Releases API 查詢一次 latest，核對非 draft／prerelease 的正式 `vX.Y.Z`，之後固定該 tag 取得 `SHA256SUMS` 與 Dashboard archive。checksum 必須唯一且符合完整資產名稱，整包通過校驗才解析；不接受 URL／repository 覆蓋。這個模式信任官方 GitHub HTTPS 與 Release 發布權限，checksum 不是獨立簽章；需要獨立可信 checksum 時使用下方顯式介面。拒絕自動降版；同版允許重新部署。
+無參數更新只向官方 GitHub Releases API 查詢一次 latest，核對非 draft／prerelease 的正式 `vX.Y.Z`，之後固定 tag 取得 `SHA256SUMS` 與目標最小 Compose bundle。核對舊部署時依 receipt 選擇該版本最小 bundle；舊手動／Dashboard 來源包部署仍需下載舊版來源包來比對。checksum 必須唯一且符合完整資產名稱，整包通過校驗才解析；不接受 URL／repository 覆蓋。信任官方 GitHub HTTPS 與 Release 發布權限，checksum 不是獨立簽章；需要獨立可信 checksum 時使用顯式介面。拒絕自動降版；同版允許重新部署。
+
+下載失敗會顯示階段、移除 query 的 URL、HTTP 狀態與處理建議。403 只有在 `x-ratelimit-remaining: 0` 或 `Retry-After` 等證據存在時標示限流；一般 403 請檢查 repository 權限、組織 SSO、出口 IP 與代理政策，401 則檢查 token，404 檢查版本與資產是否已發布。限流時等待輸出的 reset／retry 時間後重試。DNS、TLS、逾時或本機寫入問題會提供 curl exit code；不列印回應正文、token 或 CDN 簽名 query。
+
+需要 GitHub API 認證時，以安全編輯器將 token 存入部署目錄外、目前操作帳號持有且權限 600 的一般檔案，再指定檔案路徑；不要把 token 放進 `.env`、命令列或開啟 shell trace：
+
+```bash
+chmod 600 /srv/private/github-read-token
+XPAYINCUS_GITHUB_TOKEN_FILE=/srv/private/github-read-token bash panel.sh update
+```
+
+公開 repository 可匿名讀取；需要 token 時僅給必要的讀取權限（fine-grained token 對該 repository 的 Contents read，並依組織要求授權 SSO）。token 透過 curl 標準輸入傳遞，只送到 `https://api.github.com:443`，不送到 github.com、GHCR 或資產 CDN；重新導向逐次驗證 HTTPS 與官方主機白名單，不沿用跨來源認證。GitHub API token 不會解決 GHCR 拉取權限，私有映像仍須另行安全登入 registry。
+
+固定版本 `SHA256SUMS`／Dashboard archive 的 github.com 直連若回傳 403／404，會改查同一官方 repository、同一 tag 的 Release API，核對正式版本與唯一資產名稱後，從 API asset ID 下載。此替代路徑適用於 `update` 及顯式 `download.sh`，仍執行原 SHA256、VERSION、映像與 archive 安全檢查；不使用第三方鏡像、不在 latest API 失敗時猜版本、不跳過校驗。若兩個官方來源都被封鎖，修正網路或權限後重試。
 
 整段持有同一操作鎖：下載並驗證目標與目前版本官方部署檔 → 比對本機 → 核對現有容器 → 驗證目標 Compose → 在 `backups/before-update-<隨機值>/` 保存原部署檔與 `panel.dump` → 切換部署檔 → 自動 `up`。備份失敗不切換、不停止容器；`up` 核對已切換的釘選版本 registry digest，與本機 RepoDigests 不一致才強制拉取應用映像，另補齊其餘必要映像，成功後才 stop。不初始化、不改寫 `.env`、金鑰、憑證、資料、`source/` 或 project 名稱。DB dump 是運行中一致性快照，與之後 migration 之間仍可能有新寫入；設定、密鑰與憑證須另行離機備份。
+
+工具下載／校驗、目標 Compose 驗證或備份失敗時不切換部署檔；切換失敗不執行 up，保留備份並要求檢查入口。映像準備失敗時舊容器不先停止，但已切換的工具與備份保留，修正 registry 問題後可執行 `bash panel.sh up`。停止服務或啟動／健康檢查失敗時，會明示服務可能已停止或執行 migration；請查看 status／logs 並保留備份，不自動回滾資料庫。
 
 舊手動部署可安全遷移納管：在原實際部署目錄執行 `panel.sh update`。目前版本官方 archive/checksum 必須仍可下載；既有管理檔逐位元組符合該版官方檔案，必要入口齊全且為一般檔案。容器須屬於同一 `incudal-panel`、同一實際部署目錄及標準 Compose 檔，DB／API 正在運行、每服務單一容器、DB 與 API 私人資料為原目錄標準 bind mounts。自訂入口、override、project 名稱、多副本、named volume、部署外掛載或衝突的 `COMPOSE_*` 一律拒絕，保留原資料與專案識別。成功後固定管理清單轉成 `.bootstrap/current` 連結，原部署檔保存在備份目錄；手動檔案轉連結不是跨檔案原子操作，中斷時須依備份修復，勿同時直接操作 Compose。
 

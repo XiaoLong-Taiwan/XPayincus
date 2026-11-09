@@ -35,7 +35,7 @@ assert.ok(
 )
 
 assert.ok(
-  agentRouteSource.includes("const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus-Agent'"),
+  agentRouteSource.includes("const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus'"),
   'Agent release proxy must default to the current repository'
 )
 assert.ok(
@@ -100,7 +100,7 @@ assert.ok(
   'Agent install script must parse compact single-line Agent manifests served by the panel'
 )
 assert.ok(
-  installScriptSource.includes('MANIFEST_URL="$(append_query_param "${MANIFEST_URL}" "v" "${BINARY_CACHE_BUSTER}")"') &&
+  installScriptSource.includes('MANIFEST_URL="$(append_query_param "${MANIFEST_URL}" "cache_bust" "${BINARY_CACHE_BUSTER}")"') &&
     installScriptSource.includes('BINARY_URL="$(append_query_param "${BINARY_URL}" "cache_bust" "${BINARY_CACHE_BUSTER}")"') &&
     !installScriptSource.includes('BINARY_URL="$(append_query_param "${BINARY_URL}" "v" "${BINARY_CACHE_BUSTER}")"'),
   'Agent install script must not use the binary proxy reserved v query parameter for cache busting'
@@ -146,7 +146,8 @@ assert.ok(
 )
 assert.ok(
   !agentRouteSource.includes('await fetch(') &&
-    (agentRouteSource.match(/agentReleaseFetchTimeoutMs\)/g) ?? []).length === 4 &&
+    agentRouteSource.includes('async function readAgentReleaseResponse') &&
+    agentRouteSource.includes('accept, agentReleaseFetchTimeoutMs)') &&
     agentRouteSource.includes('cache.ensure') && agentRouteSource.includes('cache.binary'),
   'Agent release API, checksum, manifest and binary downloads must use trusted redirects and bounded timeouts with persistent caching'
 )

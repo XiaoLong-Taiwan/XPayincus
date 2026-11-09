@@ -16,9 +16,10 @@ INSTALL_CONFIG_PATH=""
 REINSTALL="0"
 LOCAL_BINARY=""
 TOKEN_FILE=""
+TARGET_VERSION="latest"
 
 usage() {
-  printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--reinstall] [--binary FILE --sha256 HEX]' \
+  printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--reinstall] [--version latest|vSemVer] [--binary FILE --sha256 HEX]' \
     'Without credentials, prompts on /dev/tty for panel URL and hidden one-time TOKEN.' \
     '--reinstall preserves the existing config; do not supply a new URL or TOKEN.'
 }
@@ -32,13 +33,14 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --reinstall) REINSTALL="1"; shift ;;
-    --panel-url|--token-file|--binary|--sha256)
+    --panel-url|--token-file|--binary|--sha256|--version)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail "option requires a value"
       case "$1" in
         --panel-url) INCUDAL_PANEL_URL="$2" ;;
         --token-file) TOKEN_FILE="$2" ;;
         --binary) LOCAL_BINARY="$2" ;;
         --sha256) INCUDAL_AGENT_BINARY_SHA256="$2" ;;
+        --version) TARGET_VERSION="$2" ;;
       esac
       shift 2
       ;;
@@ -96,6 +98,61 @@ prepare_inputs() {
 fetch_public() {
   curl -q -fsSL --proto '=http,https' --proto-redir '=http,https' \
     --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 "$@"
+}
+
+select_manifest() {
+  command -v python3 >/dev/null 2>&1 || fail 'python3 is required for manifest/version validation'
+  local current=""
+  if [ -f "${BIN_PATH}" ]; then
+    current="$("${BIN_PATH}" -version 2>/dev/null)" || fail 'cannot determine installed Agent version; use a verified local binary or check the existing installation'
+  fi
+  python3 - "${MANIFEST_PATH}" "${OS}-${ARCH}" "${TARGET_VERSION}" "${current}" <<'PY_AGENT_MANIFEST'
+import json, re, sys
+def version(value):
+    match = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?', value)
+    if not match:
+        raise ValueError('invalid canonical version')
+    major, minor, patch, pre, build = match.groups()
+    for part in (pre, build):
+        if part is not None and any(not item for item in part.split('.')):
+            raise ValueError('invalid version identifier')
+    if pre and any(item.isdigit() and len(item) > 1 and item[0] == '0' for item in pre.split('.')):
+        raise ValueError('invalid prerelease identifier')
+    return (int(major), int(minor), int(patch), (1,) if pre is None else (0, tuple((0, int(x)) if x.isdigit() else (1, x) for x in pre.split('.'))))
+try:
+    path, platform, requested, current = sys.argv[1:]
+    with open(path) as stream:
+        manifest = json.load(stream)
+    target = manifest['version']
+    target_order = version(target)
+    if requested != 'latest' and requested != target:
+        raise ValueError('requested version mismatch')
+    if 'schemaVersion' in manifest and (type(manifest['schemaVersion']) is not int or manifest['schemaVersion'] != 1):
+        raise ValueError('unsupported manifest schema')
+    if current and version(current) > target_order:
+        raise ValueError('Agent downgrade rejected')
+    minimum = manifest.get('minimumUpdaterVersion')
+    if 'minimumUpdaterVersion' in manifest:
+        version(minimum)
+        if current and version(current) < version(minimum):
+            raise ValueError('installed Agent below minimumUpdaterVersion')
+    file = manifest['files'][platform]
+    expected = 'xpayincus-agent-' + target + '-' + platform
+    if file['name'] not in (expected, expected + '.gz') or not re.fullmatch('[a-fA-F0-9]{64}', file['sha256']):
+        raise ValueError('invalid Agent artifact metadata')
+    if 'gzip' in file and (type(file['gzip']) is not bool or file['gzip'] != file['name'].endswith('.gz')):
+        raise ValueError('invalid gzip metadata')
+    if 'size' in file and (type(file['size']) is not int or not 0 < file['size'] <= 67108864):
+        raise ValueError('invalid artifact size')
+    print(target)
+    print(file['name'])
+    print(file['sha256'])
+    print(file.get('size', 0))
+    source = manifest.get('source', 'unspecified')
+    print(source if source in ('release', 'cache', 'local') else 'unspecified')
+except (ValueError, KeyError, TypeError) as error:
+    sys.exit('Agent manifest rejected: ' + str(error))
+PY_AGENT_MANIFEST
 }
 
 normalize_heartbeat_interval() {
@@ -193,6 +250,10 @@ download_binary_once() {
     }
   fi
 
+  if [ "${BINARY_EXPECTED_SIZE:-0}" -gt 0 ] && [ "$(wc -c < "${target}.download")" -ne "${BINARY_EXPECTED_SIZE}" ]; then
+    rm -f "${target}.download"
+    return 1
+  fi
   if [ -n "${expected_sha256}" ]; then
     verify_sha256 "${target}.download" "${expected_sha256}" || {
       rm -f "${target}.download"
@@ -211,9 +272,12 @@ download_binary_once() {
     }
     rm -f "${target}.download"
   else
-    mv "${target}.download" "${target}.tmp"
+    mv "${target}.download" "${target}.tmp" || return 1
   fi
-  install -m 0755 "${target}.tmp" "${target}"
+  install -m 0755 "${target}.tmp" "${target}" || {
+    rm -f "${target}.tmp"
+    return 1
+  }
   rm -f "${target}.tmp"
 }
 
@@ -326,7 +390,7 @@ install_binary_atomically() {
   fi
 
   install -d -m 0755 "$(dirname "${target}")"
-  install -m 0755 "${source}" "${next}"
+  install -m 0755 "${source}" "${next}" || return 1
   mv -f "${next}" "${target}"
 }
 
@@ -487,13 +551,25 @@ fi
 if [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ]; then
   # Cloudflare 等边缘缓存可能缓存旧二进制；默认面板下载强制按安装批次换 URL。
   BINARY_CACHE_BUSTER="${INCUDAL_AGENT_BINARY_CACHE_BUSTER:-$(date +%s)}"
-  MANIFEST_URL="$(append_query_param "${MANIFEST_URL}" "v" "${BINARY_CACHE_BUSTER}")"
+  MANIFEST_URL="$(append_query_param "${MANIFEST_URL}" "cache_bust" "${BINARY_CACHE_BUSTER}")"
+  if [ "${TARGET_VERSION}" != latest ]; then
+    [[ "${TARGET_VERSION}" =~ ^v[0-9A-Za-z.+-]+$ ]] || fail 'invalid requested Agent version'
+    MANIFEST_URL="$(append_query_param "${MANIFEST_URL}" "version" "${TARGET_VERSION}")"
+  fi
   MANIFEST_PATH="${BIN_PATH}.manifest.$$"
   download_manifest "${MANIFEST_URL}" "${MANIFEST_PATH}"
 
   if [ "${DRY_RUN}" != "1" ]; then
-    BINARY_NAME="$(manifest_value "${MANIFEST_PATH}" "${OS}-${ARCH}" "name")"
-    BINARY_EXPECTED_SHA256="$(manifest_value "${MANIFEST_PATH}" "${OS}-${ARCH}" "sha256")"
+    MANIFEST_SELECTION="$(select_manifest)" || fail 'Agent manifest validation failed'
+    mapfile -t SELECTED <<< "${MANIFEST_SELECTION}"
+    SELECTED_VERSION="${SELECTED[0]}"
+    BINARY_NAME="${SELECTED[1]}"
+    BINARY_EXPECTED_SHA256="${SELECTED[2]}"
+    BINARY_EXPECTED_SIZE="${SELECTED[3]}"
+    echo "Agent target: ${SELECTED_VERSION}; source: ${SELECTED[4]}"
+    if [ "${SELECTED[4]}" = cache ]; then
+      echo 'warning: using verified cached version; latest release could not be confirmed' >&2
+    fi
     if [ -z "${BINARY_NAME}" ] || [ -z "${BINARY_EXPECTED_SHA256}" ]; then
       fail "agent manifest does not contain ${OS}-${ARCH} binary metadata"
     fi
@@ -507,6 +583,10 @@ if [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ]; then
   # Use a separate cache-busting key so installer downloads can fall back to
   # the manifest-selected binary without tripping version+sha256 validation.
   BINARY_URL="$(append_query_param "${BINARY_URL}" "cache_bust" "${BINARY_CACHE_BUSTER}")"
+  if [ "${DRY_RUN}" != 1 ]; then
+    BINARY_URL="$(append_query_param "${BINARY_URL}" "v" "${SELECTED_VERSION}")"
+    BINARY_URL="$(append_query_param "${BINARY_URL}" "sha256" "${BINARY_EXPECTED_SHA256}")"
+  fi
 elif [ -z "${BINARY_EXPECTED_SHA256}" ]; then
   fail "INCUDAL_AGENT_BINARY_SHA256 is required when INCUDAL_AGENT_BINARY_URL is set"
 fi

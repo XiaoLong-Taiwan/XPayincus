@@ -13,6 +13,7 @@ die() {
 
 usage() {
   printf '%s\n' \
+    'bash deploy/compose/panel.sh wizard  (互動設定代理、帳密及 TLS，成功後 up pull)' \
     'bash deploy/compose/panel.sh setup https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]  (同 init，只初始化)' \
     'bash deploy/compose/panel.sh update  (官方最新正式 Release、驗證、備份並安全納管後 up)' \
     'bash deploy/compose/panel.sh update VERSION SHA256  (驗證 Release 並準備部署檔案；完成後另執行 up)' \
@@ -27,6 +28,7 @@ usage() {
 }
 
 case "$command_name" in
+  menu) exec bash "$base/download.sh" menu "$base" ;;
   help|-h|--help) usage; exit 0 ;;
   setup) command_name=init ;;
   update)
@@ -40,7 +42,7 @@ case "$command_name" in
     flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
     exec python3 "$base/update.py" "$base"
     ;;
-  install|init|up|down|status|logs|export|import) ;;
+  install|init|wizard|up|down|status|logs|export|import) ;;
   *) usage; exit 2 ;;
 esac
 
@@ -87,6 +89,188 @@ if [[ "$(readlink /proc/$$/fd/9 2>/dev/null || true)" != "$base/.state/operation
   exec 9>"$base/.state/operation.lock"
 fi
 flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
+
+if [[ "$command_name" == wizard ]]; then
+  (($# == 0)) || die 'wizard 不接受額外參數。'
+  command -v python3 >/dev/null || die '需要 Python 3。'
+  if ! python3 - "$base" <<'WIZARD_PY'
+import getpass
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import warnings
+from urllib.parse import urlsplit
+
+class WizardError(ValueError):
+    pass
+
+def fail(message):
+    raise WizardError(message)
+
+def origin(value):
+    if any(char.isspace() or ord(char) < 32 for char in value):
+        fail('網址不可包含空白或控制字元。')
+    parts = urlsplit(value)
+    host = parts.hostname or ''
+    if parts.scheme != 'https' or parts.username or parts.password or parts.path or parts.query or parts.fragment or not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', host):
+        fail('網址須為無路徑、無尾斜線的 HTTPS origin。')
+    if any(not label or len(label) > 63 or label.startswith('-') or label.endswith('-') for label in host.split('.')) or len(host) > 253 or (parts.port is not None and not 1 <= parts.port <= 65535):
+        fail('網域或連接埠無效。')
+    return value, host.lower()
+
+def validate_password(value):
+    if not 8 <= len(value.encode('utf-16-le')) // 2 <= 128 or not all(re.search(pattern, value) for pattern in ('[A-Z]', '[a-z]', '[0-9]')) or any(ord(char) < 32 for char in value):
+        fail('密碼需 8–128 字元，包含大寫、小寫及數字，且不可含控制字元。')
+
+def openssl(*args):
+    result = subprocess.run(['openssl', *args], capture_output=True, input=b'', check=False)
+    if result.returncode:
+        fail('TLS 驗證失敗；請檢查憑證有效期、網域、信任鏈及未加密私鑰。')
+    return result.stdout
+
+def tls_pair(cert_path, key_path, host):
+    cert, key = Path(cert_path), Path(key_path)
+    if not cert.is_file() or not key.is_file() or cert.stat().st_size > 2097152 or key.stat().st_size > 2097152:
+        fail('TLS 來源須為可讀的一般檔案且不超過 2 MiB。')
+    certificate, private = cert.read_bytes(), key.read_bytes()
+    with tempfile.TemporaryDirectory(prefix='panel-tls-') as temporary:
+        root = Path(temporary)
+        (root / 'cert').write_bytes(certificate)
+        (root / 'key').write_bytes(private)
+        (root / 'key').chmod(0o600)
+        blocks = re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', certificate, re.S)
+        if not blocks:
+            fail('找不到 PEM 憑證。')
+        (root / 'leaf').write_bytes(blocks[0])
+        (root / 'chain').write_bytes(b'\n'.join(blocks[1:]))
+        openssl('x509', '-in', str(root / 'leaf'), '-checkend', '0', '-noout')
+        verify = ['verify', '-purpose', 'sslserver', '-verify_hostname', host]
+        if len(blocks) > 1:
+            verify += ['-untrusted', str(root / 'chain')]
+        openssl(*verify, str(root / 'leaf'))
+        public = openssl('x509', '-in', str(root / 'leaf'), '-pubkey', '-noout')
+        key_public = openssl('pkey', '-in', str(root / 'key'), '-passin', 'pass:', '-pubout')
+        if public.strip() != key_public.strip():
+            fail('TLS 憑證與私鑰不配對。')
+    return certificate, private
+
+def configure(base, ask, hidden):
+    protected = ('.env', 'secrets', 'tls', 'data', 'certs', 'config', 'backups')
+    if any(os.path.lexists(base / name) for name in protected):
+        fail('已有設定、TLS 或資料，拒絕覆蓋；請使用既有 up 或人工遷移。')
+    profile = ask('入口 1=Nginx / 2=Cloudflare Tunnel / 3=external [1]：') or '1'
+    profile = {'1': 'nginx', '2': 'cloudflare', '3': 'external', 'nginx': 'nginx', 'cloudflare': 'cloudflare', 'external': 'external'}.get(profile)
+    if not profile:
+        fail('入口選擇無效。')
+    user_url, user_host = origin(ask('前站 HTTPS origin：'))
+    admin_url, admin_host = origin(ask('管理站 HTTPS origin：'))
+    if user_host == admin_host:
+        fail('前站與管理站必須使用不同網域。')
+    email = ask('管理員電子郵件：')
+    if not re.fullmatch(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+', email):
+        fail('電子郵件格式不支援。')
+    password = hidden('管理員密碼（隱藏）：')
+    validate_password(password)
+    confirmation = hidden('再次輸入密碼（隱藏）：')
+    if password != confirmation:
+        fail('兩次密碼不一致。')
+    token = ''
+    pairs = {}
+    try:
+        if profile == 'cloudflare':
+            token = hidden('Cloudflare Tunnel token（隱藏）：')
+            if not re.fullmatch(r'[A-Za-z0-9_+/=.-]{1,16384}', token):
+                fail('Tunnel token 不可為空或包含空白／控制字元。')
+        elif profile == 'nginx':
+            for name, host in [('user', user_host), ('admin', admin_host)]:
+                cert_path = ask(f'{host} fullchain.pem 來源路徑：')
+                key_path = ask(f'{host} privkey.pem 來源路徑：')
+                pairs[name] = tls_pair(cert_path, key_path, host)
+        with tempfile.TemporaryDirectory(prefix='.wizard-', dir=base) as temporary:
+            root = Path(temporary)
+            (root / 'secrets').mkdir(mode=0o700)
+            values = {name: secrets.token_urlsafe(48) for name in ('jwt_secret', 'cookie_secret', 'encryption_key')}
+            values.update(postgres_password=secrets.token_hex(32), admin_password=password)
+            if profile == 'cloudflare':
+                values['cloudflare_tunnel_token'] = token
+            for name, value in values.items():
+                path = root / 'secrets' / name
+                path.write_text(value + '\n')
+                path.chmod(0o600)
+            values.clear()
+            if pairs:
+                for name, (certificate, private) in pairs.items():
+                    directory = root / 'tls' / name
+                    directory.mkdir(parents=True, mode=0o700)
+                    for filename, content in [('fullchain.pem', certificate), ('privkey.pem', private)]:
+                        path = directory / filename
+                        path.write_bytes(content)
+                        path.chmod(0o600)
+            compose = 'compose.yaml:compose.release.yaml' if (base / 'compose.release.yaml').is_file() else 'docker-compose.yml'
+            context = './source' if (base / 'source').is_dir() else '../..'
+            (root / '.env').write_text(f'FRONTEND_URL={user_url}\nADMIN_FRONTEND_URL={admin_url}\nADMIN_EMAIL={email}\nUSER_PORT=3000\nADMIN_PORT=3001\nCOMPOSE_PROFILES={profile if profile != "external" else ""}\nCOMPOSE_FILE={compose}\nBUILD_CONTEXT={context}\nHTTPS_PORT=443\nINCUDAL_RELEASE_REPOSITORY=\nINCUDAL_AGENT_RELEASE_REPOSITORY=\n')
+            (root / '.env').chmod(0o600)
+            created = []
+            try:
+                for name in ('secrets', 'tls', '.env'):
+                    if not (root / name).exists():
+                        continue
+                    if os.path.lexists(base / name):
+                        fail('目的地設定出現衝突，拒絕覆蓋。')
+                    os.rename(root / name, base / name)
+                    created.append(base / name)
+            except BaseException:
+                for path in reversed(created):
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
+                raise
+        if profile == 'cloudflare':
+            print(f'請在 Cloudflare Tunnel 建立兩個公開 hostname：{user_host}、{admin_host}；兩者 origin 均為 http://tunnel-origin:80，保留原 Host header。', flush=True)
+        print('設定已安全寫入；接著拉取映像並啟動。管理員帳號：admin。', flush=True)
+    finally:
+        password = confirmation = token = ''
+        pairs.clear()
+
+def main():
+    os.umask(0o077)
+    warnings.simplefilter('error', getpass.GetPassWarning)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, interrupted)
+    with open('/dev/tty', 'r') as reader, open('/dev/tty', 'w') as tty:
+        def ask(prompt):
+            tty.write(prompt)
+            tty.flush()
+            line = reader.readline()
+            if not line:
+                raise EOFError()
+            return line.rstrip('\r\n')
+        configure(Path(sys.argv[1]), ask, lambda prompt: getpass.getpass(prompt, stream=tty))
+
+if __name__ == '__main__':
+    try:
+        main()
+    except WizardError as error:
+        print(f'設定驗證失敗：{error}；未啟動服務。', file=sys.stderr)
+        sys.exit(1)
+    except (ValueError, OSError, EOFError, KeyboardInterrupt, getpass.GetPassWarning):
+        print('設定精靈失敗或已取消；未啟動服務。請檢查輸入、TLS 與原有設定。', file=sys.stderr)
+        sys.exit(1)
+WIZARD_PY
+  then
+    die '設定未完成，不執行 up。'
+  fi
+  if ! bash "$base/panel.sh" up pull; then
+    die '設定已保留；拉取或啟動失敗，請修正原因後執行 bash panel.sh up pull，勿重新初始化。'
+  fi
+  printf '%s\n' '安裝精靈完成；容器健康檢查通過，請驗收公開網址、TLS 與登入。'
+  exit 0
+fi
 
 if [[ "$command_name" == init ]]; then
   (($# == 3 || $# == 4)) || die 'init 需要使用者 HTTPS origin、管理端 HTTPS origin、管理員電子郵件，以及可選的 nginx、cloudflare 或 external。'
@@ -148,12 +332,24 @@ if [[ -e "$base/compose.release.yaml" || -L "$base/compose.release.yaml" ]]; the
   compose+=(--file "$base/compose.release.yaml")
 fi
 scratch=''
+operation_stage='部署前置檢查'
+service_transition_started=false
+operation_error() {
+  local status="$1"
+  if [[ "$service_transition_started" == false ]]; then
+    printf '階段「%s」失敗（exit=%s）；尚未停止既有服務。請依前述錯誤檢查設定、registry 權限與網路後重試。\n' "$operation_stage" "$status" >&2
+  else
+    printf '階段「%s」失敗（exit=%s）；服務可能已停止或已執行 migration。請查看 status/logs 並保留備份，不自動回滾資料庫。\n' "$operation_stage" "$status" >&2
+  fi
+  exit "$status"
+}
 cleanup() {
   if [[ -n "$scratch" ]]; then rm -rf -- "$scratch"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+if [[ "$command_name" == up ]]; then trap 'operation_error "$?"' ERR; fi
 
 dump_database() {
   "${compose[@]}" exec -T db sh -eu -c '
@@ -213,6 +409,7 @@ case "$command_name" in
       '') ;;
       *) die 'COMPOSE_PROFILES 僅接受 nginx、cloudflare 或空值；不可同時啟用兩種入口。' ;;
     esac
+    operation_stage='建置／拉取全部必要映像'
     if [[ "$deployment_mode" == build ]]; then
       "${compose[@]}" build api user admin
       "${compose[@]}" pull --ignore-buildable
@@ -230,8 +427,11 @@ case "$command_name" in
     else
       "${compose[@]}" pull --policy always
     fi
+    operation_stage='停止舊前端與 API'
+    service_transition_started=true
     "${compose[@]}" stop user admin api
     "${compose[@]}" --profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared
+    operation_stage='啟動與健康檢查'
     "${compose[@]}" up -d --no-build --pull never --wait --wait-timeout 300
     printf '%s\n' '面板已依 COMPOSE_PROFILES 啟動；請依 README 完成 HTTPS 與來源 IP 驗收。'
     ;;

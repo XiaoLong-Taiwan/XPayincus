@@ -458,21 +458,22 @@ async function downloadArtifact(artifact: OtaArtifactInfo): Promise<string> {
   const artifactPath = join(updateDownloadDir, `${taskId}-${artifact.name}`)
   await log(`Downloading OTA artifact ${artifact.name} (${artifact.size ?? 'unknown'} bytes)`)
 
-  const response = await fetchRelease(artifact.url)
-  if (!response.ok || !response.body) {
-    throw new Error(`Failed to download OTA artifact: HTTP ${response.status}`)
-  }
-
-  const limit = Math.min(artifact.size ?? Infinity, 2 * 1024 * 1024 * 1024)
-  async function* boundedBody() {
-    let total = 0
-    for await (const chunk of response.body!) {
-      total += chunk.byteLength
-      if (total > limit) throw new Error('OTA artifact exceeds download limit')
-      yield chunk
-    }
-  }
   try {
+    const response = await fetchRelease(artifact.downloadUrl || artifact.url, undefined, 'application/octet-stream')
+    if (!response.ok || !response.body) {
+      await response.body?.cancel()
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const limit = Math.min(artifact.size ?? Infinity, 2 * 1024 * 1024 * 1024)
+    async function* boundedBody() {
+      let total = 0
+      for await (const chunk of response.body!) {
+        total += chunk.byteLength
+        if (total > limit) throw new Error('OTA artifact exceeds download limit')
+        yield chunk
+      }
+    }
     await pipeline(Readable.from(boundedBody()), createWriteStream(artifactPath, { flags: 'wx' }))
 
     const fileStat = await stat(artifactPath)
@@ -489,7 +490,8 @@ async function downloadArtifact(artifact: OtaArtifactInfo): Promise<string> {
     return artifactPath
   } catch (error) {
     await rm(artifactPath, { force: true })
-    throw error
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`OTA artifact download/verification failed: ${message}`)
   }
 }
 

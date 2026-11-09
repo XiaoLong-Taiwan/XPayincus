@@ -19,7 +19,7 @@ description: 使用经过校验的 GitHub Release 在 Debian 或 Ubuntu 上部�
 
 ## 統一倉部署邊界
 
-此頁是保留的宿主安裝流程，安裝器內 `GITHUB_REPO` 仍固定為歷史獨立倉庫 `XiaoLong-Taiwan/XPayincus`；從統一倉執行不會自動切換下載來源。統一發行請依 [手動部署](/deployment/manual-install) 使用實際已發布且校驗的面板資產。根 release workflow 只上傳 Actions artifacts，不會自動發布 Release。
+此頁是保留的宿主安裝流程，安裝器內 `GITHUB_REPO` 固定為 `XiaoLong-Taiwan/XPayincus`；執行前須核對安裝器與統一資產格式相容。統一發行請依 [手動部署](/deployment/manual-install) 使用實際已發布且校驗的面板資產。根 release workflow 在相符 tag 與 CI 成功後自動發布 GitHub Release；手動觸發只交付映像與 Actions artifacts，不自動部署。
 
 新面板也可使用 `XPayincus/deploy/compose/panel.sh`，僅部署雙前端、單一 API 與 PostgreSQL；Agent、Incus、RFW、ZFS 保留宿主部署。不要把宿主安裝器套入容器。核心不依賴 Redis，但此歷史安裝器仍安裝 Redis 並生成相應服務依賴。所有模式均只允許一個 Node API 程序。本次未執行安裝、測試、建置或部署。
 
