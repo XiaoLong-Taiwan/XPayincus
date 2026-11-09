@@ -171,20 +171,92 @@ if __name__ == '__main__':
 DOWNLOAD_PY
 fi
 self="${BASH_SOURCE[0]}"
+docker_check() {
+  if ! command -v docker >/dev/null; then
+    printf '%s\n' '找不到 Docker。請依 https://docs.docker.com/engine/install/ 的 Debian／Ubuntu 官方 apt repository 步驟設定金鑰及來源，再執行：sudo apt-get update && sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin' >&2
+    return 1
+  fi
+  local version major minor
+  version="$(docker compose version --short 2>/dev/null)" || { printf '%s\n' '缺少 Compose plugin；請依 Docker 官方 apt repository 安裝 docker-compose-plugin。' >&2; return 1; }
+  if [[ "$version" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)(\+.*)?$ ]]; then
+    major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
+    if ((10#$major < 2 || (10#$major == 2 && 10#$minor < 20))); then
+      printf '%s\n' 'Compose 至少需要 2.20.0；請更新官方 docker-compose-plugin。' >&2
+      return 1
+    fi
+  else
+    printf '%s\n' '無法辨識 Compose 版本；需要 2.20.0 以上正式版本。' >&2
+    return 1
+  fi
+  docker info >/dev/null 2>&1 || { printf '%s\n' '無法連線 Docker daemon；請檢查服務、Docker context 與目前帳號權限（sudo systemctl status docker）。不會自動變更權限或重裝 Docker。' >&2; return 1; }
+}
+deployment_check() {
+  python3 - "$1" "${2:-configured}" <<'DEPLOYMENT_PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+try:
+    root = Path(sys.argv[1])
+    if not root.is_absolute() or not root.is_dir() or root.is_symlink():
+        raise ValueError()
+    names = ['panel.sh', 'compose.yaml']
+    if (root / 'docker-compose.yml').exists() or (root / 'docker-compose.yml').is_symlink():
+        names.append('docker-compose.yml')
+    if sys.argv[2] == 'configured':
+        names.append('.env')
+    paths = {root, *(root / name for name in names)}
+    for path in list(paths):
+        resolved = path.resolve(strict=True)
+        for parent in resolved.parents:
+            if parent == root.resolve():
+                break
+            if root.resolve() in parent.parents:
+                paths.add(parent)
+    for path in paths:
+        resolved = path.resolve(strict=True)
+        if path in [root / name for name in names] and (not resolved.is_file() or resolved.stat().st_size == 0 or root.resolve() not in resolved.parents):
+            raise ValueError()
+        info = resolved.stat()
+        if os.name != 'nt' and (info.st_uid not in (0, os.geteuid()) or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+            raise ValueError()
+    script = (root / 'panel.sh').read_text()
+    compose = (root / 'compose.yaml').read_text()
+    if 'incudal-panel' not in script or 'command_name=' not in script or not all(value in compose for value in ('services:', '  api:', '  user:', '  admin:')):
+        raise ValueError()
+except (OSError, ValueError):
+    sys.exit(1)
+DEPLOYMENT_PY
+}
 dashboard_menu() {
-  local directory="${1:-/srv/incudal-panel}" choice value
+  local directory="${1:-$PWD}" choice value method trusted=''
   { exec 8<>/dev/tty; } 2>/dev/null || die '數字選單需要可用的 /dev/tty；無終端請使用 install DIRECTORY latest 或既有非互動 CLI。'
   while true; do
-    printf '\nDashboard / Compose\n目錄：%s\n1) 安裝最新最小 Compose bundle\n2) 初始化網址與入口\n3) 更新既有部署至最新正式版\n4) 拉取映像並啟動\n5) 狀態\n6) 日誌\n7) 匯出資料庫\n8) 切換部署目錄\n0) 離開\n選擇：' "$directory" >&8
+    printf '\n────────────────────────────────────\n  Dashboard · Compose 管理\n────────────────────────────────────\n部署候選：%s\n  [1] 安裝 Dashboard\n  [2] 設定精靈並啟動\n  [3] 更新至最新正式版\n  [4] 拉取映像並啟動\n  [5] 查看狀態\n  [6] 查看日誌\n  [7] 匯出資料庫\n  [8] 切換部署目錄\n  [9] 保留資料重建容器\n  [0] 離開\n選擇：' "$directory" >&8
     IFS= read -r choice <&8 || return 0
     case "$choice" in
       0) return 0 ;;
       1|8)
+        if [[ "$choice" == 1 ]]; then
+          printf '\n安裝方式\n  [1] Compose（Docker）\n  [2] 宿主機（交由 Dashboard 上層入口）\n  [0] 返回\n選擇：' >&8
+          IFS= read -r method <&8 || return 0
+          case "$method" in
+            0) continue ;;
+            2) printf '%s\n' '交回上層入口：請以 dashboard.sh --host-install 執行宿主機安裝（退出碼 20）。' >&8; return 20 ;;
+            1) docker_check || continue ;;
+            *) printf '請選擇 [1]、[2] 或 [0]。\n' >&8; continue ;;
+          esac
+        fi
         printf '部署絕對路徑 [%s]：' "$directory" >&8
         IFS= read -r value <&8 || return 0
         if [[ -n "$value" ]]; then directory="$value"; fi
+        trusted=''
         [[ "$directory" == /* ]] || { printf '請輸入絕對路徑。\n' >&8; continue; }
         if [[ "$choice" == 1 ]]; then
+          printf '確認在 %s 安裝（可建立新目錄）？輸入 yes：' "$directory" >&8
+          IFS= read -r value <&8 || return 0
+          [[ "$value" == yes ]] || continue
           if bash "$self" install "$directory" latest; then
             bash "$directory/panel.sh" wizard || printf '設定或啟動失敗，請依前述錯誤處理；不宣告安裝完成。\n' >&8
           else
@@ -192,8 +264,23 @@ dashboard_menu() {
           fi
         fi
         ;;
-      2|3|4|5|6|7)
-        [[ "$directory" == /* && -f "$directory/panel.sh" ]] || { printf '找不到部署入口；請先安裝或切換目錄。\n' >&8; continue; }
+      2|3|4|5|6|7|9)
+        method=configured
+        if [[ "$choice" == 2 ]]; then method=unconfigured; fi
+        if ! deployment_check "$directory" "$method"; then
+          printf '目前目錄不是有效且權限安全的 Compose 部署。請輸入既有部署絕對路徑（不建立目錄，空白返回）：' >&8
+          IFS= read -r value <&8 || return 0
+          [[ -n "$value" ]] || continue
+          directory="$value"; trusted=''
+          deployment_check "$directory" "$method" || { printf '目錄無效；未執行任何本機腳本。\n' >&8; continue; }
+        fi
+        if [[ "$trusted" != "$directory" ]]; then
+          printf '即將執行 %s/panel.sh；結構檢查不等同來源驗證。確認這是您管理且信任的部署？輸入 yes：' "$directory" >&8
+          IFS= read -r value <&8 || return 0
+          [[ "$value" == yes ]] || continue
+          trusted="$directory"
+        fi
+        docker_check || continue
         case "$choice" in
           2)
             bash "$directory/panel.sh" wizard || printf '設定或啟動失敗。\n' >&8
@@ -203,6 +290,12 @@ dashboard_menu() {
           5) bash "$directory/panel.sh" status || printf '狀態查詢失敗。\n' >&8 ;;
           6) bash "$directory/panel.sh" logs || printf '日誌查詢結束或失敗。\n' >&8 ;;
           7) bash "$directory/panel.sh" export || printf '備份失敗。\n' >&8 ;;
+          9)
+            printf '保留資料重建將短暫中斷服務，不刪除 DB／secrets；請先備份。輸入 rebuild 確認：' >&8
+            IFS= read -r value <&8 || return 0
+            [[ "$value" == rebuild ]] || continue
+            bash "$directory/panel.sh" up pull --force-recreate || printf '重建失敗，設定與資料保留；請查看日誌。\n' >&8
+            ;;
         esac
         ;;
       *) printf '請輸入列出的數字。\n' >&8 ;;
@@ -213,10 +306,12 @@ case "${1:-menu}" in
   menu)
     (($# <= 2)) || die 'menu 最多接受一個部署目錄。'
     [[ -f "$self" ]] || die '請先以 curl/wget 下載到暫存檔，再使用 bash 執行選單。'
-    dashboard_menu "${2:-/srv/incudal-panel}"
-    exit 0
+    status=0
+    dashboard_menu "${2:-$PWD}" || status=$?
+    exit "$status"
     ;;
   help|-h|--help) usage; exit 0 ;;
+  docker-check) docker_check; exit $? ;;
   install-bundle) action=install ;;
   update-bundle) action=update ;;
   install|download) action=install ;;

@@ -242,6 +242,7 @@ class PanelCommandTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.base / 'docker.log'
         shutil.copyfile(COMPOSE / 'panel.sh', self.base / 'panel.sh')
+        shutil.copyfile(COMPOSE / 'download.sh', self.base / 'download.sh')
         shutil.copyfile(COMPOSE / 'update.py', self.base / 'update.py')
         shutil.copyfile(COMPOSE / 'compose.yaml', self.base / 'compose.yaml')
         shutil.copyfile(COMPOSE / 'docker-compose.yml', self.base / 'docker-compose.yml')
@@ -252,6 +253,8 @@ class PanelCommandTests(unittest.TestCase):
             (self.base / 'secrets' / name).write_text('fixture')
         for name, body in [('flock', 'exit 0'), ('docker',
                 'printf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
+                'if [[ "$1" == info ]]; then exit 0; fi\n'
+                'if [[ "$1 $2" == "compose version" ]]; then printf "2.20.0\\n"; exit 0; fi\n'
                 'if [[ "$1 $2" == "buildx imagetools" ]]; then printf \'{"digest":"sha256:%064d"}\\n\' 0; exit 0; fi\n'
                 'if [[ "$1 $2" == "image inspect" ]]; then printf \'[]\\n\'; exit 0; fi\n'
                 'if [[ " $* " == *" pull "* && " $* " == *"${PULL_MATCH:-pull}"* ]]; then exit "${PULL_EXIT:-0}"; fi')]:
@@ -259,7 +262,7 @@ class PanelCommandTests(unittest.TestCase):
             target.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n', newline='\n')
             target.chmod(0o755)
 
-    def run_panel(self, pull_exit, mode=None, profile='', pull_match='pull'):
+    def run_panel(self, pull_exit, mode=None, profile='', pull_match='pull', recreate=False):
         self.log.write_text('')
         bin_path = self.bin.as_posix()
         if os.name == 'nt':
@@ -268,7 +271,7 @@ class PanelCommandTests(unittest.TestCase):
                    COMPOSE_PROFILES=profile, PULL_MATCH=pull_match)
         result = subprocess.run([BASH, '-c', 'export PATH="$1:$PATH"; shift; bash "$@"',
                                  'test', bin_path, (self.base / 'panel.sh').as_posix(), 'up',
-                                 *([mode] if mode else [])],
+                                 *([mode] if mode else []), *(['--force-recreate'] if recreate else [])],
                                 env=env, capture_output=True, text=True)
         commands = self.log.read_text().splitlines()
         return result, commands
@@ -361,7 +364,17 @@ class PanelCommandTests(unittest.TestCase):
         (self.base / 'compose.release.yaml').write_text('')
         result, commands = self.run_panel(0)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(commands, [])
+        self.assertEqual(commands, ['compose version --short', 'info'])
+
+    def test_recreate_preserves_private_files_and_pulls_before_stop(self):
+        (self.base / 'compose.release.yaml').unlink()
+        before = {path: path.read_bytes() for path in [self.base / '.env', *(self.base / 'secrets').iterdir()]}
+        result, commands = self.run_panel(0, mode='pull', recreate=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any('up -d' in line and '--force-recreate' in line for line in commands))
+        self.assertFalse(any(' down' in line or '--volumes' in line for line in commands))
+        self.assertLess(next(i for i, line in enumerate(commands) if ' pull ' in line), next(i for i, line in enumerate(commands) if ' stop ' in line))
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     def test_download_rejects_unpinned_input(self):
         for version, checksum in [('latest', 'a' * 64), ('main', 'a' * 64),
@@ -406,9 +419,9 @@ class PanelCommandTests(unittest.TestCase):
         directory = self.base.as_posix()
         if os.name == 'nt':
             directory = '/' + directory[0].lower() + directory[2:]
-        script = 'set -Eeuo pipefail\ndashboard_menu() {\n' + code + '\n}\ndashboard_menu "$1"'
+        script = 'set -Eeuo pipefail\ndeployment_check() { return 0; }\ndocker_check() { return 0; }\ndashboard_menu() {\n' + code + '\n}\ndashboard_menu "$1"'
         result = subprocess.run([BASH, '-c', script, 'test', directory],
-                                input=b'3\n4\n5\n2\n0\n',
+                                input=b'3\nyes\n4\n5\n2\n0\n',
                                 env=dict(os.environ, MENU_LOG=log.as_posix()), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('<update>', log.read_text())

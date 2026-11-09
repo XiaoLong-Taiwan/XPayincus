@@ -2,7 +2,7 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.9`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.10`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
 
 ## 宿主元件整合
 
@@ -42,6 +42,14 @@ go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml
 ### 獨立互動與參數入口
 
 數字選單入口為根 `scripts/agent-menu.sh`，可單獨下載或由 `scripts/manage.sh` 以 `bash agent-menu.sh` 呼叫。提供新裝、保留設定重裝、更新至最新穩定版、本地 binary 重裝、status 及最近 100 行 logs；從 `/dev/tty` 讀取選項，管線下載仍可互動。選單只從指定面板下載 `/api/agent/install.sh` 單檔，不 clone 倉庫，不簽發憑證，不管理 Incus／ZFS／RFW。
+
+Linux root shell 可直接執行獨立短指令，無須先下載倉庫；選單以 `[1]` 至 `[6]`、`[0]` 及分隔線顯示。沒有 root 時可先 `sudo -i`，再執行：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh)
+```
+
+亦支援 `curl -fsSL https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh | bash`，互動仍讀 `/dev/tty`；沒有控制終端時改用 `--action`。腳本不執行 `cd`，退出／返回不改變啟動 shell 的 cwd；相對 `--binary`、`--token-file` 路徑以啟動目錄解析。缺少 status／logs 或下載必要指令會明確報錯。以下保留先下載、再以 sudo 執行的方式：
 
 ```bash
 curl -q -fsS --proto '=https' https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh -o agent-menu.sh
@@ -101,7 +109,7 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 宿主詳情的 Agent 區塊在 Agent 在線、啟用且發現較新版本時顯示「一鍵更新 Agent」。確認視窗列出目前及目標版本，明確授權替換 Agent binary 並重啟 Agent 服務；只有宿主擁有者或管理員可操作。不輪換憑證，不更新 Incus／RFW／ZFS 或 systemd unit。
 
-`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.9" }`（版本僅為範例）。後端重新驗證目標版本、平台與最低 updater 版本，固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
+`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.10" }`（版本僅為範例）。後端重新驗證目標版本、平台與最低 updater 版本，固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
 
 未授權心跳不再自動下發新版。每次授權只下發一次，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`（等待心跳）、`delivered`（已下發）、`succeeded`（後續 HMAC 心跳版本達到目標或更新）、`unconfirmed`（逾時未確認），附目標、請求／下發及到期時間。成功只代表新版心跳，並不證明所有宿主功能健康。
 

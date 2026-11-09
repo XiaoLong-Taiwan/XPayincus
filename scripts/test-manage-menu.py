@@ -64,7 +64,7 @@ exit "$FETCH_STATUS"
 ''')
 
     def local_child(self, route):
-        relative = 'scripts/agent-menu.sh' if route == 'agent' else 'XPayincus/deploy/compose/download.sh'
+        relative = 'scripts/agent-menu.sh' if route == 'agent' else 'scripts/dashboard.sh'
         target = self.repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(self.env['CHILD_SCRIPT'], encoding='utf-8', newline='\n')
@@ -108,7 +108,7 @@ exit "$FETCH_STATUS"
         result = self.run_entry('--dashboard', 'install', '/srv/panel space', 'latest')
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
-        self.assertIn(RAW + 'XPayincus/deploy/compose/download.sh', calls)
+        self.assertIn(RAW + 'scripts/dashboard.sh', calls)
         self.assertNotIn(RAW + 'scripts/agent-menu.sh', calls)
         for value in ['fetch:--proto\nfetch:=https', 'fetch:--proto-redir\nfetch:=https', '-q', '-fsSL', 'mode:700', 'child:latest']:
             self.assertIn(value, calls)
@@ -171,7 +171,7 @@ exit "$FETCH_STATUS"
         self.assertEqual(result.stderr.count('1) Dashboard / Compose 選單'), 4)
         self.assertIn('請輸入 1、2 或 0', result.stderr)
         self.assertIn(RAW + 'scripts/agent-menu.sh', self.calls())
-        self.assertIn(RAW + 'XPayincus/deploy/compose/download.sh', self.calls())
+        self.assertIn(RAW + 'scripts/dashboard.sh', self.calls())
 
     def test_menu_stops_on_child_failure(self):
         self.mock_terminal('1\n2\n0\n')

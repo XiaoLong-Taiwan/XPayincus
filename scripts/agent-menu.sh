@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || fail "缺少必要指令：$1"; }
 prompt() {
   [ -r /dev/tty ] && [ -w /dev/tty ] || fail '互動操作需要 /dev/tty；可用 --action 與參數執行。'
   IFS= read -r -p "$2" "$1" </dev/tty || fail '輸入取消'
@@ -29,16 +30,21 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$action" ]; then
-  printf '%s\n' '1) 新裝 Agent' '2) 僅重裝 Agent（保留設定）' '3) 更新 Agent 至最新穩定版' '4) 本地 binary 重裝' '5) Agent 狀態' '6) Agent 日誌' '0) 返回'
+  printf '\n%s\n' '----------------------------------------' '          XPayincus Agent 管理' '----------------------------------------' \
+    '[1] 新裝 Agent' '[2] 僅重裝 Agent（保留設定）' '[3] 更新 Agent 至最新穩定版' \
+    '[4] 本地 binary 重裝' '[5] Agent 狀態' '[6] Agent 日誌' '[0] 返回／退出' \
+    '----------------------------------------'
   prompt choice '請選擇：'
   case "$choice" in 1) action=install ;; 2) action=reinstall ;; 3) action=update ;; 4) action=local ;; 5) action=status ;; 6) action=logs ;; 0) exit 0 ;; *) fail '無效選項' ;; esac
 fi
 case "$action" in
-  status) exec systemctl --no-pager status incudal-agent ;;
-  logs) exec journalctl --no-pager -u incudal-agent -n 100 ;;
+  status) need systemctl; exec systemctl --no-pager status incudal-agent ;;
+  logs) need journalctl; exec journalctl --no-pager -u incudal-agent -n 100 ;;
   install|reinstall|update|local) ;;
   *) fail '無效操作' ;;
 esac
+for dependency in id sed mktemp rm rmdir bash; do need "$dependency"; done
+command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail '需要 curl 或 wget'
 [ "$(id -u)" = 0 ] || fail '請以 root 執行安裝或更新'
 args=()
 if [ "$action" != install ]; then

@@ -19,7 +19,7 @@ usage() {
     'bash deploy/compose/panel.sh update VERSION SHA256  (驗證 Release 並準備部署檔案；完成後另執行 up)' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
-    'bash deploy/compose/panel.sh up [pull|build]  (預設依 Compose 拉取映像；有官方 release 檔時核對 digest)' \
+    'bash deploy/compose/panel.sh up [pull|build] [--force-recreate]  (保留資料，重建需明確指定)' \
     'bash deploy/compose/panel.sh down|status' \
     'bash deploy/compose/panel.sh logs [init|db|api|user|admin|nginx|tunnel-origin|cloudflared]' \
     'bash deploy/compose/panel.sh export [/absolute/path/panel.dump]  (預設 ./backups)' \
@@ -34,6 +34,7 @@ case "$command_name" in
   update)
     if (($# == 2)); then exec bash "$base/download.sh" update "$base" "$@"; fi
     (($# == 0)) || die 'update 不帶參數，或提供 VERSION SHA256 僅準備檔案。'
+    bash "$base/download.sh" docker-check || die 'Docker 前置檢查未通過，未開始更新。'
     command -v python3 >/dev/null || die '需要 Python 3。'
     command -v flock >/dev/null || die '需要 Linux flock。'
     [[ ! -L "$base/.state" && ! -L "$base/.state/operation.lock" ]] || die '操作鎖不可為符號連結。'
@@ -44,6 +45,9 @@ case "$command_name" in
     ;;
   install|init|wizard|up|down|status|logs|export|import) ;;
   *) usage; exit 2 ;;
+esac
+case "$command_name" in
+  wizard|up|down|status|logs|export|import) bash "$base/download.sh" docker-check || die 'Docker 前置檢查未通過。' ;;
 esac
 
 source_root="$(cd -- "$base/../.." && pwd -P)"
@@ -382,8 +386,13 @@ export_database() {
 
 case "$command_name" in
   up)
-    (($# <= 1)) || die 'up 最多接受 pull 或 build。'
+    (($# <= 2)) || die 'up 接受 pull 或 build，以及可選 --force-recreate。'
     deployment_mode="${1:-pull}"
+    recreate=()
+    if (($# == 2)); then
+      [[ "$2" == --force-recreate ]] || die '額外參數僅接受 --force-recreate。'
+      recreate=(--force-recreate)
+    fi
     case "$deployment_mode" in
       pull) ;;
       build)
@@ -432,7 +441,7 @@ case "$command_name" in
     "${compose[@]}" stop user admin api
     "${compose[@]}" --profile nginx --profile cloudflare stop nginx tunnel-origin cloudflared
     operation_stage='啟動與健康檢查'
-    "${compose[@]}" up -d --no-build --pull never --wait --wait-timeout 300
+    "${compose[@]}" up -d --no-build --pull never --wait --wait-timeout 300 "${recreate[@]}"
     printf '%s\n' '面板已依 COMPOSE_PROFILES 啟動；請依 README 完成 HTTPS 與來源 IP 驗收。'
     ;;
   down)

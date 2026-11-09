@@ -202,6 +202,85 @@ class AgentInstallerTests(unittest.TestCase):
         self.assertEqual((self.base / 'installer-args').read_text().splitlines(), ['--reinstall', '--version', 'latest'])
         self.assertIn('https://panel.example.org/api/agent/install.sh', (self.base / 'download-args').read_text())
 
+    def test_menu_stream_entry_preserves_cwd_without_repository(self):
+        self.shim('curl', 'cat "$TEST_BASE/menu-source"')
+        self.shim('systemctl', 'pwd -P > "$TEST_BASE/child-cwd"\nprintf "%s\\n" "$@" > "$TEST_BASE/status-args"')
+        (self.base / 'menu-source').write_bytes((ROOT / 'scripts/agent-menu.sh').read_bytes())
+        self.env['TEST_TOOLS'] = self.path(self.bin)
+        for invocation in ['curl -fsSL https://raw.example/agent-menu.sh | bash -s -- --action status',
+                           'bash <(curl -fsSL https://raw.example/agent-menu.sh) --action status']:
+            result = subprocess.run([BASH, '-c', 'set -euo pipefail; export PATH="$TEST_TOOLS:$PATH"; before="$(pwd -P)"; ' + invocation + '; test "$(pwd -P)" = "$before"; test "$(cat "$TEST_BASE/child-cwd")" = "$before"'],
+                                    cwd=self.base, env=self.env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((self.base / 'status-args').read_text().splitlines(), ['--no-pager', 'status', 'incudal-agent'])
+
+    def test_menu_stream_exit_reads_tty_separately_and_preserves_cwd(self):
+        source = (ROOT / 'scripts/agent-menu.sh').read_text()
+        self.assertIn('</dev/tty', source)
+        self.assertNotRegex(source, r'(?m)^\s*cd\s')
+        tty = self.base / 'tty-input'
+        tty.write_text('0\n', newline='\n')
+        (self.base / 'menu-source').write_text(source.replace('/dev/tty', self.path(tty)), newline='\n')
+        self.shim('curl', 'cat "$TEST_BASE/menu-source"')
+        self.env['TEST_TOOLS'] = self.path(self.bin)
+        for invocation in ['curl -fsSL https://raw.example/agent-menu.sh | bash',
+                           'bash <(curl -fsSL https://raw.example/agent-menu.sh)']:
+            result = subprocess.run([BASH, '-c', 'set -euo pipefail; export PATH="$TEST_TOOLS:$PATH"; before="$(pwd -P)"; ' + invocation + '; test "$(pwd -P)" = "$before"'],
+                                    cwd=self.base, env=self.env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for option in range(7):
+                self.assertIn(f'[{option}]', result.stdout)
+            self.assertIn('----------------------------------------', result.stdout)
+        self.assertFalse((self.base / 'request').exists())
+
+    def test_menu_missing_dependency_is_explicit(self):
+        menu = self.path(ROOT / 'scripts/agent-menu.sh')
+        result = subprocess.run([BASH, '-c', 'export PATH=/nonexistent; source "$1" --action status', 'test', menu],
+                                cwd=self.base, env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('缺少必要指令：systemctl', result.stderr)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX controlling terminal requires Linux/macOS')
+    def test_menu_real_tty_process_substitution_exit(self):
+        import pty
+        import select
+        import time
+        self.env['TEST_TOOLS'] = self.path(self.bin)
+        self.shim('curl', 'cat "$TEST_BASE/menu-source"')
+        (self.base / 'menu-source').write_bytes((ROOT / 'scripts/agent-menu.sh').read_bytes())
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(self.base)
+            os.execvpe(BASH, [BASH, '-c', 'export PATH="$TEST_TOOLS:$PATH"; before="$(pwd -P)"; bash <(curl -fsSL https://raw.example/agent-menu.sh); result=$?; test "$(pwd -P)" = "$before" || exit 99; exit "$result"'], self.env)
+        output = b''
+        status = None
+        deadline = time.monotonic() + 10
+        try:
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([fd], [], [], 0.1)
+                if ready:
+                    try:
+                        output += os.read(fd, 4096)
+                    except OSError:
+                        break
+                    if '請選擇：'.encode() in output:
+                        os.write(fd, b'0\n')
+                child, status = os.waitpid(pid, os.WNOHANG)
+                if child:
+                    break
+                status = None
+            if status is None:
+                child, status = os.waitpid(pid, os.WNOHANG)
+                if not child:
+                    self.fail('TTY menu did not exit')
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0, output.decode(errors='replace'))
+        finally:
+            os.close(fd)
+            if status is None:
+                import signal
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

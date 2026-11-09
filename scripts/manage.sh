@@ -23,7 +23,7 @@ run_menu() {
   local route="$1" relative entry url status
   shift
   case "$route" in
-    dashboard) relative='XPayincus/deploy/compose/download.sh' ;;
+    dashboard) relative='scripts/dashboard.sh' ;;
     agent)
       relative='scripts/agent-menu.sh'
       printf '%s\n' 'Agent 安裝／更新需要 root；權限不足時請自行以 sudo bash manage.sh --agent 執行。' >&2
