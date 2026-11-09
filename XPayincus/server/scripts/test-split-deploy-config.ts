@@ -344,14 +344,15 @@ assertIncludesAll(readme, [
   'SYSTEM_UPDATE_RELEASE_REPOSITORY=owner/unified-repository'
 ], 'README must document unified Agent releases, legacy override priority, tag prefixes, and independent panel OTA configuration')
 assert.ok(
-  agentRoute.includes("const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus-Agent'") &&
+  agentRoute.includes("const defaultAgentReleaseRepository = 'XiaoLong-Taiwan/XPayincus'") &&
     agentRoute.includes('configured || process.env.INCUDAL_RELEASE_REPOSITORY?.trim() || defaultAgentReleaseRepository') &&
     agentRoute.includes("? '' : 'agent-'") &&
     agentRoute.includes('getAgentReleaseAssetUrl(getAgentReleaseTag(validated.version), assetName)') &&
     agentRoute.includes('loadRemoteAgentRelease(input.version)') &&
     !agentRoute.includes('getAgentReleaseAssetUrl(`agent-${') &&
-    releaseDoc.includes('兩者皆未設定時仍使用原獨立倉庫'),
-  'Agent releases must preserve the independent repository fallback and use the configured tag prefix for listing and fallback downloads'
+    releaseDoc.includes('面板預設來源為 `XiaoLong-Taiwan/XPayincus`') &&
+    agentRoute.includes('repository === defaultAgentReleaseRepository || repository === unifiedRepository'),
+  'Agent releases must default to the unified repository, preserve explicit repository overrides and use the configured tag prefix for listing and fallback downloads'
 )
 assert.ok(backendServiceExample.includes('Documentation=https://github.com/XiaoLong-Taiwan/XPayincus'), 'systemd backend example must point documentation to the current repository')
 assert.ok(
