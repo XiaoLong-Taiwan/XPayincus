@@ -425,7 +425,7 @@ class PanelCommandTests(unittest.TestCase):
         import time
         pid, descriptor = pty.fork()
         if pid == 0:
-            os.execv(BASH, [BASH, '-c', 'bash "$1" menu </dev/null', 'test', str(COMPOSE / 'download.sh')])
+            os.execvp(BASH, [BASH, '-c', 'bash "$1" menu </dev/null', 'test', str(COMPOSE / 'download.sh')])
         output = b''
         deadline = time.monotonic() + 10
         try:
