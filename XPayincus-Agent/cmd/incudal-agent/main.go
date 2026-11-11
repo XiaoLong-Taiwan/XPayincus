@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -17,7 +18,8 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/upgrade"
 )
 
-var version = "v1.0.10"
+var version = "v1.0.11"
+var operationStatePath string
 
 func main() {
 	configPath := flag.String("config", "/etc/incudal-agent/config.yaml", "agent config file")
@@ -37,6 +39,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	operationStatePath = filepath.Join(cfg.StateDir, "upgrade.json")
+	report.StartCollector(ctx, cfg.HeartbeatInterval)
 	client := panel.New(cfg)
 	if *once {
 		if _, err := sendHeartbeat(ctx, client, cfg.HeartbeatIntervalSeconds); err != nil {
@@ -75,9 +79,18 @@ func main() {
 }
 
 func sendHeartbeat(ctx context.Context, client *panel.Client, heartbeatIntervalSeconds int) (panel.HeartbeatResult, error) {
-	result, err := client.Heartbeat(ctx, report.HeartbeatPayload(version, heartbeatIntervalSeconds))
+	payload := report.HeartbeatPayload(version, heartbeatIntervalSeconds)
+	if state, err := upgrade.ReadOperation(operationStatePath, version); err == nil && state != nil {
+		payload["upgradeStatus"] = state
+	}
+	result, err := client.Heartbeat(ctx, payload)
 	if err != nil {
 		return result, err
+	}
+	if resources, ok := payload["resources"].(map[string]any); ok && resources["memoryTotalMb"] != nil {
+		if err := upgrade.ConfirmHealthy(operationStatePath, version); err != nil {
+			log.Printf("persist upgrade health confirmation failed")
+		}
 	}
 	return result, nil
 }
@@ -122,6 +135,12 @@ func scheduleAgentUpgrade(ctx context.Context, runner *upgrade.Runner, result pa
 	}
 
 	instruction := *result.Upgrade
+	proceed, err := runner.Schedule(instruction, version)
+	if err != nil || !proceed {
+		upgradeInProgress.Store(false)
+		if err != nil { log.Printf("persist agent upgrade schedule failed") }
+		return
+	}
 	log.Printf("agent upgrade scheduled: version=%s", instruction.Version)
 	go func() {
 		defer upgradeInProgress.Store(false)

@@ -15,6 +15,10 @@ usage() {
   printf '%s\n' \
     'bash deploy/compose/panel.sh wizard  (互動設定代理、帳密及 TLS，成功後 up pull)' \
     'bash deploy/compose/panel.sh setup https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]  (同 init，只初始化)' \
+    'bash deploy/compose/panel.sh update-plan  (下載核驗及部署檢查，不備份／切換／停機)' \
+    'bash deploy/compose/panel.sh doctor [--json]  (唯讀診斷，不需要 pnpm)' \
+    'bash deploy/compose/panel.sh migration-plan /private/export [--target-schema /path/schema.prisma] [--json]' \
+    'bash deploy/compose/panel.sh recover [--json|--resume-up|--retry-preflight]  (預設唯讀；明確選項才持鎖恢復)' \
     'bash deploy/compose/panel.sh update  (官方最新正式 Release、驗證、備份並安全納管後 up)' \
     'bash deploy/compose/panel.sh update VERSION SHA256  (驗證 Release 並準備部署檔案；完成後另執行 up)' \
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
@@ -31,8 +35,25 @@ case "$command_name" in
   menu) exec bash "$base/download.sh" menu "$base" ;;
   help|-h|--help) usage; exit 0 ;;
   setup) command_name=init ;;
-  update)
-    if (($# == 2)); then exec bash "$base/download.sh" update "$base" "$@"; fi
+  doctor|migration-plan)
+    command -v python3 >/dev/null || die '需要 Python 3。'
+    exec python3 "$base/operations.py" "$command_name" --base "$base" "$@"
+    ;;
+  recover)
+    command -v python3 >/dev/null || die '需要 Python 3。'
+    if [[ "${1:-}" != --resume-up && "${1:-}" != --retry-preflight ]]; then
+      exec python3 "$base/operations.py" recover --base "$base" "$@"
+    fi
+    (($# == 1)) || die 'recover --resume-up 或 --retry-preflight 不接受額外參數。'
+    command -v flock >/dev/null || die '需要 Linux flock。'
+    [[ ! -L "$base/.state" && ! -L "$base/.state/operation.lock" ]] || die '操作鎖不可為符號連結。'
+    mkdir -p -- "$base/.state"
+    exec 9>"$base/.state/operation.lock"
+    flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
+    exec python3 "$base/update.py" "$base" "$1"
+    ;;
+  update|update-plan)
+    if [[ "$command_name" == update ]] && (($# == 2)); then exec bash "$base/download.sh" update "$base" "$@"; fi
     (($# == 0)) || die 'update 不帶參數，或提供 VERSION SHA256 僅準備檔案。'
     bash "$base/download.sh" docker-check || die 'Docker 前置檢查未通過，未開始更新。'
     command -v python3 >/dev/null || die '需要 Python 3。'
@@ -41,6 +62,7 @@ case "$command_name" in
     mkdir -p -- "$base/.state"
     exec 9>"$base/.state/operation.lock"
     flock -n 9 || die '另一個面板部署或資料庫操作正在進行。'
+    if [[ "$command_name" == update-plan ]]; then exec python3 "$base/update.py" "$base" --plan; fi
     exec python3 "$base/update.py" "$base"
     ;;
   install|init|wizard|up|down|status|logs|export|import) ;;
@@ -77,7 +99,7 @@ if [[ "$command_name" == install ]]; then
     --exclude=.git --exclude='*.log' --exclude='*.dump' \
     -C "$source_root" -cf - package.json pnpm-lock.yaml pnpm-workspace.yaml client server deploy/compose \
     | tar -C "$destination/source" -xf -
-  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh download.sh update.py README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
+  for deployment_file in docker-compose.yml compose.yaml compose.build.yaml panel.sh download.sh update.py operations.py README.md https-proxy.conf.example origin-entrypoint.sh edge-nginx.conf.template tunnel-nginx.conf.template; do
     cp -- "$base/$deployment_file" "$destination/$deployment_file"
   done
   if [[ -f "$base/.env.example" ]]; then cp -- "$base/.env.example" "$destination/.env.example"; fi

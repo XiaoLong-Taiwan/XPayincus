@@ -1,4 +1,20 @@
 export default {
+    operations: {
+        provisioningRetry: 'Retry provisioning', provisioningRetryConfirm: 'Have you checked instance and remote resource ownership? Continue this task without repeating completed creation or billing.',
+        taskKinds: { create: 'Create', restore: 'Restore', start: 'Start', stop: 'Stop', restart: 'Restart', rebuild: 'Reinstall', clone: 'Clone', recreate: 'Recreate', change_host: 'Change host' },
+        taskStatuses: { pending: 'Pending', processing: 'Processing', running: 'Running', completed: 'Completed', succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled' },
+        batchHint: 'These results describe API responses. Open task center for the final result of asynchronous operations.',
+        forecastHint: 'Forecast of automatic renewals using current prices. Due dates indicate the expected charge time; actual charges may change.',
+        title: 'Task center', description: 'Creation, instance operations and restore results are retained by the server across navigation and refresh.',
+        refresh: 'Refresh', previous: 'Previous', next: 'Next', empty: 'No results', error: 'Unable to load data. Try again.',
+        name: 'Name', kind: 'Task type', status: 'Status', progress: 'Progress', updated: 'Updated', result: 'Result', instance: 'Instance',
+        forecast: 'Renewal forecast', days: 'Next {days} days', balance: 'Available balance', total: 'Renewal total', shortfall: 'Balance shortfall', firstShortfall: 'First shortfall', due: 'Due date', autoRenew: 'Auto renewal',
+        draft: 'Purchase draft restored. Refresh prices, stock and discounts, then confirm the current configuration before purchasing.',
+        review: 'Refresh price, stock and discount', confirm: 'I have reviewed the latest price, stock and discount', recharge: 'Recharge and return', resume: 'Resume purchase draft',
+        batchResults: 'Per-instance results', retry: 'Retry failed only', succeeded: 'Succeeded', failed: 'Failed', skipped: 'Skipped', pending: 'Pending', unknown: 'Result unknown; refresh task center before retrying',
+        keyword: 'Order number', from: 'Created from', to: 'Created through', instanceSearch: 'Instance ID or name', export: 'Export filtered results', incomplete: 'Only {count} of {total} orders loaded (limit 5000); search and export are incomplete.', complete: 'All {count} authorized orders loaded.', repay: 'Continue payment', cancel: 'Cancel order', cancelConfirm: 'Cancel this unpaid order?', manual: 'Payment instructions',
+        minCpu: 'Minimum CPU (%)', minRam: 'Minimum RAM (MB)', minDisk: 'Minimum disk (MB)', type: 'Instance type', maxPrice: 'Maximum monthly price', all: 'All', compare: 'Compare plans (2–4)', addCompare: 'Add selected plan', remove: 'Remove', compareHint: 'Select 2–4 plans to compare. Prices are monthly equivalents; setup fees and billing cycles are shown separately.', price: 'Price', cycle: 'Months', setup: 'Setup fee', stock: 'Stock', available: 'Available', soldOut: 'Sold out'
+    },
     hostPublicIpv4: {
         title: 'Dedicated IPv4 Pools', description: 'Allocate, reclaim, and validate routed public IPv4 capacity for dedicated IPv4 plans.', newPool: 'New pool', newPoolTitle: 'New dedicated IPv4 pool',
         total: 'Total addresses', empty: 'No dedicated IPv4 pools.', enabled: 'Enabled', disabled: 'Disabled', enable: 'Enable', disable: 'Disable', gateway: 'Gateway', addAddress: 'Add addresses', add: 'Add',
@@ -455,6 +471,7 @@ export default {
             browseDescription: 'Browse products by region, configuration, and price so new visitors can compare quickly and existing users can top up faster.',
         },
         market: {
+            stockSubscribe: 'Notify me when available', stockSubscribeFailed: 'Failed to subscribe', stockUnsubscribe: 'Unsubscribe', stockUnsubscribeFailed: 'Failed to unsubscribe', stockSubscriptions: 'Stock alerts ({count})', stockSubscriptionsEmpty: 'No stock alerts',
             checkoutExtensionTitle: 'Extended checkout configuration',
             checkoutExtensionDescription: 'This package declares controlled extended checkout options for the creation flow.',
             badge: 'Public Catalog',
@@ -2822,6 +2839,7 @@ export default {
                 },
             },
         },
+        hostingWithdrawals: { title: 'Hosting withdrawals', description: 'Review external withdrawals and record payment-stage evidence.', loadFailed: 'Failed to load withdrawals', empty: 'No withdrawal records', proofRequired: 'Payment method, transaction reference, and proof are required before marking paid.', reasonRequired: 'Enter a failure reason.', confirm: 'Update withdrawal #{id} to "{status}"?', updateSuccess: 'Withdrawal status updated', updateFailed: 'Failed to update withdrawal', paymentMethod: 'Payment method', paymentReference: 'Transaction reference', paymentProof: 'Payment proof or verifiable link', failureReason: 'Failure reason', status_approved: 'Approved', status_processing: 'Processing', status_paid: 'Paid', status_failed: 'Failed', status_pending: 'Pending review', action_approve: 'Approve withdrawal', action_processing: 'Mark processing', action_paid: 'Record payment', action_failed: 'Mark failed and refund' },
         hosting: {
             title: 'Hosting',
             description: 'View qualified hosting owners and hosting operation data',
@@ -4099,6 +4117,8 @@ export default {
             agentLoadAverage: 'Load Average',
             agentLoadAverageHint: '1 / 5 / 15 minutes',
             agentProcessCount: 'Process Count',
+            agentHistoryTitle: 'Agent history', agentHistoryEmpty: 'No history data', agentHistoryFailed: 'Failed to load Agent history',
+            maintenanceTitle: 'Maintenance plans', maintenanceTarget: 'Select target host', maintenancePreflight: 'Run preflight', maintenancePreflightFailed: 'Maintenance preflight failed', maintenanceCreate: 'Create plan', maintenanceCreateConfirm: 'Preflight passed. Creating the plan places both hosts into maintenance and starts migration. Continue?', maintenanceCreateFailed: 'Failed to create maintenance plan', maintenanceLoadFailed: 'Failed to load maintenance plans', maintenanceInstances: '{count} instances', maintenanceActionConfirm: 'Run "{action}" for plan #{id}?', maintenanceActionFailed: 'Maintenance action failed', maintenanceAction_review: 'Review', maintenanceAction_takeover: 'Take over', maintenanceAction_rollback: 'Roll back', maintenanceAction_resume: 'Resume', maintenanceAction_cleanup: 'Clean up copies', maintenanceStatus_running: 'Running', maintenanceStatus_completed: 'Needs review', maintenanceStatus_review_required: 'Manual review required', maintenanceStatus_recovering: 'Recovering', maintenanceStatus_reviewed: 'Completed', maintenanceStatus_failed: 'Failed', maintenanceStatus_unknown: 'Unknown',
             // Storage pool management
             storage: {
                 title: 'Storage Pools',

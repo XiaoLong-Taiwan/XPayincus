@@ -1,6 +1,6 @@
 # Agent 宿主元件管理
 
-本目錄以宿主元件 bundle 的方式組織 RFW 與 ZFS builder。bundle 是同一統一 Release 下的邏輯交付集合，沿用現有獨立資產，不新增 bundle tarball、不改變既有 28 件發行資產契約，也不代表自動安裝或共同原子升級。
+本目錄以宿主元件 bundle 的方式組織 RFW 與 ZFS builder。bundle 是同一統一 Release 下的邏輯交付集合，沿用現有獨立資產，不新增 bundle tarball、不改變既有 30 件發行資產契約，也不代表自動安裝或共同原子升級。
 
 ## 來源與責任
 
@@ -27,7 +27,7 @@ bash scripts/package-zfs-source.sh
 | Agent amd64／arm64 | `xpayincus-agent-${VERSION}-linux-{amd64,arm64}` 及各自 `.gz` |
 | Agent 下載契約 | `manifest.json`，只列兩架構 Agent `.gz` |
 | RFW amd64／arm64 | `xpayincus-rfw-${VERSION}-linux-{amd64,arm64}` |
-| ZFS builder 原始碼 | `xpayincus-zfs-builder-${VERSION}-source.tar.gz`，包內仍為 `VERSION`、`README.md`、`zfs-builder.sh` |
+| ZFS builder 原始碼與宿主管理工具 | `xpayincus-zfs-builder-${VERSION}-source.tar.gz`，保留原根檔案，加入 Debian CI builder／verifier、ZFS status 與 `host-tools/` |
 | 完整性與索引 | `release-manifest.json`、個別 `.sha256` 與 `SHA256SUMS` |
 
 根 release workflow 分別建置 Agent 與 RFW，彙整階段封裝 ZFS source；沒有將 RFW 或 ZFS 加入 Agent gzip、Agent manifest 或面板 OTA manifest。`release-manifest.json` 的 ZFS 狀態仍為 `source-only` 且 `kernelModulesBuilt: false`。產品版本與實際 ZFS 模組版本不同；後者由 Debian 套件／DKMS 來源決定。
@@ -43,10 +43,26 @@ bash scripts/package-zfs-source.sh
 
 ## 升級與回復
 
+### 管理工具安裝與狀態排程
+
+先驗證同版本 source 包 SHA256，再解壓並執行 `sudo bash host-tools/install-host-tools.sh`；從倉庫使用時則執行 `sudo bash XPayincus-Agent/components/install-host-tools.sh`。需要 Linux、Python 3、執行中的 systemd；安裝器交付 `/usr/local/sbin/rfw-manage`、`/usr/local/sbin/zfs-status` 及 `/usr/local/lib/xpayincus-host/` 中的獨立工具。這只安裝管理工具與唯讀收集排程，RFW 二進位須另行驗證安裝到 `/root/rfw/rfw`，ZFS 工具與匹配核心模組也須另行準備。
+
+`xpayincus-snapshot@rfw.timer` 與 `xpayincus-snapshot@zfs.timer` 在開機約 30 秒後開始收集，各次完成後約 60 秒再執行。兩個 oneshot 服務彼此獨立，以 root 唯讀查詢宿主元件，不啟停 RFW、不載入 ZFS 或匯入 pool。這裡 snapshot 指狀態 JSON，並非 ZFS dataset snapshot。
+
+輸出為 `/run/xpayincus/rfw-status.json` 與 `/run/xpayincus/zfs-status.json`，限制 64 KiB；同目錄暫存、檔案 fsync、原子 replace 後同步目錄。每份檔案各自原子發布，兩個元件不構成共同交易。失敗保留舊檔，Agent 超過五分鐘即視為不可用；重啟後 `/run` 重新收集，不保留為歷史資料。RFW status 包含實際 XDP program ID 比對，沒有 generation 或舊二進位不支援 status 時收集失敗；可用 `journalctl -u xpayincus-snapshot@rfw.service` 查看原因。
+
+停用排程使用 `sudo systemctl disable --now xpayincus-snapshot@rfw.timer xpayincus-snapshot@zfs.timer`；既有檔案會依時效失效。工具安裝不替換防火牆服務或核心模組，亦沒有跨工具版本的共同原子升級。
+
+### Agent 持久 state
+
+Agent 安裝模板在新設定加入 `state_dir: "/var/lib/incudal-agent"`、16 MiB spool 上限與 72 小時保留期。systemd 使用 `StateDirectory=incudal-agent`、0700 與 `UMask=0077`，保存 `history/` 及 `upgrade.json`，服務重啟或二進位更新不刪除 state。此目錄含待補送歷史及升級狀態，應以私人資料管理，不可提交倉庫。
+
+`--reinstall` 保留原設定；沒有 state_dir 的舊設定沿用 Agent 預設目錄。若已自訂 state_dir 或 `INCUDAL_AGENT_STATE_DIR`，管理者須自行確保該絕對路徑的擁有者、0700 權限與持久磁碟，`StateDirectory` 僅管理標準目錄。State 不移到 `/run`，也不與元件狀態 JSON 混用。
+
 部署前保留目前 Agent 二進位與設定、RFW 二進位／啟動參數／規則，以及 ZFS 模組與可用核心記錄；金鑰、設定及備份不可提交倉庫。核對可信 Release 的 SHA256 與完整資產集合，不將同來源下載的雜湊當作來源真偽的唯一保證。
 
 分別排定三個元件的變更與驗收。Agent 可沿用原有備份與原子替換流程；RFW 更新前先確認管理通道及介面附加狀態，正常停止後再替換，異常退出須人工檢查 XDP 是否仍附加；ZFS 不在使用中的儲存池上嘗試強制卸載或即時替換模組，需備份與維護／重啟方案，回復至已驗證的核心／模組組合。不可將 Agent 自升級成功當作防火牆或儲存元件驗收成功。
 
 ## 驗證邊界
 
-本次不執行本機測試、建置、封裝、核心載入或宿主安裝。根 CI 配置版本／來源目錄守衛、元件 shell 語法檢查與 ZFS source 封裝；Release 工作流負責原有雙架構二進位與資產集合檢查。是否通過須另查對應 commit 的 Actions 紀錄，核心與網卡相容性、儲存安全及回復能力仍需經授權的隔離環境與目標主機驗收。詳見 [統一發行](../../RELEASE.md)。
+本次不執行本機驗證、測試、建置、封裝、核心載入或宿主安裝，也不提交。根 CI 配置版本／來源目錄守衛、operations 測試、原子狀態輸出測試、元件 shell 語法檢查與 ZFS source 封裝；Release 工作流負責原有雙架構二進位與資產集合檢查。是否通過須另查對應 commit 的 Actions 紀錄，核心與網卡相容性、儲存安全及回復能力仍需經授權的隔離環境與目標主機驗收。詳見 [統一發行](../../RELEASE.md)。

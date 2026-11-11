@@ -6,3 +6,6 @@ agent_id: "agt_replace_me"
 agent_secret: "ias_replace_me"
 heartbeat_interval_seconds: 60
 request_timeout_seconds: 10
+state_dir: "/var/lib/incudal-agent"
+spool_max_bytes: 16777216
+spool_retention_hours: 72

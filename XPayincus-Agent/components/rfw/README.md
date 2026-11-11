@@ -1,6 +1,6 @@
 # XPayincus RFW
 
-基於 Rust、Aya 與 eBPF/XDP 的宿主機防火牆，提供 IPv4 GeoIP、協定特徵過濾及存取統計。此目錄屬於 XPayincus Agent 宿主元件；產品發行版本讀取 [根 VERSION](../../../VERSION)，本次發行目標為 `v1.0.10`（發布狀態以 GitHub Release 為準）。RFW 在宿主機執行，不屬於面板 Compose；由獨立 Rust 程序載入 eBPF，Go Agent 不載入核心程式。整合邊界見 [元件管理](../README.md)。
+基於 Rust、Aya 與 eBPF/XDP 的宿主機防火牆，提供 IPv4 GeoIP、協定特徵過濾及存取統計。此目錄屬於 XPayincus Agent 宿主元件；產品發行版本讀取 [根 VERSION](../../../VERSION)，本次發行目標為 `v1.0.11`（發布狀態以 GitHub Release 為準）。RFW 在宿主機執行，不屬於面板 Compose；由獨立 Rust 程序載入 eBPF，Go Agent 不載入核心程式。整合邊界見 [元件管理](../README.md)。
 
 ## 功能與限制
 
@@ -82,6 +82,12 @@ sudo ./target/release/rfw stats --port 80 --blocked-only
 統計包含 TCP／UDP、來源 IP、目標埠及允許／封鎖次數。LRU map 最多保留 65536 條組合，舊記錄可能被淘汰，不能視為完整或持久化稽核日誌。
 
 ## 實作與資料來源
+
+### 獨立管理工具
+
+依 [元件管理](../README.md) 從已驗證 source 包的 `host-tools/` 安裝後，可使用 `sudo rfw-manage show`、`diff rules.json`、`check rules.json`、`apply rules.json`、`rollback`、`status`、`export`。`rules.json` 為 CLI argv 陣列，例如 `["--iface","eth0","--block-http"]`；先用 diff/check 檢視，保留主控台再 apply。需要支援 `check`／`status` 的新版 RFW 二進位，固定位置 `/root/rfw/rfw`；舊釘選版本不能假定相容。
+
+apply／rollback 以 `/var/lib/rfw/manage.lock` 排他執行，保留上一份 service，重啟後比對 generation 與實際 XDP program ID；失敗嘗試恢復先前 unit 與啟動狀態。這不提供 RFW 二進位回滾。`status` 提供 `actualXdpAttached`；每分鐘狀態 timer 只呼叫此唯讀命令。`export --output /安全目錄/stats.json` 可另行原子輸出 LRU 統計，排程狀態不包含完整流量歷史，統計不可當作計費總量。
 
 - `rfw/`：使用者空間設定、GeoIP 下載、XDP 載入及統計。
 - `rfw-ebpf/`：核心封包過濾。

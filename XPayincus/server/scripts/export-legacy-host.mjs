@@ -231,6 +231,12 @@ async function main() {
     else if (explicit) fail('明確指定的 Incus 憑證或私鑰不存在。')
     else warnings.push(`未找到 ${name}；須核對舊版 DB 自訂憑證路徑與 Incus 信任。`)
   }
+  const schema = path.join(app, 'server/prisma/schema.prisma')
+  if (exists(schema)) capture(schema, 'source/schema.prisma')
+  else warnings.push('來源未提供 schema.prisma；遷移前必須取得與來源相符的 schema。')
+  const migrations = path.join(app, 'server/prisma/migrations')
+  if (exists(migrations)) copyTree(migrations, 'source/migrations')
+  else warnings.push('來源未提供 migration 檔案；須在隔離還原後核對 ledger 與目標 migration。')
   const startedAt = new Date().toISOString()
   const pgEnv = connection(values)
   try {

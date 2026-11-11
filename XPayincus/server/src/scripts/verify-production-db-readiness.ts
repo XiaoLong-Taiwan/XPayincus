@@ -439,17 +439,15 @@ async function checkResourceDeliveryConfig(): Promise<void> {
       continue
     }
 
-    const minCpu = availablePlans.length > 0 ? Math.min(...availablePlans.map(plan => plan.cpu)) : 15
-    const minMemory = availablePlans.length > 0 ? Math.min(...availablePlans.map(plan => plan.memory)) : 128
-    const minDisk = availablePlans.length > 0 ? Math.min(...availablePlans.map(plan => plan.disk)) : 512
+    const configurations = availablePlans.length > 0 ? availablePlans : [{ cpu: 15, memory: 128, disk: 512 }]
     const hasCapacity = onlinePackageHosts.some(host => {
       const usedCpu = host.instances.reduce((sum, instance) => sum + instance.cpu, 0)
       const usedMemory = host.instances.reduce((sum, instance) => sum + instance.memory, 0)
       const usedDisk = host.instances.reduce((sum, instance) => sum + instance.disk, 0)
       const availableDisk = (host.storageSize || 0) * 1024 - usedDisk
-      return host.cpuAllowanceMax - usedCpu >= minCpu
-        && host.memoryMax - usedMemory >= minMemory
-        && availableDisk >= minDisk
+      return configurations.some(plan => host.cpuAllowanceMax - usedCpu >= plan.cpu
+        && host.memoryMax - usedMemory >= plan.memory
+        && availableDisk >= plan.disk)
     })
     if (!hasCapacity) {
       warn(`${prefix} is active but online bound hosts cannot satisfy its minimum CPU/memory/disk requirement`)

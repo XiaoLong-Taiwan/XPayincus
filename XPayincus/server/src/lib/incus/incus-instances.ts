@@ -593,7 +593,7 @@ function normalizeBandwidth(value: string | null | undefined): string | null | u
 /**
  * 生成实例配置
  */
-export function buildInstanceConfig(options: BuildInstanceConfigOptions): Record<string, unknown> {
+export function buildInstanceConfig(options: BuildInstanceConfigOptions): Record<string, unknown> & { config: Record<string, string> } {
   const {
     name,
     image,
@@ -791,7 +791,7 @@ export function buildInstanceConfig(options: BuildInstanceConfigOptions): Record
     }
   }
 
-  const config: Record<string, unknown> = {
+  const config: Record<string, unknown> & { config: Record<string, string> } = {
     name,
     // Incus API: 'container' 或 'virtual-machine'
     type: instanceType === 'vm' ? 'virtual-machine' : 'container',

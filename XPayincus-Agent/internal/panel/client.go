@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +23,10 @@ type Client struct {
 	agentID     string
 	agentSecret string
 	httpClient  *http.Client
+	spoolDir string
+	spoolMaxBytes int64
+	spoolRetention time.Duration
+	pendingSamples map[string]string
 }
 
 type HeartbeatResult struct {
@@ -32,6 +38,7 @@ type HeartbeatResult struct {
 }
 
 type UpgradeInstruction struct {
+	OperationID string `json:"operationId,omitempty"`
 	SchemaVersion         *int    `json:"schemaVersion,omitempty"`
 	MinimumUpdaterVersion *string `json:"minimumUpdaterVersion,omitempty"`
 	Platform              string  `json:"platform,omitempty"`
@@ -46,6 +53,7 @@ type UpgradeInstruction struct {
 }
 
 type heartbeatResponse struct {
+	AcceptedSampleIDs []string `json:"acceptedSampleIds"`
 	Upgrade *UpgradeInstruction `json:"upgrade"`
 }
 
@@ -55,7 +63,7 @@ func (instruction *UpgradeInstruction) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	for _, key := range []string{"schemaVersion", "minimumUpdaterVersion", "platform", "arch", "size", "gzip"} {
+	for _, key := range []string{"schemaVersion", "minimumUpdaterVersion", "platform", "arch", "size", "gzip", "operationId"} {
 		if raw, exists := fields[key]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return fmt.Errorf("invalid upgrade %s: null", key)
 		}
@@ -69,7 +77,13 @@ func (instruction *UpgradeInstruction) UnmarshalJSON(data []byte) error {
 }
 
 func New(cfg config.Config) *Client {
+	if cfg.StateDir == "" { cfg.StateDir = "/var/lib/incudal-agent" }
+	if cfg.SpoolMaxBytes <= 0 { cfg.SpoolMaxBytes = 16 * 1024 * 1024 }
+	if cfg.SpoolRetentionHours <= 0 { cfg.SpoolRetentionHours = 72 }
 	return &Client{
+		spoolDir: filepath.Join(cfg.StateDir, "history"),
+		spoolMaxBytes: int64(cfg.SpoolMaxBytes),
+		spoolRetention: time.Duration(cfg.SpoolRetentionHours)*time.Hour,
 		panelURL:    strings.TrimRight(cfg.PanelURL, "/"),
 		agentID:     cfg.AgentID,
 		agentSecret: cfg.AgentSecret,
@@ -80,6 +94,12 @@ func New(cfg config.Config) *Client {
 }
 
 func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (HeartbeatResult, error) {
+	samples, spoolErr := client.queueSample(payload)
+	if spoolErr == nil {
+		payload["history"] = map[string]any{"schemaVersion": 1, "samples": samples}
+	} else {
+		payload["historyStatus"] = "spool-unavailable"
+	}
 	body, err := protocol.CanonicalJSON(payload)
 	if err != nil {
 		return HeartbeatResult{}, err
@@ -132,6 +152,11 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 		return result, fmt.Errorf("invalid heartbeat upgrade response: %w", err)
 	}
 	result.Upgrade = parsedResponse.Upgrade
+	for _, id := range parsedResponse.AcceptedSampleIDs {
+		if path, ok := client.pendingSamples[id]; ok {
+			_ = os.Remove(path)
+		}
+	}
 
 	var parsed map[string]any
 	if err := json.Unmarshal(responseBody, &parsed); err == nil {

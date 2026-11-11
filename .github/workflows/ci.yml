@@ -30,6 +30,7 @@ jobs:
           python3 scripts/test-compose-bundle.py
           python3 scripts/test-compose-bootstrap.py
           python3 scripts/test-compose-update.py
+          python3 scripts/test-compose-operations.py
           python3 scripts/test-compose-wizard.py
           python3 scripts/test-compose-menu.py
           python3 scripts/test-manage-menu.py
@@ -96,7 +97,12 @@ jobs:
         run: |
           bash -n scripts/build-rfw-release.sh
           bash -n scripts/package-zfs-source.sh
+          bash -n scripts/rfw-manage.sh
+          bash -n scripts/zfs-manage.sh
+          bash -n XPayincus-Agent/components/install-host-tools.sh
           bash -n XPayincus-Agent/components/zfs/zfs-builder.sh
+      - name: Test atomic host status snapshots
+        run: python3 scripts/test-host-snapshot.py
       - name: Package Agent ZFS builder source
         run: bash scripts/package-zfs-source.sh
   compose:

@@ -11,9 +11,10 @@ const adminBillingSource = readFileSync(resolve(__dirname, '../src/routes/admin-
 const managedProvisionSource = readFileSync(resolve(__dirname, '../src/lib/managed-instance-provision.ts'), 'utf8')
 const appSource = readFileSync(resolve(__dirname, '../src/app.ts'), 'utf8')
 const compensationSource = readFileSync(resolve(__dirname, '../src/db/instance-provisioning-compensation.ts'), 'utf8')
+const durableSource = readFileSync(resolve(__dirname, '../src/lib/durable-instance-provision.ts'), 'utf8')
 
 function indexOfOrThrow(source: string, pattern: string, label: string): number {
-  const index = source.indexOf(pattern)
+  const index = source.indexOf(pattern.replace(/\n/g, source.includes('\r\n') ? '\r\n' : '\n'))
   assert.ok(index >= 0, `Missing ${label}: ${pattern}`)
   return index
 }
@@ -28,7 +29,7 @@ const compensationSection = compensationSource
 
 const failureSection = section(
   instancesSource,
-  '  } catch (error) {\n    const errorMessage = error instanceof Error ? error.message : String(error)',
+  'async function executeInstanceProvisioning(',
   '    throw error\n  }\n}'
 )
 
@@ -93,8 +94,8 @@ assert.ok(
 assert.ok(
   publicIpv4ReleaseHelperSection.includes('if (!networkModeNeedsPublicIpv4(networkMode))') &&
     publicIpv4ReleaseHelperSection.includes('db.releasePublicIpv4ForInstance(tx, instanceId)') &&
-    instancesSource.match(/db\.releasePublicIpv4ForInstance\(tx, instanceId\)/g)?.length === 1,
-  'all user-create failure branches must release reserved public IPv4 through one shared helper'
+    compensationHelperSection.includes('if (networkModeNeedsPublicIpv4(networkMode)) await db.releasePublicIpv4ForInstance(tx, instanceId)'),
+  'persistent compensation must release public IPv4 inside its atomic compensation transaction'
 )
 
 assert.ok(
@@ -112,27 +113,22 @@ assert.ok(
   'create-timeout cleanup must use the shared network-mode helper for port quota and release reserved public IPv4 addresses'
 )
 
-const adminAsyncSection = section(
-  adminBillingSource,
-  'async function createInstanceAsync(',
-  '\n}\n'
+assert.ok(
+  !adminBillingSource.includes('async function createInstanceAsync(') &&
+    failureSection.includes('await compensateFailedInstanceCreation({') &&
+    compensationHelperSection.includes("status: 'creating'") &&
+    compensationHelperSection.includes('await db.rollbackResources({') &&
+    compensationHelperSection.includes('await db.releasePublicIpv4ForInstance(tx, instanceId)') &&
+    compensationHelperSection.includes('await db.compensateFailedInstancePurchase(instanceId, userId, host.id, tx)'),
+  'admin paid jobs must use the shared worker and atomic resource/public IPv4/billing compensation instead of a legacy executor'
 )
 
 assert.ok(
-  adminAsyncSection.includes("where: { id: instanceId, status: 'creating' }") &&
-    adminAsyncSection.includes('await db.rollbackResources({') &&
-    adminAsyncSection.includes('await prisma.$transaction((tx) => db.releasePublicIpv4ForInstance(tx, instanceId))') &&
-    adminAsyncSection.includes('await db.compensateFailedInstancePurchase(instanceId, userId, host.id)') &&
-    adminAsyncSection.includes('await deleteInstance(client, config.name)'),
-  'admin paid instance async failures must atomically claim creating->error, release host resources/public IPv4, compensate billing, and clean Incus leftovers'
-)
-
-assert.ok(
-  adminAsyncSection.includes('await stopInstance(client, config.name, true)') &&
-    adminAsyncSection.includes('await deleteInstance(client, config.name)') &&
-    adminAsyncSection.indexOf("where: { id: instanceId, status: 'creating' }") <
-      adminAsyncSection.indexOf('console.log(`[Admin Provisioning] 实例 ${instanceId} 创建成功`)'),
-  'admin async success must use conditional creating->running update and clean Incus if timeout cleanup won the race'
+  failureSection.includes("if (current && ['running', 'stopped'].includes(current.status)) throw error") &&
+    failureSection.includes('if (names.includes(`/1.0/instances/${encodeURIComponent(config.name)}`)) throw error') &&
+    failureSection.includes("throw new Error('實例狀態已改變；保留遠端資源並等待核實')") &&
+    !failureSection.includes('await deleteInstance(client, config.name)'),
+  'shared provisioning must preserve committed or existing remote resources for ownership review rather than refunding or deleting them after an uncertain failure'
 )
 
 const managedAsyncSection = section(
@@ -156,20 +152,14 @@ assert.ok(
   'public IPv4 allocation races must enter the same resource and billing compensation path'
 )
 
-assert.ok(
-  adminBillingSource.includes('宿主机 ${host.name} 没有可用独立 IPv4 地址') &&
-    adminBillingSource.includes('[Admin Create Instance] 独立 IPv4 分配失败后资源回滚失败') &&
-    adminBillingSource.includes('[Admin Create Instance] 独立 IPv4 分配失败后计费补偿失败'),
-  'admin instance creation must rollback resources and compensate purchase when public IPv4 allocation races to empty'
-)
+assert.ok(adminBillingSource.includes('await createPreparingProvisionJob(tx, instance.id, {') && !adminBillingSource.includes('createInstanceAsync(instanceId, host, {'), 'admin creation must enqueue within the purchase transaction instead of launching the legacy executor')
 
 const hostRoutesSource = readFileSync(resolve(__dirname, '../src/routes/hosts.ts'), 'utf8')
-assert.ok(
-  hostRoutesSource.includes('宿主机 ${lockedHost!.name} 没有可用独立 IPv4 地址') &&
-    hostRoutesSource.includes('[Host Create For User] failed to rollback resources after public IPv4 allocation miss') &&
-    hostRoutesSource.includes('[Host Create For User] failed to compensate purchase after public IPv4 allocation miss'),
-  'host-owner instance creation must rollback resources and compensate purchase when public IPv4 allocation races to empty'
-)
+assert.ok(hostRoutesSource.includes('await createPreparingProvisionJob(tx, instance.id, {') && !hostRoutesSource.includes('provisionManagedInstanceAsync(instanceId,'), 'managed creation must enqueue within its reservation transaction')
+assert.ok(durableSource.includes("status: 'preparing', phase: 'preparing'") && durableSource.includes('encryptSensitiveData(JSON.stringify(input))'), 'preparing jobs must preserve encrypted recovery input')
+assert.ok(durableSource.includes('if (!ipv4) ipv4 = await db.allocateAndReserveNatIpv4') && durableSource.includes('publicIpv4Address.findFirst') && durableSource.includes('let ipv6 = instance.ipv6'), 'preparing recovery must reuse previously reserved addresses')
+assert.ok(durableSource.includes("status: 'pending', phase: 'queued'") && durableSource.includes('tx.instance.update'), 'preparation must commit queued payload and instance addresses together')
+assert.ok(instancesSource.includes('await prepareDurableInstance(job.instanceId, host, input)') && instancesSource.includes('await finishInstanceProvisioning(job.instanceId, host, input.config, input.userId)') && instancesSource.includes("phase: 'postcommit'"), 'worker must recover both preparing and already committed creation')
 
 assert.ok(
   managedAsyncSection.includes('await stopInstance(client, config.name, true)') &&

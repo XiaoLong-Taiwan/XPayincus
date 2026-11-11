@@ -5,14 +5,23 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-The OTA baseline starts from `v0.0.1` and has been proven through the atomic OTA workflow.
+Root `VERSION` and `RELEASE.md` define the unified release. v1.0.10 has been officially released; the current source targets **v1.0.11 (unreleased)**. Historical OTA proof does not validate this release.
+
+## v1.0.11 New Capabilities
+
+- Task center, persistent provisioning progress and retries, purchase drafts, stock subscriptions, and 7/30-day automatic renewal forecasts.
+- Host maintenance plans with restricted IPv4 NAT/shared OVN cold migration; hosting withdrawal payment status, references, proof, and failure refunds.
+- Agent background collection, history replay, persistent upgrade health confirmation, read-only RFW/ZFS status, and independent host tools.
+- Compose doctor, migration planning, update preflight, and backup inventories, retaining the complete 30-asset release contract.
+
+Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the application. Back up the database and original keys before upgrading; database rollback is not automatic. This version synchronization uses static inspection only, without tests, builds, commits, or deployment. The full release draft is in `docs-site/release-notes/v1.0.11.md`.
 
 ## Versioning Rule / 版本号规则
 
-- Use three-part semantic versions: `vMAJOR.MINOR.PATCH` / 后续版本按三段语义版本递进：`v主版本.次版本.修订版本`.
-- Patch numbers are limited to `0` through `9`; after `v0.0.9`, the next version is `v0.1.0`, not `v0.0.10` / 修订版本只从 `0` 到 `9`，`v0.0.9` 之后进位为 `v0.1.0`，不要继续发布 `v0.0.10`.
-- After `v0.9.9`, roll over to `v1.0.0` / 当 `v0.9.9` 之后继续进位时，发布 `v1.0.0`.
-- Existing historical tags remain unchanged; apply this rule to future releases / 既有历史 tag 保留不改；新规则从下一次发布开始执行.
+- The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
+- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.10` to `v1.0.11`.
+- Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
+- Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 
 ## OTA Release Frequency / OTA 发布频率
 
@@ -21,7 +30,7 @@ The OTA baseline starts from `v0.0.1` and has been proven through the atomic OTA
 - Handoff-only, audit-only, and non-behavior documentation changes usually do not need an OTA, but the public docs site should stay current / 纯交接文档、审计记录、非行为性文档补充通常不发 OTA；但公开文档站仍要保持最新.
 - Emergency production fixes may ship separately, but must include a clear commit subject, verification evidence, and version log updates / 紧急生产修复可以单独发 OTA，但必须包含明确提交说明、测试证据和版本日志.
 
-## Verified Capabilities
+## Historically Verified Capabilities
 
 - GitHub Release artifact.
 - OTA manifest.
@@ -37,7 +46,7 @@ HANDOFF.md
 docs-site/docs/release/version-log.md
 ```
 
-`HANDOFF.md` records the latest proven production OTA, the current local release candidate, and remaining live-proof work. The system version log is generated from Git tags and commits. The old private `docs/production-audit.md` file is no longer the current public documentation entry point.
+`HANDOFF.md` preserves historical operational evidence. Root `VERSION`/`RELEASE.md` define the current target, and GitHub Releases record publication status. The generated Git version log does not establish current deployment or acceptance of new capabilities.
 
 ## Git Changelog
 

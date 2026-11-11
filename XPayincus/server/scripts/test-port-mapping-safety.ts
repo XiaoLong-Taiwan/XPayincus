@@ -30,7 +30,9 @@ function assertCreateBeforeAddDevice(section: string, label: string): void {
 }
 
 // ── 单条端口映射的安全序列（实现已抽到 lib/instance-port-mapping.ts，路由与创建实例共用）──
-assertCreateBeforeAddDevice(portLib, 'single port mapping (lib)')
+const addPortMappingStart = portLib.indexOf('export async function addInstancePortMapping(')
+assert.notEqual(addPortMappingStart, -1, 'shared addInstancePortMapping implementation must exist')
+assertCreateBeforeAddDevice(portLib.slice(addPortMappingStart), 'single port mapping (lib)')
 const automaticAllocationIndex = portLib.indexOf('await db.allocatePort(instance.host_id, protocol)')
 const unifiedPortCheckIndex = portLib.indexOf('await db.checkPortInUse(instance.host_id, allocatedPort, protocol)')
 assert.notEqual(automaticAllocationIndex, -1, 'single port mapping: automatic allocation not found')

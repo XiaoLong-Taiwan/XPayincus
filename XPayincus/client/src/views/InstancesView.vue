@@ -84,6 +84,40 @@ const isDesktopViewport = ref<boolean>(true)
 
 // 批量选择
 const selectedIds = ref<Set<number>>(new Set())
+const selectionCache = ref<Record<number, Instance>>({})
+type BatchResult = { id: number; name: string; status: 'succeeded' | 'failed' | 'skipped' | 'pending' | 'unknown'; error?: string }
+const batchResults = ref<BatchResult[]>([])
+const retryAction = ref<(() => Promise<void>) | null>(null)
+const failedBatchIds = computed(() => batchResults.value.filter(item => item.status === 'failed').map(item => item.id))
+const billingBatchIds = ref<number[]>([])
+const billingBatchRetry = ref(false)
+async function runItemBatch(ids: number[], action: (id: number) => Promise<unknown>, retry = false, billingKind?: 'renew' | 'destroy') {
+  const targets = [...new Set(ids)]
+  if (!retry) batchResults.value = targets.map(id => ({ id, name: selectionCache.value[id]?.name || `#${id}`, status: 'pending' }))
+  else batchResults.value = batchResults.value.map(item => targets.includes(item.id) ? { ...item, status: 'pending', error: undefined } : item)
+  retryAction.value = async () => {
+    if (batchActionLoading.value || batchRenewSubmitting.value || batchDestroySubmitting.value || showBatchRenewModal.value || showBatchDestroyModal.value) return
+    if (billingKind === 'renew') { await openBatchRenewModal(true); return }
+    if (billingKind === 'destroy') { await openBatchDestroyModal(true); return }
+    batchActionLoading.value = 'retry'
+    try { await runItemBatch(failedBatchIds.value, action, true); await loadInstances(true) }
+    finally { batchActionLoading.value = '' }
+  }
+  await runWithConcurrency(targets, SIMPLE_BATCH_CONCURRENCY, async id => {
+    const item = batchResults.value.find(result => result.id === id)!
+    try {
+      const result = await action(id) as { failedCount?: number; skippedCount?: number; message?: string; results?: Array<{ id: number; success: boolean; skipped?: boolean; reason?: string }> }
+      const detail = result?.results?.find(entry => entry.id === id)
+      item.status = detail ? (detail.skipped ? 'skipped' : detail.success ? 'succeeded' : 'failed')
+        : result?.failedCount ? 'failed' : result?.skippedCount ? 'skipped' : 'succeeded'
+      if (item.status !== 'succeeded') item.error = detail?.reason ? translateBatchReason(detail.reason) : result?.message
+    } catch (err: any) {
+      const status = err?.status || err?.response?.status
+      item.status = status && status < 500 ? 'failed' : 'unknown'
+      item.error = translateError(err)
+    }
+  })
+}
 
 // 批量续费
 const showBatchRenewModal = ref(false)
@@ -145,10 +179,10 @@ const resetTrafficSubmitting = ref(false)
 const filterUserId = ref<number | null>(null)
 const filterUserName = ref<string>('')
 
-const isAllSelected = computed(() => instances.value.length > 0 && selectedIds.value.size === instances.value.length)
-const isPartialSelected = computed(() => selectedIds.value.size > 0 && selectedIds.value.size < instances.value.length)
+const isAllSelected = computed(() => instances.value.length > 0 && instances.value.every(instance => selectedIds.value.has(instance.id)))
+const isPartialSelected = computed(() => !isAllSelected.value && instances.value.some(instance => selectedIds.value.has(instance.id)))
 const selectedCount = computed(() => selectedIds.value.size)
-const selectedInstances = computed(() => instances.value.filter(instance => selectedIds.value.has(instance.id)))
+const selectedInstances = computed(() => [...selectedIds.value].map(id => selectionCache.value[id]).filter((instance): instance is Instance => !!instance))
 const selectedRunningCount = computed(() => selectedInstances.value.filter(instance => instance.status?.toLowerCase() === 'running').length)
 const selectedStoppedCount = computed(() => selectedInstances.value.filter(instance => instance.status?.toLowerCase() === 'stopped').length)
 const selectedBillingActionIds = computed(() =>
@@ -241,6 +275,9 @@ watch(
   async (newUserId, oldUserId) => {
     if (newUserId === oldUserId) return
     
+    clearSelection()
+    selectionCache.value = {}
+    batchResults.value = []
     // 更新筛选条件
     if (newUserId) {
       filterUserId.value = parseInt(newUserId as string)
@@ -443,8 +480,7 @@ async function loadInstances(force = false): Promise<void> {
       return loadInstances(force)
     }
 
-    const visibleIds = new Set(nextInstances.map(instance => instance.id))
-    selectedIds.value = new Set([...selectedIds.value].filter(id => visibleIds.has(id)))
+    for (const instance of nextInstances) selectionCache.value[instance.id] = instance
   } catch (error) {
     console.error('Failed to load instances:', error)
     listError.value = translateError(error) || t('common.loadFailed')
@@ -454,11 +490,14 @@ async function loadInstances(force = false): Promise<void> {
 }
 
 function toggleSelectAll(): void {
-  if (isAllSelected.value) {
-    selectedIds.value = new Set()
-  } else {
-    selectedIds.value = new Set(instances.value.map(instance => instance.id))
+  const next = new Set(selectedIds.value)
+  const remove = isAllSelected.value
+  for (const instance of instances.value) {
+    selectionCache.value[instance.id] = instance
+    if (remove) next.delete(instance.id)
+    else next.add(instance.id)
   }
+  selectedIds.value = next
 }
 
 function toggleSelect(id: number): void {
@@ -504,7 +543,6 @@ function handlePageSizeChange(): void {
 function goToPage(nextPage: number): void {
   if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return
   page.value = nextPage
-  clearSelection()
   void loadInstances()
 }
 
@@ -1151,6 +1189,7 @@ function translateBatchReason(reason?: string): string {
 }
 
 async function handleBatchSimpleAction(action: BatchSimpleAction): Promise<void> {
+  if (batchActionLoading.value || batchRenewSubmitting.value || batchDestroySubmitting.value || showBatchRenewModal.value || showBatchDestroyModal.value) return
   const targets = getBatchTargets(action)
   if (targets.length === 0) {
     toast.warning(t('instance.batch.noEligibleAction'))
@@ -1159,19 +1198,17 @@ async function handleBatchSimpleAction(action: BatchSimpleAction): Promise<void>
 
   batchActionLoading.value = action
   try {
-    const settled = await runWithConcurrency(
-      targets,
-      SIMPLE_BATCH_CONCURRENCY,
-      async (instance) => {
-        if (action === 'start') return api.instances.start(instance.id)
-        if (action === 'stop') return api.instances.stop(instance.id)
-        if (action === 'restart') return api.instances.restart(instance.id)
-        return api.instances.syncStatus(instance.id)
-      }
-    )
-
-    const successCount = settled.filter(item => item.status === 'fulfilled').length
-    const failedCount = settled.length - successCount
+    await runItemBatch(targets.map(instance => instance.id), async id => {
+      if (action === 'start') return api.instances.start(id)
+      if (action === 'stop') return api.instances.stop(id)
+      if (action === 'restart') return api.instances.restart(id)
+      return api.instances.syncStatus(id)
+    })
+    for (const instance of selectedInstances.value.filter(item => !targets.some(target => target.id === item.id))) {
+      batchResults.value.push({ id: instance.id, name: instance.name, status: 'skipped' })
+    }
+    const successCount = batchResults.value.filter(item => item.status === 'succeeded').length
+    const failedCount = targets.length - successCount
     const skippedCount = selectedCount.value - targets.length
 
     if (failedCount > 0) {
@@ -1190,12 +1227,14 @@ async function handleBatchSimpleAction(action: BatchSimpleAction): Promise<void>
 }
 
 async function handleBatchAutoRenew(autoRenew: boolean): Promise<void> {
+  if (batchActionLoading.value || batchRenewSubmitting.value || batchDestroySubmitting.value || showBatchRenewModal.value || showBatchDestroyModal.value) return
   const instanceIds = selectedBillingActionIds.value
   if (instanceIds.length === 0 || !canUseCustomerBillingActions.value) return
 
   batchActionLoading.value = autoRenew ? 'autoRenewOn' : 'autoRenewOff'
   try {
-    const result = await customerBillingApi.billing.setAutoRenewBatch(instanceIds, autoRenew)
+    await runItemBatch(instanceIds, id => customerBillingApi.billing.setAutoRenewBatch([id], autoRenew))
+    const result = { successCount: batchResults.value.filter(item => item.status === 'succeeded').length, failedCount: batchResults.value.filter(item => item.status === 'failed' || item.status === 'unknown').length, skippedCount: batchResults.value.filter(item => item.status === 'skipped').length }
     if (result.failedCount > 0) {
       toast.warning(t('instance.batch.partialResult', {
         success: result.successCount,
@@ -1245,6 +1284,7 @@ async function handleSingleAutoRenew(instance: Instance, autoRenew: boolean): Pr
 
 async function openSingleRenewModal(instance: Instance): Promise<void> {
   if (!canUseInstanceBillingAction(instance)) return
+  selectionCache.value[instance.id] = instance
   selectedIds.value = new Set([instance.id])
   await openBatchRenewModal()
 }
@@ -1253,9 +1293,12 @@ function openInstanceTransfer(instance: Instance): void {
   void router.push({ path: transfersPath(), query: { instanceId: String(instance.id) } })
 }
 
-async function openBatchRenewModal(): Promise<void> {
-  const instanceIds = selectedBillingActionIds.value
+async function openBatchRenewModal(retry = false): Promise<void> {
+  if (batchActionLoading.value || batchRenewSubmitting.value || batchDestroySubmitting.value) return
+  const instanceIds = retry === true ? [...failedBatchIds.value] : [...selectedBillingActionIds.value]
   if (instanceIds.length === 0 || !canUseCustomerBillingActions.value) return
+  billingBatchIds.value = instanceIds
+  billingBatchRetry.value = retry === true
 
   showBatchRenewModal.value = true
   batchRenewLoading.value = true
@@ -1289,12 +1332,14 @@ function closeBatchRenewModal(force = false): void {
 
 async function confirmBatchRenew(): Promise<void> {
   if (!batchRenewCanSubmit.value || !canUseCustomerBillingActions.value) return
-  const instanceIds = selectedBillingActionIds.value
+  const instanceIds = [...billingBatchIds.value]
   if (instanceIds.length === 0) return
 
   batchRenewSubmitting.value = true
   try {
-    const result = await customerBillingApi.billing.renewInstancesBatch(instanceIds, batchRenewMonths.value)
+    const months = batchRenewMonths.value
+    await runItemBatch(instanceIds, id => customerBillingApi.billing.renewInstancesBatch([id], months), billingBatchRetry.value, 'renew')
+    const result = { successCount: batchResults.value.filter(item => item.status === 'succeeded').length, failedCount: batchResults.value.filter(item => item.status === 'failed' || item.status === 'unknown').length, skippedCount: batchResults.value.filter(item => item.status === 'skipped').length }
     if (result.failedCount > 0) {
       toast.warning(t('instance.batch.partialResult', {
         success: result.successCount,
@@ -1314,8 +1359,12 @@ async function confirmBatchRenew(): Promise<void> {
   }
 }
 
-async function openBatchDestroyModal(): Promise<void> {
-  if (selectedCount.value === 0 || !canUseCustomerBillingActions.value) return
+async function openBatchDestroyModal(retry = false): Promise<void> {
+  if (batchActionLoading.value || batchRenewSubmitting.value || batchDestroySubmitting.value) return
+  const instanceIds = retry === true ? [...failedBatchIds.value] : [...selectedIds.value]
+  if (instanceIds.length === 0 || !canUseCustomerBillingActions.value) return
+  billingBatchIds.value = instanceIds
+  billingBatchRetry.value = retry === true
 
   showBatchDestroyModal.value = true
   batchDestroyLoading.value = true
@@ -1323,7 +1372,7 @@ async function openBatchDestroyModal(): Promise<void> {
   batchDestroyPreview.value = []
 
   try {
-    const result = await customerBillingApi.billing.getBatchDestroyInfo(Array.from(selectedIds.value))
+    const result = await customerBillingApi.billing.getBatchDestroyInfo(instanceIds)
     batchDestroyPreview.value = result.items
   } catch (error: any) {
     toast.error(t('instance.batch.previewFailed') + ': ' + translateError(error))
@@ -1345,7 +1394,8 @@ async function confirmBatchDestroy(): Promise<void> {
 
   batchDestroySubmitting.value = true
   try {
-    const result = await customerBillingApi.billing.destroyInstancesBatch(Array.from(selectedIds.value))
+    await runItemBatch([...billingBatchIds.value], id => customerBillingApi.billing.destroyInstancesBatch([id]), billingBatchRetry.value, 'destroy')
+    const result = { successCount: batchResults.value.filter(item => item.status === 'succeeded').length, failedCount: batchResults.value.filter(item => item.status === 'failed' || item.status === 'unknown').length, skippedCount: batchResults.value.filter(item => item.status === 'skipped').length }
     if (result.failedCount > 0) {
       toast.warning(t('instance.batch.partialResult', {
         success: result.successCount,
@@ -1393,6 +1443,25 @@ async function confirmBatchDestroy(): Promise<void> {
       </RouterLink>
     </div>
 
+    <section v-if="batchResults.length" class="space-y-3 rounded-xl border border-themed bg-themed-surface p-4" aria-live="polite">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <h2 class="font-semibold">{{ $t('operations.batchResults') }}</h2>
+        <button class="btn btn-secondary" :disabled="!failedBatchIds.length || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting" @click="retryAction?.()">{{ $t('operations.retry') }}</button>
+        <RouterLink to="/tasks" class="btn btn-secondary">{{ $t('operations.title') }}</RouterLink>
+      </div>
+      <p class="text-sm text-themed-muted">{{ $t('operations.batchHint') }}</p>
+      <div class="space-y-2 lg:hidden">
+        <article v-for="item in batchResults" :key="item.id" class="rounded-lg border border-themed p-3">
+          <p class="break-words font-medium">{{ item.name }} (#{{ item.id }})</p>
+          <p>{{ $t(`operations.${item.status}`) }}</p><p v-if="item.error" class="break-words text-sm text-red-600">{{ item.error }}</p>
+        </article>
+      </div>
+      <div class="hidden overflow-hidden lg:block">
+        <table class="w-full table-fixed text-sm"><thead><tr class="text-left"><th class="w-[35%] p-2">{{ $t('operations.instance') }}</th><th class="w-[25%] p-2">{{ $t('operations.status') }}</th><th class="w-[40%] p-2">{{ $t('operations.result') }}</th></tr></thead>
+          <tbody><tr v-for="item in batchResults" :key="item.id"><td class="break-words p-2">{{ item.name }} (#{{ item.id }})</td><td class="break-words p-2">{{ $t(`operations.${item.status}`) }}</td><td class="break-words p-2">{{ item.error || '—' }}</td></tr></tbody>
+        </table>
+      </div>
+    </section>
     <!-- 搜索和筛选 -->
     <div class="kawaii-instance-toolbar flex flex-col gap-3 rounded-2xl border p-3 xl:flex-row xl:items-center xl:justify-between">
       <div class="flex flex-col gap-3 flex-1 min-w-0 xl:flex-row xl:items-center">
@@ -1658,7 +1727,7 @@ async function confirmBatchDestroy(): Promise<void> {
             v-if="!isAdminEntry"
             class="btn-secondary btn-sm"
             :disabled="selectedBillingActionIds.length === 0 || isViewingAnotherUsersInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
-            @click="openBatchRenewModal"
+            @click="openBatchRenewModal()"
           >
             {{ configStore.freeSiteMode ? freeSiteCopy.instanceBatchRenewAction : $t('instance.batch.renew') }}
           </button>
@@ -1666,7 +1735,7 @@ async function confirmBatchDestroy(): Promise<void> {
             v-if="!isAdminEntry"
             class="btn-danger btn-sm"
             :disabled="!hasSelectedInstances || isViewingAnotherUsersInstances || !!batchActionLoading || batchRenewSubmitting || batchDestroySubmitting"
-            @click="openBatchDestroyModal"
+            @click="openBatchDestroyModal()"
           >
             {{ $t('instance.batch.destroy') }}
           </button>

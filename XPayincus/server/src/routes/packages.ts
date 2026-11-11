@@ -780,6 +780,45 @@ async function shouldSyncPackageTrafficLimitsAfterUpdate(
 }
 
 export default async function packageRoutes(fastify: FastifyInstance) {
+  fastify.get('/stock-subscriptions', { onRequest: [fastify.authenticate] }, async request => {
+    return { subscriptions: await prisma.stockSubscription.findMany({ where: { userId: request.user.id }, orderBy: { id: 'desc' } }) }
+  })
+
+  fastify.post<{ Params: { id: string }; Body: { planId: number; region?: string; cooldownHours?: number } }>('/:id/stock-subscriptions', {
+    onRequest: [fastify.authenticate],
+    schema: { body: { type: 'object', additionalProperties: false, required: ['planId'], properties: {
+      planId: { type: 'integer', minimum: 1, maximum: 2147483647 },
+      region: { type: 'string', maxLength: 100 }, cooldownHours: { type: 'integer', minimum: 1, maximum: 720 }
+    } } }
+  }, async (request, reply) => {
+    const packageId = Number(request.params.id)
+    if (!POSITIVE_ROUTE_ID_PATTERN.test(request.params.id) || !Number.isSafeInteger(packageId) || packageId > POSTGRES_INT_MAX) return reply.code(400).send({ error: '無效的套餐 ID' })
+    if (!await packageShares.canUserAccessPackage(request.user.id, packageId)) return reply.code(403).send({ error: '無權存取套餐' })
+    const { planId, cooldownHours = 24 } = request.body
+    const region = request.body.region?.trim() || ''
+    const plan = await prisma.packagePlan.findFirst({ where: { id: planId, packageId, isActive: true } })
+    if (!plan) return reply.code(404).send({ error: '方案不存在' })
+    if (region) {
+      const bindings = await prisma.packageHost.findMany({ where: { packageId }, select: { hostId: true } })
+      const pkg = await prisma.package.findUniqueOrThrow({ where: { id: packageId }, select: { userId: true } })
+      if (!await prisma.host.findFirst({ where: { location: region, ...(bindings.length ? { id: { in: bindings.map(binding => binding.hostId) } } : { userId: pkg.userId }) }, select: { id: true } })) return reply.code(400).send({ error: '套餐未提供此區域' })
+    }
+    const { isPlanAvailable } = await import('../services/stock-subscriptions.js')
+    const wasAvailable = await isPlanAvailable(packageId, planId, region)
+    const subscription = await prisma.stockSubscription.upsert({
+      where: { userId_planId_region: { userId: request.user.id, planId, region } },
+      create: { userId: request.user.id, packageId, planId, region, cooldownHours, wasAvailable },
+      update: { active: true, cooldownHours, wasAvailable }
+    })
+    return { subscription }
+  })
+
+  fastify.delete<{ Params: { subscriptionId: string } }>('/stock-subscriptions/:subscriptionId', { onRequest: [fastify.authenticate] }, async (request, reply) => {
+    const id = Number(request.params.subscriptionId)
+    if (!POSITIVE_ROUTE_ID_PATTERN.test(request.params.subscriptionId) || !Number.isSafeInteger(id) || id > POSTGRES_INT_MAX) return reply.code(400).send({ error: '無效的訂閱 ID' })
+    await prisma.stockSubscription.updateMany({ where: { id, userId: request.user.id }, data: { active: false } })
+    return { success: true }
+  })
   // ==================== 公开 API（无需登录） ====================
   
   /**

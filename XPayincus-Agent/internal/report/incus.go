@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,18 @@ const (
 	maxReportedIncusInstances = 500
 	incusStateConcurrency     = 3
 )
+
+var instanceCursor string
+var instanceCollectionMu sync.Mutex
+
+type deadlineTransport struct {
+	ctx context.Context
+	base http.RoundTripper
+}
+
+func (transport deadlineTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport.base.RoundTrip(request.WithContext(transport.ctx))
+}
 
 var externalGuestInterfacePattern = regexp.MustCompile(`^(eth[0-9]+|en(?:o|p|s|x)[a-z0-9]+)$`)
 
@@ -66,6 +79,10 @@ type trafficCounters struct {
 }
 
 func collectIncusInstanceReport() map[string]any {
+	instanceCollectionMu.Lock()
+	defer instanceCollectionMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	reportedAt := time.Now().UTC().Format(time.RFC3339)
 	socketPath, ok := detectIncusSocket()
 	if !ok {
@@ -79,6 +96,7 @@ func collectIncusInstanceReport() map[string]any {
 
 	// 只通过本机 Unix socket 做只读采集，不要求宿主机开放额外 Agent 端口。
 	client := newIncusUnixHTTPClient(socketPath)
+	client.Transport = deadlineTransport{ctx: ctx, base: client.Transport}
 	instances, err := listIncusInstances(client)
 	if err != nil {
 		return map[string]any{
@@ -90,27 +108,44 @@ func collectIncusInstanceReport() map[string]any {
 		}
 	}
 
-	limitedInstances := instances
-	if len(limitedInstances) > maxReportedIncusInstances {
-		limitedInstances = limitedInstances[:maxReportedIncusInstances]
+	sort.Slice(instances, func(i, j int) bool { return instances[i].Name < instances[j].Name })
+	start := sort.Search(len(instances), func(i int) bool { return instances[i].Name > instanceCursor })
+	if start == len(instances) {
+		start = 0
 	}
-
+	limitedInstances := instancePage(instances, start)
 	items := make([]map[string]any, len(limitedInstances))
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, incusStateConcurrency)
-
-	for index, instance := range limitedInstances {
+	jobs := make(chan int)
+	for worker := 0; worker < incusStateConcurrency; worker++ {
 		wg.Add(1)
-		go func(index int, instance incusInstanceSummary) {
+		go func() {
 			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			items[index] = buildIncusInstanceReportItem(client, instance)
-		}(index, instance)
+			for index := range jobs {
+				items[index] = buildIncusInstanceReportItem(client, limitedInstances[index])
+			}
+		}()
 	}
+	attempted := 0
+sendJobs:
+	for index := range limitedInstances {
+		select {
+		case <-ctx.Done():
+			break sendJobs
+		case jobs <- index:
+			attempted = index + 1
+		}
+	}
+	close(jobs)
 	wg.Wait()
+	if attempted > 0 {
+		instanceCursor = limitedInstances[attempted-1].Name
+	}
 
+	trafficAvailable := false
+	for _, item := range items {
+		if item != nil && item["traffic"] != nil { trafficAvailable = true }
+	}
 	normalizedItems := make([]any, 0, len(items))
 	for _, item := range items {
 		if item != nil {
@@ -122,9 +157,21 @@ func collectIncusInstanceReport() map[string]any {
 		"available":  true,
 		"reportedAt": reportedAt,
 		"total":      len(instances),
-		"truncated":  len(instances) > len(limitedInstances),
+		"truncated": len(instances) > len(normalizedItems),
+		"trafficAvailable": trafficAvailable,
+		"deadlineExceeded": ctx.Err() != nil,
+		"cursor": instanceCursor,
+		"status": "ready",
 		"items":      normalizedItems,
 	}
+}
+
+func instancePage(instances []incusInstanceSummary, start int) []incusInstanceSummary {
+	count := len(instances)
+	if count > maxReportedIncusInstances { count = maxReportedIncusInstances }
+	page := make([]incusInstanceSummary, count)
+	for i := range page { page[i] = instances[(start+i)%len(instances)] }
+	return page
 }
 
 func newIncusUnixHTTPClient(socketPath string) *http.Client {

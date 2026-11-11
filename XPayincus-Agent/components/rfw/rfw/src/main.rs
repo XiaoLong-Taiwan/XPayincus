@@ -8,6 +8,25 @@ use rfw_common::{PortAccessKey, PortAccessStats};
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 use tokio::signal;
+mod geoip;
+
+fn unix_time() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
+}
 
 // 从 URL 下载并解析指定国家的 GeoIP 数据
 async fn fetch_geoip_data(country_code: &str) -> anyhow::Result<Vec<String>> {
@@ -34,12 +53,24 @@ async fn fetch_geoip_data(country_code: &str) -> anyhow::Result<Vec<String>> {
         );
     }
 
-    let text = response.text().await?;
-    let cidrs: Vec<String> = text
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        anyhow::ensure!(bytes.len() + chunk.len() <= 4 * 1024 * 1024, "GeoIP response exceeds 4 MiB");
+        bytes.extend_from_slice(&chunk);
+    }
+    let text = String::from_utf8(bytes)?;
+    let mut cidrs = Vec::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.contains(':') {
+            let (address, prefix) = line.split_once('/').context("Invalid IPv6 CIDR")?;
+            let _: std::net::Ipv6Addr = address.parse()?;
+            anyhow::ensure!(prefix.parse::<u32>()? <= 128, "Invalid IPv6 prefix");
+            continue; // The datapath currently filters IPv4 only.
+        }
+        anyhow::ensure!(parse_cidr_to_lpm(line).is_some(), "Malformed GeoIP IPv4 CIDR");
+        cidrs.push(line.to_string());
+    }
 
     info!(
         "成功下载并解析 {} 的 {} 个 IP CIDR 前缀",
@@ -48,32 +79,6 @@ async fn fetch_geoip_data(country_code: &str) -> anyhow::Result<Vec<String>> {
     );
 
     Ok(cidrs)
-}
-
-// 批量下载多个国家的 GeoIP 数据
-async fn fetch_multiple_geoip_data(
-    country_codes: &[String],
-) -> anyhow::Result<Vec<(String, Vec<String>)>> {
-    let mut results = Vec::new();
-
-    for code in country_codes {
-        let code_upper = code.to_uppercase();
-        match fetch_geoip_data(&code_upper).await {
-            Ok(data) => {
-                results.push((code_upper.clone(), data));
-            }
-            Err(e) => {
-                warn!("获取 {} 的 GeoIP 数据失败: {}", code_upper, e);
-                // 继续处理其他国家,不中断
-            }
-        }
-    }
-
-    if results.is_empty() {
-        anyhow::bail!("所有国家的 GeoIP 数据下载均失败");
-    }
-
-    Ok(results)
 }
 
 // 解析 CIDR 格式（如 "1.0.1.0/24"）为 LpmTrie 的 (IP, prefix_len)
@@ -119,22 +124,12 @@ fn parse_cidr_to_lpm(cidr: &str) -> Option<(u32, u32)> {
 }
 
 fn run_stats(opt: StatsOpt) -> anyhow::Result<()> {
-    //  使用 reuse_pinned_maps 加载 eBPF，以便访问已 pin 的 map
-    let mut ebpf = aya::EbpfLoader::new()
-        .map_pin_path(
-            "PORT_ACCESS_LOG",
-            std::path::Path::new("/sys/fs/bpf/rfw_port_access_log"),
-        )
-        .load(aya::include_bytes_aligned!(concat!(
-            env!("OUT_DIR"),
-            "/rfw"
-        )))
-        .context("无法加载 eBPF 程序")?;
-
-    let port_access_map: AyaHashMap<_, PortAccessKey, PortAccessStats> = ebpf
-        .take_map("PORT_ACCESS_LOG")
-        .context("无法找到 PORT_ACCESS_LOG map，请确保 rfw 正在运行并启用了 --log-port-access")?
-        .try_into()?;
+    let generation_before = std::fs::read("/run/rfw/generation.json")
+        .context("No active RFW generation")?;
+    let map = aya::maps::MapData::from_pin("/sys/fs/bpf/rfw_port_access_log")
+        .context("No pinned statistics map; enable --log-port-access")?;
+    let port_access_map: AyaHashMap<_, PortAccessKey, PortAccessStats> =
+        aya::maps::Map::LruHashMap(map).try_into()?;
 
     // 读取所有记录
     let mut records: Vec<(PortAccessKey, PortAccessStats)> = Vec::new();
@@ -167,6 +162,22 @@ fn run_stats(opt: StatsOpt) -> anyhow::Result<()> {
         records.push((key, stats));
     }
 
+    anyhow::ensure!(std::fs::read("/run/rfw/generation.json")? == generation_before, "RFW generation changed during sample; retry");
+    if opt.json {
+        let generation: serde_json::Value = serde_json::from_slice(&generation_before)?;
+        let rows: Vec<_> = records.iter().map(|(key, stats)| serde_json::json!({
+            "sourceIp":Ipv4Addr::from(u32::from_be(key.src_ip)).to_string(),
+            "destinationPort":key.dst_port,"protocol":key.protocol,
+            "allowed":stats.allowed_count,"blocked":stats.blocked_count,
+            "lastSeenMonotonicNs":stats.last_seen
+        })).collect();
+        println!("{}", serde_json::json!({"schemaVersion":1,"collectedAtUnix":unix_time(),
+            "generation":generation,"addressFamily":"IPv4","mapType":"LRU hash",
+            "capacity":65536,"completeHistory":false,"snapshotAtomic":false,
+            "counterLimitations":"LRU eviction and concurrent packet updates can lose counts; sample by generation, never billing totals",
+            "records":rows}));
+        return Ok(());
+    }
     if records.is_empty() {
         println!("没有找到匹配的访问记录");
         println!("提示: 请确保 rfw 使用 --log-port-access 参数运行");
@@ -255,10 +266,16 @@ struct Cli {
 enum Commands {
     /// 查看端口访问统计
     Stats(StatsOpt),
+    /// Parse and validate options without loading eBPF or fetching GeoIP
+    Check(RunOpt),
+    /// Inspect actual kernel XDP attachment using iproute2
+    Status { #[clap(long, default_value = "eth0")] iface: String },
 }
 
 #[derive(Debug, Parser)]
 struct StatsOpt {
+    #[clap(long)]
+    json: bool,
     /// 按端口号过滤
     #[clap(short, long)]
     port: Option<u16>,
@@ -282,6 +299,10 @@ struct StatsOpt {
 
 #[derive(Debug, Parser)]
 struct RunOpt {
+    #[clap(long, default_value = "/var/cache/rfw/geoip")]
+    geoip_cache: std::path::PathBuf,
+    #[clap(long)]
+    geoip_refresh: bool,
     /// 网络接口名称（如 eth0, ens33, wlan0）
     ///
     /// 使用 'ip link' 或 'ifconfig' 查看可用接口
@@ -416,11 +437,43 @@ async fn main() -> anyhow::Result<()> {
     // 处理子命令
     match cli.command {
         Some(Commands::Stats(stats_opt)) => run_stats(stats_opt),
+        Some(Commands::Check(opt)) => {
+            validate_options(&opt)?;
+            println!("{}", serde_json::json!({"valid":true,"addressFamily":"IPv4","options":format!("{opt:?}")}));
+            Ok(())
+        }
+        Some(Commands::Status { iface }) => {
+            let output = std::process::Command::new("ip").args(["-j", "-details", "link", "show", "dev", &iface]).output()?;
+            anyhow::ensure!(output.status.success(), "Unable to inspect interface XDP status");
+            let interfaces: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            let generation = std::fs::read("/run/rfw/generation.json").ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+            println!("{}", serde_json::json!({"schemaVersion":1,"collectedAtUnix":unix_time(),
+                "kernelInterfaces":interfaces,"rfwGeneration":generation,
+                "ownership":"Compare actual XDP program id with generation; service activity alone does not prove attachment"}));
+            Ok(())
+        }
         None => run_firewall(cli.run_opts).await,
     }
 }
 
+fn validate_options(opt: &RunOpt) -> anyhow::Result<()> {
+    anyhow::ensure!(matches!(opt.xdp_mode.as_str(), "auto" | "skb" | "drv" | "driver" | "hw" | "hardware"), "Invalid XDP mode");
+    anyhow::ensure!(!opt.iface.is_empty() && opt.iface.len() <= 15 && opt.iface.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b)), "Invalid interface");
+    let lists = [&opt.countries, &opt.allow_only_countries, &opt.block_all_from];
+    anyhow::ensure!(lists.iter().filter(|list| !list.is_empty()).count() <= 1, "Country modes are mutually exclusive");
+    for list in lists {
+        anyhow::ensure!(list.len() <= 32 && list.iter().all(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_alphabetic())), "Invalid country list");
+    }
+    Ok(())
+}
+
 async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
+    validate_options(&opt)?;
+    std::fs::create_dir_all("/run/rfw")?;
+    use std::os::fd::AsRawFd;
+    let lock = std::fs::OpenOptions::new().create(true).write(true).open("/run/rfw/daemon.lock")?;
+    anyhow::ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0, "Another RFW instance is running");
     // 只有真正运行程序时才初始化日志和 eBPF
     env_logger::init();
 
@@ -432,7 +485,7 @@ async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
         opt.block_fet_loose,
         opt.block_wireguard,
         opt.block_quic,
-        opt.block_all,
+        opt.block_all || !opt.block_all_from.is_empty(),
     );
 
     // 处理国家列表配置
@@ -597,14 +650,7 @@ async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
         config_flags |= rfw_common::RULE_LOG_PORT_ACCESS;
         info!("启用规则: 记录端口访问日志");
 
-        // Pin PORT_ACCESS_LOG map 到 bpffs 以便其他进程访问
-        let port_access_map = ebpf
-            .map("PORT_ACCESS_LOG")
-            .context("无法找到 PORT_ACCESS_LOG map")?;
-        port_access_map
-            .pin("/sys/fs/bpf/rfw_port_access_log")
-            .context("无法 pin PORT_ACCESS_LOG map，请确保 /sys/fs/bpf 已挂载且有写权限")?;
-        info!("已将端口访问日志 map pin 到 /sys/fs/bpf/rfw_port_access_log");
+        // Publish the statistics map only after the complete ruleset is attached.
     }
 
     // 将配置写入 eBPF map
@@ -612,6 +658,7 @@ async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
     config_map.set(0, config_flags, 0)?;
     info!("防火墙配置已设置: flags = 0x{:x}", config_flags);
 
+    let mut geoip_report = Vec::new();
     // 如果需要 GeoIP 规则，从网络下载 IP 段数据
     if !target_countries.is_empty() {
         info!(
@@ -620,9 +667,12 @@ async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
         );
 
         // 批量下载所有国家的 GeoIP 数据
-        let geo_data_list = fetch_multiple_geoip_data(&target_countries)
-            .await
-            .context("下载 GeoIP 数据失败，请检查网络连接")?;
+        let (geo_data_list, report) = geoip::fetch(&target_countries, &opt.geoip_cache, opt.geoip_refresh)
+            .await.context("GeoIP ruleset incomplete; refusing attachment")?;
+        geoip_report = report;
+        let unique: std::collections::BTreeSet<_> = geo_data_list.iter()
+            .flat_map(|(_, cidrs)| cidrs.iter().filter_map(|cidr| parse_cidr_to_lpm(cidr))).collect();
+        anyhow::ensure!(unique.len() <= 65536, "GeoIP ruleset exceeds map capacity");
 
         // 使用 LpmTrie 进行高效的 IP 前缀匹配
         let mut geoip_map: LpmTrie<_, u32, u8> = ebpf.map_mut("GEOIP_MAP").unwrap().try_into()?;
@@ -661,12 +711,7 @@ async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
             info!("已加载 {} 的 IP 前缀", country_code);
         }
 
-        if insert_errors > 0 {
-            warn!(
-                "共有 {} 个IP前缀插入失败（可能是重复或map已满,最大容量 65536）",
-                insert_errors
-            );
-        }
+        anyhow::ensure!(insert_errors == 0, "GeoIP map insertion failed; refusing partial ruleset");
 
         info!(
             "成功加载 {} 个 IP 前缀到防火墙 (LpmTrie),覆盖国家: {:?}",
@@ -704,16 +749,36 @@ async fn run_firewall(opt: RunOpt) -> anyhow::Result<()> {
 
     let program: &mut Xdp = ebpf.program_mut("rfw").unwrap().try_into()?;
     program.load()?;
-    program.attach(&iface, xdp_flags)
+    program.attach(&iface, xdp_flags | XdpFlags::UPDATE_IF_NOEXIST)
         .context(format!(
             "无法以 {} 模式附加 XDP 程序到接口 {}。\n提示: 如果附加失败，请尝试使用 --xdp-mode skb 选项",
             xdp_mode, iface
         ))?;
 
+    let program_id = program.info()?.id();
+    let generation_path = std::path::Path::new("/run/rfw/generation.json");
+    let _ = std::fs::remove_file(generation_path);
+    if opt.log_port_access {
+        match std::fs::remove_file("/sys/fs/bpf/rfw_port_access_log") {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+        ebpf.map("PORT_ACCESS_LOG").context("Missing statistics map")?
+            .pin("/sys/fs/bpf/rfw_port_access_log")?;
+    }
+    let generation = serde_json::json!({"id":format!("{}-{}", unix_time(), program_id),
+        "startedAtUnix":unix_time(),"bootId":std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?.trim(),
+        "programId":program_id,"interface":iface,
+        "requestedXdpMode":xdp_mode,"flags":config_flags,"geoip":geoip_report});
+    if let Err(error) = atomic_write(generation_path, &serde_json::to_vec(&generation)?) {
+        if opt.log_port_access { let _ = std::fs::remove_file("/sys/fs/bpf/rfw_port_access_log"); }
+        return Err(error);
+    }
     info!("XDP 程序已成功附加到接口: {} (模式: {})", iface, xdp_mode);
-    let ctrl_c = signal::ctrl_c();
-    println!("防火墙运行中，按 Ctrl-C 退出...");
-    ctrl_c.await?;
+    let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())?;
+    tokio::select! { result = signal::ctrl_c() => { result?; }, _ = terminate.recv() => {} }
+    let _ = std::fs::remove_file(generation_path);
     println!("退出中...");
 
     // 清理 pinned map

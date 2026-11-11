@@ -5,14 +5,23 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-当前 OTA 基线从 `v0.0.1` 开始，已经完成到原子 OTA proof。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準。v1.0.10 已正式發布，本輪來源目標為 **v1.0.11（尚未發布）**；歷史 OTA proof 不代表本版驗收結果。
+
+## v1.0.11 新增功能
+
+- 任務中心與持久化交付進度／重試，購買草稿、到貨訂閱及 7／30 天自動續費預估。
+- 節點維護計畫與受限 IPv4 NAT／共享 OVN 冷搬遷，托管提款付款狀態、參考號／憑證及失敗退款流程。
+- Agent 背景採集、歷史補送與持久化升級健康確認，宿主 RFW／ZFS 唯讀狀態及獨立管理工具。
+- Compose doctor、遷移規劃、更新 preflight 與備份清單；沿用完整 30 件發行資產契約。
+
+本版需交付 `20261110000000_add_delivery_maintenance_stock_payments` migration，升級前備份資料庫與原密鑰，不提供資料庫自動回滾。本次版本同步僅靜態核對，未執行測試、建置、提交或部署；完整發行稿位於 `docs-site/release-notes/v1.0.11.md`。
 
 ## 版本号规则 / Versioning Rule
 
-- 后续版本按三段语义版本递进：`v主版本.次版本.修订版本` / Use three-part semantic versions: `vMAJOR.MINOR.PATCH`.
-- 修订版本只从 `0` 到 `9`。例如 `v0.0.8` 的下一次修订是 `v0.0.9`，`v0.0.9` 之后进位为 `v0.1.0`，不要继续发布 `v0.0.10` / Patch numbers are limited to `0` through `9`; after `v0.0.9`, the next version is `v0.1.0`, not `v0.0.10`.
-- 当 `v0.9.9` 之后继续进位时，发布 `v1.0.0` / After `v0.9.9`, roll over to `v1.0.0`.
-- 既有历史 tag 保留不改；新规则从下一次发布开始执行 / Existing historical tags remain unchanged; apply this rule to future releases.
+- 唯一版本來源為統一倉庫根 `VERSION`，格式為 canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]`，依根 `RELEASE.md` 契約維護。
+- Patch 不限個位數；本輪由已正式發布的 `v1.0.10` 遞增為 `v1.0.11`。
+- 核心數字與純數字預發行識別碼不得有前導零；版本檔不得有 BOM、空白或額外行，僅允許可選的一個 LF／CRLF 結尾。
+- 歷史 tag、交接與發行說明保留原樣，第三方相依及實際 ZFS 模組版本不跟隨產品升版。
 
 ## OTA 发布频率 / OTA Release Frequency
 
@@ -21,7 +30,7 @@
 - 纯交接文档、审计记录、非行为性文档补充通常不发 OTA；但公开文档站仍要保持最新 / Handoff-only, audit-only, and non-behavior documentation changes usually do not need an OTA, but the public docs site should stay current.
 - 紧急生产修复可以单独发 OTA，但必须包含明确提交说明、测试证据和版本日志 / Emergency production fixes may ship separately, but must include a clear commit subject, verification evidence, and version log updates.
 
-## 已验证能力
+## 歷史已驗證能力
 
 - GitHub Release artifact。
 - OTA manifest。
@@ -37,7 +46,7 @@ HANDOFF.md
 docs-site/docs/release/version-log.md
 ```
 
-`HANDOFF.md` 记录最近一次已证明的生产 OTA、当前本地待发布候选版本和剩余 live proof；系统版本更新日志从 Git tag 和 commit 自动生成。旧的私有 `docs/production-audit.md` 不再作为当前公开仓库的文档入口。
+`HANDOFF.md` 保留歷史操作證據；現行目標以根 `VERSION`／`RELEASE.md` 為準，正式發布狀態以 GitHub Release 為準。系統版本日誌從 Git tag 和 commit 自動生成，不作為目前部署或新功能驗收證據。
 
 ## Git 更新日志
 

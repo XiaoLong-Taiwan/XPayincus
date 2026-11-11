@@ -5,7 +5,8 @@
 
 import { prisma } from './prisma.js'
 import type { Backup } from '../types/database.js'
-import { INSTANCE_OPERATION_LOCK_NAMESPACE, advisoryTransactionLock } from './advisory-locks.js'
+import type { Prisma } from '@prisma/client'
+import { HOST_TASK_CLAIM_LOCK_NAMESPACE, INSTANCE_OPERATION_LOCK_NAMESPACE, advisoryTransactionLock, tryAdvisoryTransactionLock } from './advisory-locks.js'
 
 const DEFAULT_STALE_CREATING_BACKUP_AGE_MS = 24 * 60 * 60 * 1000
 
@@ -97,17 +98,21 @@ export async function createBackupWithQuotaReservation(data: {
   name: string
   description?: string | null
   expiresAt?: string | null
-}): Promise<BackupQuotaReservationResult> {
-  return prisma.$transaction(async tx => {
+}, transaction?: Prisma.TransactionClient): Promise<BackupQuotaReservationResult> {
+  const reserve = async (tx: Prisma.TransactionClient): Promise<BackupQuotaReservationResult> => {
     await advisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, data.instanceId)
 
     const instance = await tx.instance.findUnique({
       where: { id: data.instanceId },
-      select: { backupLimit: true }
+      select: { backupLimit: true, hostId: true }
     })
     if (!instance) {
       return { allowed: false, current: 0, limit: 0, message: 'Instance not found' }
     }
+
+    if (!await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, instance.hostId)) return { allowed: false, current: 0, limit: 0, message: 'Host operation in progress' }
+    if (await tx.provisioningJob.findFirst({ where: { instanceId: data.instanceId, status: { in: ['preparing', 'pending', 'processing', 'review_required'] } }, select: { id: true } })) return { allowed: false, current: 0, limit: 0, message: 'Instance provisioning in progress' }
+    if (await tx.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'recovering', 'review_required', 'completed'] }, OR: [{ sourceHostId: instance.hostId }, { targetHostId: instance.hostId }] }, select: { id: true } })) return { allowed: false, current: 0, limit: 0, message: 'Host maintenance in progress' }
 
     const limit = instance.backupLimit ?? 0
     const current = await tx.backup.count({
@@ -153,7 +158,9 @@ export async function createBackupWithQuotaReservation(data: {
       current: current + 1,
       limit
     }
-  })
+  }
+  if (transaction) return reserve(transaction)
+  return prisma.$transaction(async tx => reserve(tx))
 }
 
 /**
@@ -241,7 +248,8 @@ export async function upsertBackupPolicy(instanceId: number, data: {
     },
     update: {
       enabled: data.enabled,
-      intervalMinutes: data.intervalMinutes
+      intervalMinutes: data.intervalMinutes,
+      nextRunAt
     }
   })
 }

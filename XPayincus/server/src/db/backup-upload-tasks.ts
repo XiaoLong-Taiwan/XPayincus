@@ -5,6 +5,7 @@
 import { prisma } from './prisma.js'
 import type { BackupUploadTask, BackupUploadTaskStatus } from '@prisma/client'
 import {
+    HOST_TASK_CLAIM_LOCK_NAMESPACE,
     INSTANCE_OPERATION_LOCK_NAMESPACE,
     USER_BACKUP_UPLOAD_LOCK_NAMESPACE,
     tryAdvisoryTransactionLock
@@ -42,6 +43,13 @@ export async function createBackupUploadTask(data: {
         if (!locked) {
             return null
         }
+
+        if (!await tryAdvisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, data.instanceId)) return null
+        if (!await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, data.hostId)) return null
+        const instance = await tx.instance.findUnique({ where: { id: data.instanceId }, select: { hostId: true, status: true } })
+        if (!instance || instance.hostId !== data.hostId || !['running', 'stopped'].includes(instance.status)) return null
+        if (await tx.provisioningJob.findFirst({ where: { instanceId: data.instanceId, status: { in: ['preparing', 'pending', 'processing', 'review_required'] } }, select: { id: true } })) return null
+        if (await tx.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'recovering', 'review_required', 'completed'] }, OR: [{ sourceHostId: data.hostId }, { targetHostId: data.hostId }] }, select: { id: true } })) return null
 
         const activeTask = await tx.backupUploadTask.findFirst({
             where: {

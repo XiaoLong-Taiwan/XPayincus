@@ -16,16 +16,39 @@ var incusSocketCandidates = []string{
 }
 
 func HeartbeatPayload(version string, heartbeatIntervalSeconds int) map[string]any {
+	instances := cachedInstances()
+	resources := collectResources()
+	components := componentStatus()
+	capabilities := []any{"heartbeat", "report", "host-history-v1", "upgrade-status-v1"}
+	if _, ok := resources["memoryTotalMb"]; ok {
+		capabilities = append(capabilities, "host-metrics")
+	}
+	if instances["available"] == true {
+		capabilities = append(capabilities, "instance-status")
+	}
+	if instances["trafficAvailable"] == true {
+		capabilities = append(capabilities, "traffic-counters")
+	}
+	for _, name := range []string{"rfw", "zfs"} {
+		if status, ok := components[name].(map[string]any); ok && status["available"] == true {
+			capabilities = append(capabilities, name+"-status-v1")
+		}
+	}
 	return map[string]any{
 		"version":      version,
-		"capabilities": []any{"heartbeat", "report", "host-metrics", "instance-status", "traffic-counters"},
+		"capabilities": capabilities,
 		"runtime": map[string]any{
 			"goos":   runtime.GOOS,
 			"goarch": runtime.GOARCH,
 		},
-		"incus":     detectIncus(),
-		"instances": collectIncusInstanceReport(),
-		"resources": collectResources(),
+		"incus": map[string]any{"available": instances["available"], "collector": map[string]any{
+			"reportedAt": instances["reportedAt"], "total": instances["total"],
+			"truncated": instances["truncated"], "deadlineExceeded": instances["deadlineExceeded"],
+			"status": instances["status"],
+		}},
+		"components": components,
+		"instances": instances,
+		"resources": resources,
 		"metrics":   collectMetrics(heartbeatIntervalSeconds),
 	}
 }

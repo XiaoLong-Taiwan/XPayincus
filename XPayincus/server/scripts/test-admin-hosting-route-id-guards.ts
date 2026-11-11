@@ -34,10 +34,19 @@ assert.ok(
 assert.ok(
   hostingSource.includes("target: 'usdt'") &&
     hostingSource.includes("status: 'pending'") &&
-    hostingSource.includes("status: 'completed'") &&
+    hostingSource.includes("status: 'approved'") &&
     hostingSource.includes('if (approved.count !== 1)') &&
     hostingSource.includes("code: 'WITHDRAWAL_ALREADY_PROCESSED'"),
-  'cash withdrawal approval must use an idempotent pending-to-completed conditional transition'
+  'cash withdrawal approval must use an idempotent pending-to-approved conditional transition'
+)
+
+assert.ok(
+  hostingSource.includes("}>('/admin/withdrawals/:id/payment'") &&
+    hostingSource.includes("status === 'processing' ? ['approved'] : ['processing']") &&
+    hostingSource.includes('where: { id, status: record.status, refundedAt: null }') &&
+    hostingSource.includes('if (claimed.count !== 1) return null') &&
+    hostingSource.includes("status === 'paid' && (!paymentMethod || !paymentReference || !paymentProof)"),
+  'cash payment must conditionally advance approved withdrawals through processing and require evidence before paid'
 )
 
 for (const forbiddenPattern of [

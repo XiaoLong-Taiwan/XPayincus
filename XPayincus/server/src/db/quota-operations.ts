@@ -171,7 +171,12 @@ export async function reserveResources(options: {
       throw new Error(`Host ports exceeded: requested ${portCount}/${natPortsTotal}`)
     }
 
-    const reserveWhere: Prisma.HostWhereInput = { id: hostId }
+    const reserveWhere: Prisma.HostWhereInput = {
+      id: hostId,
+      status: 'online',
+      maintenanceSources: { none: { status: { in: ['running', 'review_required', 'completed', 'recovering'] } } },
+      maintenanceTargets: { none: { status: { in: ['running', 'review_required', 'completed', 'recovering'] } } }
+    }
     if (cpuLimit > 0) {
       reserveWhere.cpuUsed = { lte: cpuLimit - cpu }
     }

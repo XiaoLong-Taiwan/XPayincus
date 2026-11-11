@@ -86,7 +86,7 @@ unsafe impl aya::Pod for PortAccessKey {}
 pub struct PortAccessStats {
     pub allowed_count: u64, // 允许通过的次数
     pub blocked_count: u64, // 被阻断的次数
-    pub last_seen: u64,     // 最后访问时间（保留，暂时未使用）
+    pub last_seen: u64,     // bpf_ktime_get_ns: monotonic nanoseconds since boot
 }
 
 #[cfg(feature = "user")]

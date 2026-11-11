@@ -88,6 +88,16 @@ const agentInstallCommandLoading = ref(false)
 const agentInstallCommand = ref('')
 const agentInstallTokenExpiresAt = ref('')
 const agentStatusError = ref('')
+const agentHistoryLoading = ref(false)
+const agentHistorySamples = ref<Array<Record<string, unknown>>>([])
+const maintenancePlans = ref<Array<{ id: number; targetHostId: number; status: string; instanceIds: number[]; results: Array<Record<string, unknown>>; error: string | null; createdAt: string }>>([])
+const maintenanceTargets = ref<Array<{ id: number; name: string }>>([])
+const maintenanceInstances = ref<Array<{ id: number; name: string }>>([])
+const maintenanceTargetId = ref<number | null>(null)
+const maintenanceInstanceIds = ref<number[]>([])
+const maintenancePreflight = ref<{ cpu?: number; memory?: number; disk?: number } | null>(null)
+const maintenanceBusy = ref(false)
+watch([maintenanceTargetId, maintenanceInstanceIds], () => { maintenancePreflight.value = null })
 let agentStatusRefreshTimer: ReturnType<typeof setInterval> | null = null
 let agentStatusRefreshIntervalMs = 0
 
@@ -150,6 +160,82 @@ async function loadAgentStatus(showToast = false) {
     agentStatusLoading.value = false
     agentStatusRefreshing.value = false
   }
+}
+
+async function loadAgentHistory() {
+  agentHistoryLoading.value = true
+  try {
+    const response = await api.hosts.getAgentHistory(props.host.id, { limit: 100, resolutionSeconds: 300 })
+    agentHistorySamples.value = response.samples
+  } catch (error: any) {
+    toast.error(t('admin.hosts.agentHistoryFailed') + ': ' + (error?.message || String(error)))
+  } finally {
+    agentHistoryLoading.value = false
+  }
+}
+
+async function loadMaintenanceData() {
+  try {
+    const [plans, targets, instances] = await Promise.all([
+      api.hosts.getMaintenancePlans(props.host.id),
+      api.hosts.list({ page: 1, pageSize: 100 }),
+      api.instances.list({ hostId: props.host.id, pageSize: 100 })
+    ])
+    maintenancePlans.value = plans.plans
+    maintenanceTargets.value = targets.hosts.filter(host => host.id !== props.host.id).map(host => ({ id: host.id, name: host.name }))
+    maintenanceInstances.value = ((instances as any).instances || instances.items || []).map((instance: any) => ({ id: instance.id, name: instance.name }))
+  } catch (error: any) {
+    toast.error(error?.message || t('admin.hosts.maintenanceLoadFailed'))
+  }
+}
+
+async function preflightMaintenance() {
+  if (!maintenanceTargetId.value || maintenanceInstanceIds.value.length === 0) return
+  maintenanceBusy.value = true
+  maintenancePreflight.value = null
+  try {
+    const result = await api.hosts.createMaintenancePlan(props.host.id, { targetHostId: maintenanceTargetId.value, instanceIds: maintenanceInstanceIds.value, dryRun: true })
+    if (result.passed) maintenancePreflight.value = { cpu: result.cpu, memory: result.memory, disk: result.disk }
+  } catch (error: any) {
+    toast.error(error?.message || t('admin.hosts.maintenancePreflightFailed'))
+  } finally {
+    maintenanceBusy.value = false
+  }
+}
+
+async function createMaintenancePlan() {
+  if (!maintenancePreflight.value || !maintenanceTargetId.value || !window.confirm(t('admin.hosts.maintenanceCreateConfirm'))) return
+  maintenanceBusy.value = true
+  try {
+    await api.hosts.createMaintenancePlan(props.host.id, { targetHostId: maintenanceTargetId.value, instanceIds: maintenanceInstanceIds.value })
+    maintenancePreflight.value = null
+    await loadMaintenanceData()
+  } catch (error: any) {
+    toast.error(error?.message || t('admin.hosts.maintenanceCreateFailed'))
+  } finally {
+    maintenanceBusy.value = false
+  }
+}
+
+async function runMaintenanceAction(plan: (typeof maintenancePlans.value)[number], action: 'review' | 'takeover' | 'rollback' | 'resume' | 'cleanup') {
+  if (!window.confirm(t('admin.hosts.maintenanceActionConfirm', { action: t(`admin.hosts.maintenanceAction_${action}`), id: plan.id }))) return
+  maintenanceBusy.value = true
+  try {
+    await api.hosts.reviewMaintenancePlan(props.host.id, plan.id, action)
+    await loadMaintenanceData()
+  } catch (error: any) {
+    toast.error(error?.message || t('admin.hosts.maintenanceActionFailed'))
+  } finally {
+    maintenanceBusy.value = false
+  }
+}
+
+function maintenanceActions(plan: (typeof maintenancePlans.value)[number]): Array<'review' | 'takeover' | 'rollback' | 'resume' | 'cleanup'> {
+  if (!['review_required', 'completed'].includes(plan.status)) return []
+  if (plan.results.some(result => result.cleanupAuthorized === true)) return ['cleanup']
+  if (plan.status === 'review_required') return ['review', 'takeover', 'rollback', 'resume']
+  if (plan.status === 'completed') return ['review', 'takeover', 'rollback', 'cleanup']
+  return []
 }
 
 function stopAgentStatusAutoRefresh() {
@@ -255,6 +341,8 @@ watch(() => props.host.id, () => {
   loadInstanceStats()
   loadTrafficHistory()
   loadAgentStatus()
+  loadAgentHistory()
+  loadMaintenanceData()
   startAgentStatusAutoRefresh()
 }, { immediate: true })
 
@@ -927,6 +1015,54 @@ const xAxisLabels = computed(() => {
         </div>
       </div>
     </template>
+
+    <section class="mt-5 border-t border-themed pt-4">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h3 class="text-sm font-semibold text-themed">{{ t('admin.hosts.agentHistoryTitle') }}</h3>
+        <button class="btn btn-secondary text-xs" :disabled="agentHistoryLoading" @click="loadAgentHistory">{{ t('common.refresh') }}</button>
+      </div>
+      <p v-if="agentHistoryLoading" class="text-sm text-themed-muted">{{ t('common.loading') }}</p>
+      <p v-else-if="agentHistorySamples.length === 0" class="text-sm text-themed-muted">{{ t('admin.hosts.agentHistoryEmpty') }}</p>
+      <div v-else class="max-h-64 overflow-y-auto divide-y divide-themed">
+        <div v-for="(sample, index) in agentHistorySamples" :key="String(sample.sampleId || sample.reportedAt || index)" class="grid grid-cols-2 gap-2 py-2 text-xs sm:grid-cols-4">
+          <span>{{ String(sample.reportedAt || sample.createdAt || '-') }}</span>
+          <span>CPU {{ String((sample.resources as Record<string, unknown> | undefined)?.cpuUsagePercent ?? '-') }}%</span>
+          <span>{{ t('admin.hosts.agentMemoryUsage') }} {{ String((sample.resources as Record<string, unknown> | undefined)?.memoryUsagePercent ?? '-') }}%</span>
+          <span>{{ t('admin.hosts.agentDiskUsage') }} {{ String((sample.resources as Record<string, unknown> | undefined)?.diskUsagePercent ?? '-') }}%</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="card p-5 mt-4">
+    <h2 class="mb-4 text-sm font-semibold text-themed">{{ t('admin.hosts.maintenanceTitle') }}</h2>
+    <div class="grid gap-3 md:grid-cols-3">
+      <select v-model="maintenanceTargetId" class="input" :disabled="maintenanceBusy">
+        <option :value="null">{{ t('admin.hosts.maintenanceTarget') }}</option>
+        <option v-for="target in maintenanceTargets" :key="target.id" :value="target.id">{{ target.name }} (#{{ target.id }})</option>
+      </select>
+      <select v-model="maintenanceInstanceIds" class="input md:col-span-2" multiple :disabled="maintenanceBusy">
+        <option v-for="instance in maintenanceInstances" :key="instance.id" :value="instance.id">{{ instance.name }} (#{{ instance.id }})</option>
+      </select>
+    </div>
+    <div class="mt-3 flex flex-wrap items-center gap-2">
+      <button class="btn btn-secondary" :disabled="maintenanceBusy || !maintenanceTargetId || !maintenanceInstanceIds.length" @click="preflightMaintenance">{{ t('admin.hosts.maintenancePreflight') }}</button>
+      <button v-if="maintenancePreflight" class="btn btn-primary" :disabled="maintenanceBusy" @click="createMaintenancePlan">{{ t('admin.hosts.maintenanceCreate') }}</button>
+      <span v-if="maintenancePreflight" class="text-xs text-themed-muted">CPU {{ maintenancePreflight.cpu }} · RAM {{ maintenancePreflight.memory }} · Disk {{ maintenancePreflight.disk }}</span>
+    </div>
+    <div class="mt-5 space-y-3">
+      <article v-for="plan in maintenancePlans" :key="plan.id" class="border-t border-themed pt-3">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0 text-sm">
+            <strong>#{{ plan.id }}</strong> · {{ t(`admin.hosts.maintenanceStatus_${plan.status}`) }} · {{ t('admin.hosts.maintenanceInstances', { count: plan.instanceIds.length }) }}
+            <p v-if="plan.error" class="mt-1 break-words text-xs text-red-600">{{ plan.error }}</p>
+          </div>
+          <div v-if="maintenanceActions(plan).length" class="flex flex-wrap gap-2">
+            <button v-for="action in maintenanceActions(plan)" :key="action" class="btn btn-secondary text-xs" :disabled="maintenanceBusy" @click="runMaintenanceAction(plan, action)">{{ t(`admin.hosts.maintenanceAction_${action}`) }}</button>
+          </div>
+        </div>
+      </article>
+    </div>
   </div>
 
   <!-- 流量统计 -->

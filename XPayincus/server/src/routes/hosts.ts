@@ -12,7 +12,6 @@ import { Agent, request as undiciRequest } from 'undici'
 import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
 import { checkHostingAccess } from '../lib/hosting-access.js'
-import { createInboxMessage } from '../db/inbox.js'
 import { createLog } from '../db/logs.js'
 import { apiError, ErrorCode, type ErrorCodeType } from '../lib/errors.js'
 import { createInstanceTask, getActiveTaskForInstance, InstanceTaskConflictError } from '../db/instance-tasks.js'
@@ -37,17 +36,13 @@ import { sendReleaseNotification } from '../lib/release-notifier.js'
 import { createCaddyClient } from '../lib/caddy-client.js'
 import { normalizeArchitecture } from '../lib/architecture.js'
 import { generateIncusConfig } from '../lib/incus-config-generator.js'
-import { sendAdminInstanceCreatedEmail, sendRenewalPriceUpdatedEmail } from '../lib/mailer.js'
-import { generateRandomIPv6 } from '../lib/ip-calculator.js'
+import { sendRenewalPriceUpdatedEmail } from '../lib/mailer.js'
 import { calculateCreateBilling } from '../db/billing-operations.js'
 import { getDnsRecordType } from '../lib/network-address.js'
 import { resolveInstanceTrafficLimitForHost } from '../lib/traffic-multiplier.js'
 import { normalizePlanTrafficLimitSpeed } from '../services/traffic-bandwidth.js'
 import {
   networkModeAllowsPortMapping,
-  networkModeNeedsNatIpv4,
-  networkModeNeedsPublicIpv4,
-  networkModeNeedsRoutedIpv6,
   normalizeNetworkMode
 } from '../lib/network-modes.js'
 import { issueHostAgentInstallToken } from '../lib/host-agent-credentials.js'
@@ -83,7 +78,7 @@ import {
   parseProcesses,
   parseStartupItems
 } from '../lib/instance-audit.js'
-import { provisionManagedInstanceAsync } from '../lib/managed-instance-provision.js'
+import { createPreparingProvisionJob } from '../lib/durable-instance-provision.js'
 import crypto from 'crypto'
 import type { InstanceStatus } from '@prisma/client'
 import { PANEL_CERTIFICATE_ERROR, readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
@@ -767,6 +762,9 @@ function buildHostInstallCommand(panelUrl: string, installToken: string): string
 }
 
 export default async function hostRoutes(fastify: FastifyInstance) {
+  const { registerHostMaintenanceRoutes, registerMaintenanceMutatorGuard } = await import('../services/host-maintenance.js')
+  registerMaintenanceMutatorGuard(fastify, 'hosts')
+  await registerHostMaintenanceRoutes(fastify)
   // 获取宿主机列表（支持分页和搜索）
   // 管理员可以看所有节点，普通用户只能看自己的节点 (mine=true)
   // 管理员可用参数：
@@ -6426,7 +6424,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'KVM packages do not support IPv4 NAT & IPv6 NAT or IPv6 NAT network modes' })
     }
     const autoPassword = randomUUID().replace(/-/g, '').slice(0, 16)
-    const { configPayload, metaData } = generateIncusConfig({
+    const { metaData } = generateIncusConfig({
       instanceName: name,
       imageAlias: image,
       rootPassword: autoPassword,
@@ -6458,6 +6456,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           ownerId: pkg.user_id!,
           packageId,
           networkMode,
+          instanceType: pkgInstanceType,
           portCount: networkModeAllowsPortMapping(networkMode) ? (selectedPlan?.portLimit || pkgWithExtras.port_limit || 0) : 0
         })
 
@@ -6564,10 +6563,26 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           })
         }
 
-        return {
-          instanceId: instance.id,
-          reservedHost
-        }
+        const ioMode = pkgWithExtras.io_limit_mode || 'throughput'
+        await createPreparingProvisionJob(tx, instance.id, {
+          hostId: reservedHost.id, userId: targetUser.id,
+          resources: { cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk },
+          preparation: { displayName: name, sshKey },
+          config: {
+            name: incusId, image, cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk,
+            networkMode, instanceType: pkgInstanceType, nested: Boolean(pkg.nested), privileged: Boolean(pkg.privileged),
+            portLimit: instanceQuota.portLimit ?? 0, sshPort: metaData.sshPort, swapSize: instanceQuota.swapSize,
+            limitsRead: ioMode === 'throughput' ? pkgWithExtras.limits_read : null,
+            limitsWrite: ioMode === 'throughput' ? pkgWithExtras.limits_write : null,
+            limitsReadIops: ioMode === 'iops' ? pkgWithExtras.limits_read_iops : null,
+            limitsWriteIops: ioMode === 'iops' ? pkgWithExtras.limits_write_iops : null,
+            limitsIngress: planTrafficSpeed || pkgWithExtras.limits_ingress, limitsEgress: planTrafficSpeed || pkgWithExtras.limits_egress,
+            limitsProcesses: pkgWithExtras.limits_processes, limitsCpuPriority: pkgWithExtras.limits_cpu_priority,
+            bootAutostart: pkgWithExtras.boot_autostart, bootAutostartPriority: pkgWithExtras.boot_autostart_priority,
+            bootAutostartDelay: pkgWithExtras.boot_autostart_delay, bootHostShutdownTimeout: pkgWithExtras.boot_host_shutdown_timeout
+          }
+        })
+        return { instanceId: instance.id, reservedHost }
       }, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         timeout: 15000
@@ -6578,153 +6593,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       if (!lockedHost) {
         throw new Error('HOST_NOT_FOUND')
       }
-
-      let staticIPv4: string | null = null
-      let staticIPv6: string | null = null
-      let publicIpv4Assignment: any = null
-
-      if (networkModeNeedsNatIpv4(networkMode)) {
-        try {
-          staticIPv4 = await db.allocateAndReserveNatIpv4(lockedHost.id, instanceId)
-        } catch (error) {
-          fastify.log.warn(error, '[Host Create For User] failed to allocate IPv4')
-        }
-      } else if (networkModeNeedsPublicIpv4(networkMode)) {
-        publicIpv4Assignment = await prisma.$transaction((tx) => db.reservePublicIpv4ForInstance(tx, { hostId: lockedHost!.id, instanceId }))
-        if (!publicIpv4Assignment) {
-          await prisma.instance.updateMany({
-            where: { id: instanceId, status: 'creating' },
-            data: { status: 'error' }
-          }).catch((err) => fastify.log.error(err, '[Host Create For User] failed to mark instance error after public IPv4 allocation miss'))
-          await db.rollbackResources({
-            hostId: lockedHost!.id,
-            cpu: requestedCpu,
-            memory: requestedMemory,
-            disk: requestedDisk,
-            portCount: networkModeAllowsPortMapping(networkMode) ? (selectedPlan?.portLimit || pkgWithExtras.port_limit || 0) : 0
-          }).catch((err) => fastify.log.error(err, '[Host Create For User] failed to rollback resources after public IPv4 allocation miss'))
-          await db.compensateFailedInstancePurchase(instanceId, targetUser.id, lockedHost!.id).catch((err) => {
-            fastify.log.error(err, '[Host Create For User] failed to compensate purchase after public IPv4 allocation miss')
-          })
-          return reply.status(503).send({ error: `宿主机 ${lockedHost!.name} 没有可用独立 IPv4 地址` })
-        }
-        staticIPv4 = publicIpv4Assignment.address
-      }
-
-      const lockedHostWithIpv6 = lockedHost as typeof lockedHost & {
-        ipv6_mode?: number
-        ipv6_subnet?: string | null
-        ipv6_gateway?: string | null
-        ipv6_parent_interface?: string | null
-      }
-
-      // 仅 Routed 模式（需要独立 IPv6 地址）才从子网分配
-      const needsRoutedIPv6 = networkModeNeedsRoutedIpv6(networkMode)
-      if (lockedHostWithIpv6.ipv6_subnet && needsRoutedIPv6) {
-        try {
-          let attempts = 0
-          while (attempts < 50) {
-            staticIPv6 = generateRandomIPv6(lockedHostWithIpv6.ipv6_subnet)
-            const exists = await db.isIpAddressExists(staticIPv6)
-            if (!exists) break
-            attempts++
-            staticIPv6 = null
-          }
-        } catch (error) {
-          fastify.log.warn(error, '[Host Create For User] failed to allocate IPv6')
-        }
-      }
-
-      let finalConfigPayload = configPayload
-      const ipv4Cidr = publicIpv4Assignment
-        ? `${publicIpv4Assignment.address}/${publicIpv4Assignment.prefixLength}`
-        : (staticIPv4 ? `${staticIPv4}/22` : null)
-      const ipv4Gateway = publicIpv4Assignment?.gateway || '10.10.0.1'
-      const ipv4Dns = publicIpv4Assignment?.dns || ['10.10.0.1']
-      if (pkgInstanceType === 'vm') {
-        const { generateVmConfig } = await import('../lib/incus-config-vm.js')
-        const vmResult = generateVmConfig({
-          instanceName: name,
-          instanceIdSeed: incusId,
-          imageAlias: image,
-          rootPassword: metaData.rootPassword,
-          sshKey,
-          network: staticIPv4 && ipv4Cidr ? {
-            ipAddress: ipv4Cidr,
-            gateway: ipv4Gateway,
-            dns: ipv4Dns,
-            ipv6Address: staticIPv6 || undefined,
-            ipv6Gateway: staticIPv6 ? (lockedHostWithIpv6.ipv6_gateway || undefined) : undefined
-          } : undefined
-        })
-        finalConfigPayload = vmResult.configPayload
-      } else if (staticIPv4 && ipv4Cidr) {
-        // 容器类型：重新生成包含静态 IP 的 cloud-init 配置
-        const containerResult = generateIncusConfig({
-          instanceName: name,
-          imageAlias: image,
-          rootPassword: metaData.rootPassword,
-          sshKey,
-          networkMode,
-          type: 'container',
-          network: {
-            ipAddress: ipv4Cidr,
-            gateway: ipv4Gateway,
-            dns: ipv4Dns,
-            ipv6Address: staticIPv6 ? `${staticIPv6}/128` : undefined,
-            ipv6Gateway: staticIPv6 ? 'fe80::1' : undefined
-          }
-        })
-        finalConfigPayload = containerResult.configPayload
-      }
-
-      let selectedStoragePool = await db.resolveStoragePoolForNewInstance(lockedHost.id, { packageId })
-      if (!selectedStoragePool) {
-        throw new Error(`STORAGE_POOL_UNAVAILABLE: 宿主机  未配置可用于实例系统盘的存储池`)
-      }
-
-      await prisma.instance.update({
-        where: { id: instanceId },
-        data: {
-          storagePoolName: selectedStoragePool
-        }
-      })
-
-      const ioMode = pkgWithExtras.io_limit_mode || 'throughput'
-
-      provisionManagedInstanceAsync(instanceId, lockedHost as unknown as Host, {
-        name: incusId,
-        image,
-        cpu: requestedCpu,
-        memory: requestedMemory,
-        disk: requestedDisk,
-        cloudInitConfig: finalConfigPayload,
-        networkMode,
-        nested: Boolean(pkg.nested),
-        privileged: Boolean(pkg.privileged),
-        portLimit: pkgWithExtras.port_limit || 20,
-        instanceType: pkgInstanceType,
-        sshPort: metaData.sshPort,
-        storagePool: selectedStoragePool,
-        ipv4Address: staticIPv4,
-        ipv6Address: staticIPv6,
-        ipv6Gateway: lockedHostWithIpv6.ipv6_gateway || null,
-        hostInterface: lockedHostWithIpv6.ipv6_parent_interface || 'eth0',
-        limitsRead: ioMode === 'throughput' ? pkgWithExtras.limits_read : null,
-        limitsWrite: ioMode === 'throughput' ? pkgWithExtras.limits_write : null,
-        limitsReadIops: ioMode === 'iops' ? pkgWithExtras.limits_read_iops : null,
-        limitsWriteIops: ioMode === 'iops' ? pkgWithExtras.limits_write_iops : null,
-        limitsIngress: planTrafficSpeed || pkgWithExtras.limits_ingress,
-        limitsEgress: planTrafficSpeed || pkgWithExtras.limits_egress,
-        limitsProcesses: pkgWithExtras.limits_processes,
-        limitsCpuPriority: pkgWithExtras.limits_cpu_priority,
-        bootAutostart: pkgWithExtras.boot_autostart,
-        bootAutostartPriority: pkgWithExtras.boot_autostart_priority,
-        bootAutostartDelay: pkgWithExtras.boot_autostart_delay,
-        bootHostShutdownTimeout: pkgWithExtras.boot_host_shutdown_timeout
-      }).catch(error => {
-        fastify.log.error(error, `[Host Create For User] instance ${instanceId} provisioning failed`)
-      })
 
       const logDetail = selectedPlan
         ? `${isAdmin ? 'Admin' : 'Host owner'} created paid instance "${name}" for user ${targetUser.username} on host "${lockedHost.name}" (Package: ${pkg.name}, Plan: ${selectedPlan.name}, Gift: ${paidGiftDays} days free)`
@@ -6737,79 +6605,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         logDetail,
         'success',
         { instanceId }
-      )
-
-      const formatMemory = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`
-      const formatDiskSize = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(0)} GB` : `${mb} MB`
-      const resourceInfo = `CPU ${requestedCpu}% | 内存 ${formatMemory(requestedMemory)} | 磁盘 ${formatDiskSize(requestedDisk)}`
-
-      let notifyTitle: string
-      let notifyContent: string
-      if (selectedPlan) {
-        notifyTitle = isAdmin ? '收到管理员赠送的付费实例' : '收到节点所有者赠送的付费实例'
-        notifyContent = `${isAdmin ? '管理员' : '节点所有者'} ${operator.username} 为您赠送了一台付费实例：${name}
-套餐：${pkg.name}
-方案：${selectedPlan.name}
-配置：${resourceInfo}
-节点：${lockedHost.name}
-免费时长：${paidGiftDays} 天
-到期时间：${paidGiftExpiresAt!.toLocaleDateString()}
-到期后将按方案价格正常计费`
-      } else {
-        notifyTitle = isAdmin ? '收到管理员赠送的实例' : '收到节点所有者赠送的实例'
-        notifyContent = `${isAdmin ? '管理员' : '节点所有者'} ${operator.username} 为您创建了一台实例：${name}
-套餐：${pkg.name}
-配置：${resourceInfo}
-节点：${lockedHost.name}`
-      }
-
-      await createInboxMessage({
-        userId: targetUser.id,
-        eventType: selectedPlan ? 'instance_paid_created' : 'instance_gift',
-        title: notifyTitle,
-        content: notifyContent,
-        data: {
-          instanceId,
-          instanceName: name,
-          packageName: pkg.name,
-          planName: selectedPlan?.name ?? null,
-          cpu: requestedCpu,
-          memory: requestedMemory,
-          disk: requestedDisk,
-          hostName: lockedHost.name,
-          isPaid: !!selectedPlan,
-          charged: false,
-          amount: 0,
-          expiresAt: paidGiftExpiresAt?.toISOString() ?? null,
-          giftDays: paidGiftDays ?? null,
-          createdBy: operator.username,
-          creatorType: isAdmin ? 'admin' : 'host_owner'
-        }
-      })
-
-      if (targetUser.email) {
-        try {
-          await sendAdminInstanceCreatedEmail(targetUser.email, {
-            username: targetUser.username,
-            instanceName: name,
-            packageName: pkg.name,
-            planName: selectedPlan?.name,
-            hostName: lockedHost.name,
-            cpu: requestedCpu,
-            memory: requestedMemory,
-            disk: requestedDisk,
-            isPaid: !!selectedPlan,
-            charged: false,
-            amount: 0,
-            expiresAt: paidGiftExpiresAt || undefined,
-            giftDays: paidGiftDays || undefined,
-            creatorType: isAdmin ? 'admin' : 'host_owner',
-            creatorName: operator.username
-          })
-        } catch (error) {
-          fastify.log.warn(error, '[Host Create For User] failed to send email')
-        }
-      }
+      ).catch(error => fastify.log.error(error, 'managed 建機已受理，審計日誌寫入失敗'))
 
       return reply.status(202).send({
         message: '实例创建中',

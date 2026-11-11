@@ -49,7 +49,10 @@ const WITHDRAWAL_STATUSES = new Set<WithdrawalStatus>([
   'pending',
   'approved',
   'rejected',
-  'completed'
+  'completed',
+  'processing',
+  'paid',
+  'failed'
 ])
 
 function parsePositiveRouteId(value: string): number | null {
@@ -304,7 +307,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     const totalWithdrawnResult = await prisma.hostingWithdrawal.aggregate({
       where: {
         userId: user.id,
-        status: 'completed'
+        status: { in: ['completed', 'paid'] }
       },
       _sum: { actualAmount: true }
     })
@@ -313,7 +316,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     const pendingWithdrawalResult = await prisma.hostingWithdrawal.aggregate({
       where: {
         userId: user.id,
-        status: 'pending'
+        status: { in: ['pending', 'approved', 'processing'] }
       },
       _sum: { amount: true }
     })
@@ -730,7 +733,20 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     }
   })
 
-  // 管理员批准外部提现：申请时已扣减冻结金额，此处仅确认实际放款完成
+  fastify.get<{ Querystring: { status?: WithdrawalStatus; page?: number; pageSize?: number } }>('/admin/withdrawals', {
+    onRequest: [fastify.authenticate, fastify.requireAdmin],
+    schema: { querystring: { type: 'object', additionalProperties: false, properties: { status: { type: 'string', enum: [...WITHDRAWAL_STATUSES] }, page: { type: 'integer', minimum: 1, maximum: 100000, default: 1 }, pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 } } } }
+  }, async request => {
+    const { status, page = 1, pageSize = 20 } = request.query
+    const where = status ? { status } : {}
+    const [withdrawals, total] = await Promise.all([
+      prisma.hostingWithdrawal.findMany({ where, orderBy: { id: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+      prisma.hostingWithdrawal.count({ where })
+    ])
+    return { withdrawals, total, page, pageSize }
+  })
+
+  // 批准只進入待付款狀態；實際放款必須走帶憑證的 payment 流程。
   fastify.post<{
     Params: { id: string }
   }>('/admin/withdrawals/:id/approve', {
@@ -747,10 +763,11 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
       where: {
         id: withdrawalId,
         target: 'usdt',
-        status: 'pending'
+        status: 'pending',
+        refundedAt: null
       },
       data: {
-        status: 'completed',
+        status: 'approved',
         processedAt,
         processedBy: request.user.id,
         rejectReason: null
@@ -766,8 +783,69 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
       'hosting.withdrawal.approve',
       `Approved hosting withdrawal #${withdrawalId}`,
       'success'
-    )
-    return { message: '提现已批准并完成放款', status: 'completed', processedAt: processedAt.toISOString() }
+    ).catch(error => request.log.error(error, '提款批准已提交，審計日誌寫入失敗'))
+    return { message: '提款已批准，請透過付款流程提交放款憑證', status: 'approved', processedAt: processedAt.toISOString() }
+  })
+
+  fastify.post<{
+    Params: { id: string }
+    Body: { status: 'processing' | 'paid' | 'failed'; paymentMethod?: string; paymentReference?: string; paymentProof?: string; reason?: string }
+  }>('/admin/withdrawals/:id/payment', {
+    onRequest: [fastify.authenticate, fastify.requireAdmin],
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false, required: ['status'],
+        properties: {
+          status: { type: 'string', enum: ['processing', 'paid', 'failed'] },
+          paymentMethod: { type: 'string', minLength: 1, maxLength: 80 },
+          paymentReference: { type: 'string', minLength: 1, maxLength: 256 },
+          paymentProof: { type: 'string', minLength: 1, maxLength: 2000 },
+          reason: { type: 'string', minLength: 1, maxLength: 500 }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const id = parsePositiveRouteId(request.params.id)
+    if (!id) return reply.code(400).send({ error: '無效的提款 ID' })
+    const { status } = request.body
+    const paymentMethod = request.body.paymentMethod?.trim()
+    const paymentReference = request.body.paymentReference?.trim()
+    const paymentProof = request.body.paymentProof?.trim()
+    const reason = request.body.reason?.trim()
+    if (status === 'paid' && (!paymentMethod || !paymentReference || !paymentProof)) {
+      return reply.code(400).send({ error: '請提供付款方式、交易編號與付款憑證' })
+    }
+    if (status === 'failed' && !reason) return reply.code(400).send({ error: '請提供失敗原因' })
+    const result = await prisma.$transaction(async tx => {
+      const record = await tx.hostingWithdrawal.findUnique({ where: { id } })
+      if (!record || record.target !== 'usdt') return null
+      const locked = await tryAdvisoryTransactionLock(tx, HOSTING_BALANCE_LOG_LOCK_NAMESPACE, record.userId)
+      if (!locked) return null
+      const allowed: WithdrawalStatus[] = status === 'processing' ? ['approved'] : ['processing']
+      if (!allowed.includes(record.status)) return null
+      const now = new Date()
+      const claimed = await tx.hostingWithdrawal.updateMany({
+        where: { id, status: record.status, refundedAt: null },
+        data: {
+          status, processedBy: request.user.id, processedAt: now,
+          paymentMethod, paymentReference, paymentProof,
+          failureReason: status === 'failed' ? reason : null,
+          refundedAt: status === 'failed' ? now : null
+        }
+      })
+      if (claimed.count !== 1) return null
+      if (status === 'failed') {
+        await tx.user.update({ where: { id: record.userId }, data: { hostingBalance: { increment: record.amount } } })
+        await tx.hostingBalanceLog.create({ data: {
+          userId: record.userId, type: 'withdraw', actionType: 'withdraw', amount: record.amount,
+          frozen: false, relatedId: id, remark: `外部提款失敗退回：${reason}`
+        } })
+      }
+      return tx.hostingWithdrawal.findUnique({ where: { id } })
+    })
+    if (!result) return reply.code(409).send({ error: '提款狀態已變更或不允許此轉換', code: 'WITHDRAWAL_ALREADY_PROCESSED' })
+    await createLog(request.user.id, 'admin', 'hosting.withdrawal.payment', `Withdrawal #${id}: ${status}`, 'success').catch(error => request.log.error(error, '提款狀態已提交，審計日誌寫入失敗'))
+    return { withdrawal: result }
   })
 
   // 管理员拒绝外部提现：按申请时扣减的原始金额全额退回
@@ -809,6 +887,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
         data: {
           status: 'rejected',
           rejectReason,
+          refundedAt: new Date(),
           processedAt: new Date(),
           processedBy: request.user.id
         }
@@ -891,6 +970,11 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
         target: r.target,
         status: r.status,
         rejectReason: r.rejectReason,
+        paymentMethod: r.paymentMethod,
+        paymentReference: r.paymentReference,
+        paymentProof: r.paymentProof,
+        failureReason: r.failureReason,
+        refundedAt: r.refundedAt?.toISOString() || null,
         processedAt: r.processedAt?.toISOString() || null,
         createdAt: r.createdAt.toISOString()
       })),

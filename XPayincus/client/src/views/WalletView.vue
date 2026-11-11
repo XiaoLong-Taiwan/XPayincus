@@ -2,6 +2,10 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
+import RenewalForecast from '@/components/RenewalForecast.vue'
+import { readPurchaseDraft } from '@/utils/purchaseDraft'
+import { useAuthStore } from '@/stores/auth'
+import { instanceCreatePath } from '@/utils/app-paths'
 import api from '@/api'
 import { useToast } from '@/stores/toast'
 import { useConfigStore } from '@/stores/config'
@@ -17,6 +21,8 @@ const { t } = useI18n()
 const toast = useToast()
 const router = useRouter()
 const route = useRoute()
+const purchaseUser = useAuthStore()
+const purchaseDraft = computed(() => purchaseUser.user ? readPurchaseDraft(purchaseUser.user.id) : null)
 const configStore = useConfigStore()
 
 type WalletTab = 'balance' | 'logs' | 'records' | 'aff'
@@ -971,6 +977,8 @@ function formatAmount() {
 
 <template>
   <div ref="revealRoot" class="space-y-5 animate-fade-in">
+    <RouterLink v-if="purchaseDraft" :to="{ path: instanceCreatePath(), query: { resume: '1' } }" class="btn btn-secondary">{{ t('operations.resume') }}</RouterLink>
+    <RenewalForecast v-if="!configStore.freeSiteMode" />
     <div data-reveal class="page-header flex-col gap-4 sm:flex-row sm:items-center sm:gap-0">
       <div>
         <h1 class="page-title">{{ configStore.freeSiteMode ? freeSiteCopy.walletBalanceTab : $t('wallet.title') }}</h1>

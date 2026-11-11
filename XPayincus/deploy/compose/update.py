@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -6,6 +7,50 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import signal
+import time
+import uuid
+
+JOURNAL = None
+JOURNAL_DATA = {}
+PLAN_ONLY = False
+
+
+def interrupted(signum, frame):
+    raise KeyboardInterrupt()
+
+
+def backup_digest(file):
+    digest = hashlib.sha256()
+    with file.open('r+b') as source:
+        for block in iter(lambda: source.read(1048576), b''):
+            digest.update(block)
+        os.fsync(source.fileno())
+    return digest.hexdigest()
+
+
+def journal(**fields):
+    if JOURNAL is None:
+        return
+    JOURNAL_DATA.update(fields, updatedAt=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+    if JOURNAL.is_symlink():
+        fail('journal 不可為符號連結。')
+    fd, name = tempfile.mkstemp(prefix='.journal-', dir=JOURNAL.parent)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            json.dump(JOURNAL_DATA, output, ensure_ascii=False, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(name, JOURNAL)
+        if os.name != 'nt':
+            directory = os.open(JOURNAL.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
 
 REPOSITORY = 'XiaoLong-Taiwan/XPayincus'
@@ -16,7 +61,7 @@ FILES = (
     'download.sh', 'update.py', 'README.md', 'https-proxy.conf.example',
     'origin-entrypoint.sh', 'edge-nginx.conf.template', 'tunnel-nginx.conf.template',
     'Dockerfile', 'Dockerfile.dockerignore', 'api-entrypoint.sh',
-    'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml',
+    'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml', 'operations.py',
 )
 PHASE = '更新前置檢查'
 
@@ -24,6 +69,7 @@ PHASE = '更新前置檢查'
 def phase(message):
     global PHASE
     PHASE = message
+    journal(phase=message)
     print(f'更新階段：{message}', flush=True)
 
 
@@ -144,10 +190,26 @@ def resolve_images(base, compose_entry):
 
 
 def dispatch():
+    global PLAN_ONLY, JOURNAL, JOURNAL_DATA
+    JOURNAL, JOURNAL_DATA = None, {}
     if len(sys.argv) == 4 and sys.argv[1] == 'resolve-images':
         resolve_images(sys.argv[2], sys.argv[3])
         return
-    main()
+    if len(sys.argv) == 3 and sys.argv[2] in ('--resume-up', '--retry-preflight'):
+        try:
+            recover_update(Path(sys.argv[1]).resolve(), sys.argv[2])
+        except BaseException:
+            journal(status='interrupted' if isinstance(sys.exc_info()[1], KeyboardInterrupt) else 'failed')
+            raise
+        return
+    PLAN_ONLY = len(sys.argv) == 3 and sys.argv[2] == '--plan'
+    if len(sys.argv) != 2 and not PLAN_ONLY:
+        fail('用法：python3 update.py DIRECTORY [--plan]；需由 panel.sh 持鎖執行。')
+    try:
+        main()
+    except BaseException:
+        journal(status='interrupted' if isinstance(sys.exc_info()[1], KeyboardInterrupt) else 'failed')
+        raise
 
 
 def update_compose(base, target):
@@ -165,7 +227,7 @@ def validate_files(base, official):
             fail('bootstrap 指標超出部署目錄。')
         for name in FILES:
             entry = base / name
-            if name == 'update.py' and not os.path.lexists(entry) and not (official / name).exists():
+            if name in {'update.py', 'operations.py'} and not os.path.lexists(entry) and not (official / name).exists():
                 continue
             if not entry.is_symlink() or os.readlink(entry) != f'.bootstrap/current/{name}':
                 fail(f'管理入口有衝突：{name}')
@@ -235,14 +297,16 @@ def activate(base, target, scratch, backup):
     os.symlink(next_dir.name, pointer)
     current = store / 'current'
     if current.is_symlink():
-        added = base / 'update.py'
-        created = not os.path.lexists(added)
+        created = []
         try:
-            if created:
-                os.symlink('.bootstrap/current/update.py', added)
+            for name in FILES:
+                added = base / name
+                if not os.path.lexists(added):
+                    os.symlink(f'.bootstrap/current/{name}', added)
+                    created.append(added)
             os.replace(pointer, current)
         except BaseException:
-            if created and added.is_symlink():
+            for added in created:
                 added.unlink()
             raise
     else:
@@ -262,14 +326,80 @@ def activate(base, target, scratch, backup):
             raise
 
 
+def recover_update(base, action):
+    global JOURNAL, JOURNAL_DATA
+    os.umask(0o077)
+    state = base / '.state'
+    file = state / 'update-journal.json'
+    if state.is_symlink() or file.is_symlink():
+        fail('操作狀態與 journal 不可為符號連結。')
+    data = json.loads(file.read_text())
+    if data.get('format') != 'incudal-update-journal-v1' or data.get('status') == 'complete':
+        fail('沒有可恢復的更新。')
+    if action == '--retry-preflight':
+        if data.get('backupComplete'):
+            fail('備份後可能已切換；請核對 recover 指引，不接受前置重試。')
+        os.rename(file, state / ('interrupted-' + uuid.uuid4().hex + '.json'))
+        sys.argv = [sys.argv[0], str(base)]
+        main()
+        return
+    backup = Path(data.get('backup') or '')
+    if (not data.get('backupComplete') or not backup.is_absolute()
+            or not backup.resolve().is_relative_to((base / 'backups').resolve())
+            or not (backup / 'panel.dump').is_file() or (backup / 'panel.dump').stat().st_size == 0):
+        fail('尚未完成可確認的 DB 備份，不接受恢復啟動。')
+    dump = backup / 'panel.dump'
+    if backup.is_symlink() or (base / 'backups').is_symlink() or dump.is_symlink() or backup_digest(dump) != data.get('backupSha256'):
+        fail('DB 備份雜湊與 journal 不符，拒絕恢復啟動。')
+    signal.signal(signal.SIGTERM, interrupted)
+    if current_version(base) != data.get('targetVersion'):
+        fail('目前部署不是 journal 的目標版本；請人工核對原子切換結果。')
+    settings(base)
+    current = base / '.bootstrap/current'
+    receipt = json.loads((current / 'receipt.json').read_text())
+    if receipt.get('version') != data['targetVersion'] or receipt.get('sha256') != data.get('sha256'):
+        fail('bootstrap receipt 與 journal 不符。')
+    validate_files(base, current)
+    JOURNAL, JOURNAL_DATA = file, data
+    try:
+        journal(status='running', phase='人工確認後恢復啟動')
+        run(['bash', str(base / 'panel.sh'), 'up'])
+        journal(status='complete', phase='恢復啟動完成', activated=True)
+    except BaseException:
+        journal(status='failed')
+        raise
+
+
 def main():
+    global JOURNAL, JOURNAL_DATA
+    JOURNAL, JOURNAL_DATA = None, {}
     base = Path(sys.argv[1]).resolve()
     os.umask(0o077)
+    if not PLAN_ONLY:
+        state = base / '.state'
+        if state.is_symlink():
+            fail('操作狀態目錄不可為符號連結。')
+        state.mkdir(exist_ok=True)
+        journal_file = state / 'update-journal.json'
+        if journal_file.is_symlink():
+            fail('journal 不可為符號連結。')
+        if journal_file.exists():
+            previous = json.loads(journal_file.read_text())
+            if previous.get('status') != 'complete':
+                fail('已有未完成更新 journal；請先執行 recover，確認狀態後使用 recover --resume-up 或人工保留 journal 再重試。')
+            history = state / ('update-' + uuid.uuid4().hex + '.json')
+            shutil.copyfile(journal_file, history)
+        JOURNAL = journal_file
+        JOURNAL_DATA = {'format': 'incudal-update-journal-v1', 'id': uuid.uuid4().hex,
+                        'status': 'running', 'backupComplete': False, 'activated': False}
+        journal(phase=PHASE)
+        signal.signal(signal.SIGTERM, interrupted)
     for name in ('.env', '.bootstrap', 'backups'):
         if (base / name).is_symlink():
             fail(f'{name} 不可為符號連結。')
     settings(base)
     old_version = current_version(base)
+    journal(fromVersion=old_version)
     store = base / '.bootstrap'
     store.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.update-', dir=store) as temporary:
@@ -283,6 +413,7 @@ def main():
             fail('官方最新 Release 不是正式 vX.Y.Z。')
         if tuple(map(int, version[1:].split('.'))) < tuple(map(int, old_version[1:].split('.'))):
             fail('拒絕自動降版。')
+        journal(targetVersion=version)
         target, digest = stage(base, version, scratch, 'target')
         official = target if version == old_version else stage(base, old_version, scratch, 'previous')[0]
         phase('核對本機部署檔與容器身分')
@@ -290,23 +421,39 @@ def main():
         validate_containers(base)
         phase('驗證目標 Compose')
         update_compose(base, target)
+        if PLAN_ONLY:
+            print(json.dumps({'format': 'incudal-update-plan-v1', 'fromVersion': old_version,
+                              'targetVersion': version, 'sha256': digest, 'checksPassed': True,
+                              'steps': ['備份部署檔', '匯出 DB', '原子切換工具', '拉取映像', '停止舊服務', 'migration 與健康啟動'],
+                              'automaticDatabaseRollback': False}, ensure_ascii=False, indent=2))
+            return
         backup = base / 'backups'
         backup.mkdir(exist_ok=True)
         backup = Path(tempfile.mkdtemp(prefix='before-update-', dir=backup))
+        journal(backup=str(backup), sha256=digest)
         phase(f'備份原部署檔與資料庫至 {backup}')
         for name in FILES:
             if (base / name).is_file():
                 shutil.copyfile(base / name, backup / name)
         run(['bash', str(base / 'panel.sh'), 'export', str(backup / 'panel.dump')])
+        dump = backup / 'panel.dump'
+        if not dump.is_file() or dump.is_symlink() or dump.stat().st_size == 0:
+            fail('DB 備份缺失或為空，拒絕切換。')
+        for saved in backup.iterdir():
+            if saved.is_file():
+                backup_digest(saved)
+        journal(backupComplete=True, backupSha256=backup_digest(dump))
         phase('切換已驗證部署工具')
         try:
             activate(base, target, scratch, backup)
         except OSError:
             fail(f'部署檔切換失敗；尚未執行 up。原部署檔與 DB 備份保留於 {backup}；請檢查入口與 .bootstrap/current，依備份修復後重試。')
+        journal(activated=True)
         print(f'已固定官方 {version}，SHA256={digest}；備份：{backup}', flush=True)
         try:
             phase('拉取映像並啟動目標版本')
             run(['bash', str(base / 'panel.sh'), 'up'])
+            journal(status='complete', phase='更新完成')
         except subprocess.CalledProcessError:
             fail(f'更新啟動失敗；部署檔與 DB 備份保留於 {backup}。請檢查 status/logs；不自動回滾資料庫。')
 

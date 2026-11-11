@@ -4,6 +4,10 @@
  */
 
 import { schedule } from 'node-cron'
+import { randomUUID } from 'node:crypto'
+import { createBackup as createIncusBackup, deleteBackup as deleteIncusBackup } from '../lib/incus/incus-backups.js'
+import { INSTANCE_OPERATION_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from '../db/advisory-locks.js'
+import { createBackupWithQuotaReservation } from '../db/backups.js'
 import pLimit from 'p-limit'
 import { prisma } from '../db/prisma.js'
 import { IncusClient } from '../lib/incus/incus-client.js'
@@ -336,6 +340,138 @@ export async function runAutoSnapshotJob(): Promise<void> {
     }
 }
 
+async function executeLockedAutoBackup(instanceId: number): Promise<void> {
+    const lockKey = `auto-policy:backup:${instanceId}`
+    const lock = await acquireLock(lockKey, {
+        expireMs: AUTO_POLICY_LOCK_EXPIRE_MS,
+        waitTimeoutMs: AUTO_POLICY_LOCK_WAIT_MS,
+        retryIntervalMs: 50
+    })
+    if (!lock.success || !lock.ownerId) return
+    const snapshotLockKey = getAutoSnapshotPolicyLockKey(instanceId)
+    const snapshotLock = await acquireLock(snapshotLockKey, {
+        expireMs: AUTO_POLICY_LOCK_EXPIRE_MS,
+        waitTimeoutMs: AUTO_POLICY_LOCK_WAIT_MS,
+        retryIntervalMs: 50
+    })
+    if (!snapshotLock.success || !snapshotLock.ownerId) {
+        await releaseLock(lockKey, lock.ownerId)
+        return
+    }
+
+    try {
+        const result = await prisma.$transaction(async tx => {
+            if (!await tryAdvisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, instanceId)) return null
+            const now = new Date()
+            const policy = await tx.backupPolicy.findUnique({
+                where: { instanceId },
+                include: { instance: { include: { host: true } } }
+            })
+            if (!policy?.enabled || (policy.nextRunAt && policy.nextRunAt > now)) return null
+            const instance = policy.instance
+            const defer = async () => {
+                await tx.backupPolicy.update({
+                    where: { instanceId },
+                    data: { nextRunAt: new Date(Date.now() + 5 * 60 * 1000) }
+                })
+            }
+            const [restore, upload, task, transfer, creating] = await Promise.all([
+                tx.restoreTask.count({ where: { instanceId, status: { in: ['PENDING', 'PROCESSING'] } } }),
+                tx.backupUploadTask.count({ where: { instanceId, status: { in: ['PENDING', 'PROCESSING'] } } }),
+                tx.instanceTask.count({ where: { instanceId, status: { in: ['PENDING', 'PROCESSING'] } } }),
+                tx.instanceTransfer.count({ where: { instanceId, status: { in: ['pending', 'processing'] } } }),
+                tx.backup.count({ where: { instanceId, status: 'creating' } })
+            ])
+            if (!['running', 'stopped'].includes(instance.status) || instance.host.status !== 'online'
+                || restore || upload || task || transfer || creating || !(instance.backupLimit && instance.backupLimit > 0)) {
+                await defer()
+                return null
+            }
+            const client = await getIncusClient(instance.host)
+            if (!client) {
+                await defer()
+                return null
+            }
+            const backupName = `${generateName('auto')}-${randomUUID().slice(0, 8)}`
+            let deletedName: string | null = null
+            let backupId: number | undefined
+            let error: string | null = null
+            try {
+                const backups = await tx.backup.findMany({
+                    where: { instanceId, status: { in: ['creating', 'ready'] } },
+                    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+                })
+                const removeCount = Math.max(0, backups.length - instance.backupLimit + 1)
+                const automatic = backups.filter(backup => backup.status === 'ready'
+                    && backup.name.startsWith('auto-') && backup.description === '自动备份')
+                if (automatic.length < removeCount) {
+                    await defer()
+                    return null
+                }
+                for (const backup of automatic.slice(0, removeCount)) {
+                    await deleteIncusBackup(client, instance.incusId, backup.incusName)
+                    await tx.backup.update({ where: { id: backup.id }, data: { status: 'deleted' } })
+                    deletedName = deletedName ? `${deletedName}, ${backup.name}` : backup.name
+                }
+                const reservation = await createBackupWithQuotaReservation({
+                    instanceId, incusName: backupName, name: backupName, description: '自动备份'
+                }, tx)
+                if (!reservation.allowed || !reservation.backupId) {
+                    await defer()
+                    return null
+                }
+                backupId = reservation.backupId
+                await createIncusBackup(client, instance.incusId, backupName, {
+                    instanceOnly: true, optimizedStorage: true
+                })
+                await tx.backup.update({ where: { id: backupId }, data: { status: 'ready' } })
+            } catch (err) {
+                error = err instanceof Error ? err.message : String(err)
+                if (backupId) await tx.backup.update({ where: { id: backupId }, data: { status: 'error' } })
+            }
+            const finishedAt = new Date()
+            await tx.backupPolicy.update({
+                where: { instanceId },
+                data: {
+                    lastRunAt: finishedAt,
+                    nextRunAt: new Date(finishedAt.getTime() + policy.intervalMinutes * 60 * 1000)
+                }
+            })
+            return { instance, backupName, deletedName, error }
+        }, { timeout: AUTO_POLICY_LOCK_EXPIRE_MS, maxWait: 5000 })
+        if (!result) return
+        const { instance, backupName, deletedName, error } = result
+        await sendNotification(instance.userId, error ? 'backup_failed' : deletedName ? 'auto_backup_rotated' : 'auto_backup', {
+            instanceName: instance.name, backupName, deletedName: deletedName ?? undefined,
+            quotaLimit: instance.backupLimit ?? 0, hostName: instance.host.name, error: error ?? undefined
+        })
+        await createLog(instance.userId, 'backup', 'backup.auto_create',
+            error ? `Auto backup failed for instance "${instance.name}": ${error}`
+                : `Auto backup "${backupName}" created for instance "${instance.name}"${deletedName ? ` (deleted old: ${deletedName})` : ''}`,
+            error ? 'failed' : 'success', { instanceId })
+    } finally {
+        try {
+            await releaseLock(snapshotLockKey, snapshotLock.ownerId)
+        } finally {
+            await releaseLock(lockKey, lock.ownerId)
+        }
+    }
+}
+
+export async function runAutoBackupJob(): Promise<void> {
+    const policies = await prisma.backupPolicy.findMany({
+        where: { enabled: true, OR: [{ nextRunAt: null }, { nextRunAt: { lte: new Date() } }] },
+        select: { instanceId: true }
+    })
+    await Promise.all(policies.map(policy => limit(async () => {
+        try {
+            await executeLockedAutoBackup(policy.instanceId)
+        } catch (error) {
+            console.error(`[AutoPolicy] Auto backup job failed for instance ${policy.instanceId}:`, error)
+        }
+    })))
+}
+
 /**
  * 启动自动策略调度器
  */
@@ -349,8 +485,9 @@ export function startAutoPolicyScheduler(): void {
     // 每 5 分钟检查一次快照策略（支持10分钟频率）
     schedule('*/5 * * * *', () => {
         runAutoSnapshotJob().catch(console.error)
+        runAutoBackupJob().catch(console.error)
     })
 
     console.log('[AutoPolicy] Scheduler started')
-    console.log('[AutoPolicy] - Auto snapshot: every 5 minutes')
+    console.log('[AutoPolicy] - Auto snapshot/backup: every 5 minutes')
 }

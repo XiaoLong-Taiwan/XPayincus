@@ -29,7 +29,11 @@ const reserveSection = section(
   '/**\n * 资源回滚'
 )
 assert.ok(
-  reserveSection.includes('const reserveWhere: Prisma.HostWhereInput = { id: hostId }') &&
+  reserveSection.includes('const reserveWhere: Prisma.HostWhereInput = {') &&
+    reserveSection.includes('id: hostId,') &&
+    reserveSection.includes("status: 'online',") &&
+    reserveSection.includes("maintenanceSources: { none: { status: { in: ['running', 'review_required', 'completed', 'recovering'] } } }") &&
+    reserveSection.includes("maintenanceTargets: { none: { status: { in: ['running', 'review_required', 'completed', 'recovering'] } } }") &&
     reserveSection.includes('reserveWhere.cpuUsed = { lte: cpuLimit - cpu }') &&
     reserveSection.includes('reserveWhere.memoryUsed = { lte: memoryLimit - memory }') &&
     reserveSection.includes('reserveWhere.natPortsUsedCount = { lte: natPortsTotal - portCount }') &&

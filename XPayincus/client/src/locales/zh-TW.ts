@@ -3,6 +3,21 @@
 import en from './en'
 
 const zhTW = {
+    operations: {
+        provisioningRetry: '重試交付', provisioningRetryConfirm: '已核實實例與遠端資源歸屬，確定繼續此交付任務？已完成的建機與帳務不會重新執行。',
+        taskKinds: { create: '建立', restore: '還原', start: '啟動', stop: '停止', restart: '重新啟動', rebuild: '重裝', clone: '複製', recreate: '重建', change_host: '更換節點' },
+        taskStatuses: { pending: '待處理', processing: '處理中', running: '執行中', completed: '已完成', succeeded: '成功', failed: '失敗', cancelled: '已取消' },
+        batchHint: '此處顯示 API 回應結果。非同步操作的最終結果請到任務中心查看。',
+        forecastHint: '按目前價格預測自動續費。到期時間欄顯示預計扣款時間，實際費用可能變動。',
+        title: '任務中心', description: '建立、實例操作與還原結果由伺服器保留，離頁和重新整理後可繼續查看。',
+        refresh: '重新整理', previous: '上一頁', next: '下一頁', empty: '暫無結果', error: '載入失敗，請重試。',
+        name: '名稱', kind: '任務類型', status: '狀態', progress: '進度', updated: '更新時間', result: '結果', instance: '實例',
+        forecast: '續費預測', days: '未來 {days} 天', balance: '可用餘額', total: '續費總額', shortfall: '餘額缺口', firstShortfall: '首次不足時間', due: '到期時間', autoRenew: '自動續費',
+        draft: '購買草稿已恢復。請重新取得價格、庫存與優惠，成功後確認目前設定再購買。', review: '重新取得價格、庫存與優惠', confirm: '我已確認最新價格、庫存與優惠', recharge: '儲值後返回', resume: '繼續購買草稿',
+        batchResults: '逐項操作結果', retry: '僅重試失敗項目', succeeded: '成功', failed: '失敗', skipped: '已略過', pending: '待處理', unknown: '結果未知，請先重新整理任務中心再決定是否重試',
+        keyword: '訂單號', from: '建立日期起', to: '建立日期迄', instanceSearch: '實例 ID 或名稱', export: '匯出全部篩選結果', incomplete: '僅載入 {count} / {total} 筆訂單（上限 5000），搜尋與匯出結果不完整。', complete: '已載入全部 {count} 筆授權訂單。', repay: '繼續付款', cancel: '取消訂單', cancelConfirm: '取消此待付款訂單？', manual: '付款說明',
+        minCpu: '最低 CPU (%)', minRam: '最低記憶體 (MB)', minDisk: '最低磁碟 (MB)', type: '實例類型', maxPrice: '最高月價', all: '全部', compare: '方案比較（2–4 項）', addCompare: '加入所選方案', remove: '移除', compareHint: '選擇 2–4 個方案比較。價格為月均價格，開通費與週期另列。', price: '價格', cycle: '月數', setup: '開通費', stock: '庫存', available: '有庫存', soldOut: '售罄'
+    },
     hostPublicIpv4: {
         title: '獨立 IPv4 位址池', description: '為獨立 IPv4 方案提供 routed 公網 IPv4 分配、回收和容量驗證。', newPool: '新增位址池', newPoolTitle: '新增獨立 IPv4 位址池',
         total: '總位址', empty: '暫無獨立 IPv4 位址池。', enabled: '啟用', disabled: '停用', enable: '啟用', disable: '停用', gateway: '閘道', addAddress: '新增位址', add: '新增',
@@ -468,6 +483,7 @@ const zhTW = {
             browseDescription: '支援依地區、配置與價格篩選商品，方便新用戶選購，也方便老用戶補購。',
         },
         market: {
+            stockSubscribe: '訂閱到貨通知', stockSubscribeFailed: '訂閱到貨通知失敗', stockUnsubscribe: '取消訂閱', stockUnsubscribeFailed: '取消訂閱失敗', stockSubscriptions: '我的到貨訂閱（{count}）', stockSubscriptionsEmpty: '目前沒有到貨訂閱',
             badge: '公開商品瀏覽',
             title: '瀏覽全部公開商品',
             description: '依來源、地區、配置與方案篩選的公開商品目錄。',
@@ -3958,6 +3974,7 @@ const zhTW = {
                 },
             },
         },
+        hostingWithdrawals: { title: '託管提款', description: '審核外部提款，並記錄付款階段憑證。', loadFailed: '載入提款記錄失敗', empty: '沒有提款記錄', proofRequired: '付款完成前須填寫方式、交易編號與付款憑證', reasonRequired: '請填寫提款失敗原因', confirm: '確定將提款 #{id} 更新為「{status}」？', updateSuccess: '提款狀態已更新', updateFailed: '更新提款狀態失敗', paymentMethod: '付款方式', paymentReference: '交易編號', paymentProof: '付款憑證或可核對連結', failureReason: '失敗原因', status_approved: '已批准', status_processing: '處理中', status_paid: '已付款', status_failed: '失敗', status_pending: '待審核', action_approve: '批准提款', action_processing: '標記處理中', action_paid: '記錄付款完成', action_failed: '標記失敗並退款' },
         hosting: {
             title: '託管',
             description: '查看符合條件的託管機主和託管經營資料',
@@ -4930,6 +4947,8 @@ const zhTW = {
             agentLoadAverage: '負載',
             agentLoadAverageHint: '1 / 5 / 15 分鐘',
             agentProcessCount: '處理程序數',
+            agentHistoryTitle: 'Agent 歷史記錄', agentHistoryEmpty: '尚無歷史資料', agentHistoryFailed: '載入 Agent 歷史失敗',
+            maintenanceTitle: '維護計畫', maintenanceTarget: '選擇目標節點', maintenancePreflight: '執行建立預檢', maintenancePreflightFailed: '維護計畫預檢失敗', maintenanceCreate: '建立維護計畫', maintenanceCreateConfirm: '預檢已通過。建立計畫會將來源與目標節點設為維護中並開始搬遷，確定繼續？', maintenanceCreateFailed: '建立維護計畫失敗', maintenanceLoadFailed: '載入維護計畫失敗', maintenanceInstances: '{count} 個實例', maintenanceActionConfirm: '確定對計畫 #{id} 執行「{action}」？', maintenanceActionFailed: '維護計畫操作失敗', maintenanceAction_review: '核實', maintenanceAction_takeover: '接管', maintenanceAction_rollback: '回滾', maintenanceAction_resume: '繼續', maintenanceAction_cleanup: '清理副本', maintenanceStatus_running: '執行中', maintenanceStatus_completed: '待核實', maintenanceStatus_review_required: '需要人工處理', maintenanceStatus_recovering: '恢復中', maintenanceStatus_reviewed: '已完成', maintenanceStatus_failed: '失敗', maintenanceStatus_unknown: '未知',
             // 儲存池管理
             storage: {
                 title: '儲存池',

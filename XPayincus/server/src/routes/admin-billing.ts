@@ -5,6 +5,7 @@
 import type { FastifyInstance } from 'fastify'
 import { Prisma, type FinancialReconciliationItemType, type FinancialReconciliationStatus, type InstanceStatus } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
+import { createPreparingProvisionJob } from '../lib/durable-instance-provision.js'
 import * as db from '../db/index.js'
 import { createLog } from '../db/logs.js'
 import { sendNotification } from '../lib/notifier.js'
@@ -34,26 +35,20 @@ import {
   isImageCompatibleWithMemory,
   isValidSystemImage
 } from '../db/images.js'
-import { sendAdminInstanceCreatedEmail, sendInstanceDestroyRefundEmail } from '../lib/mailer.js'
-import { generateRandomIPv6 } from '../lib/ip-calculator.js'
+import { sendInstanceDestroyRefundEmail } from '../lib/mailer.js'
 import { validateCommandsOwnership, mergeCommandContents, getImageDistroFromAlias } from '../db/custom-init-commands.js'
 import { customAlphabet } from 'nanoid'
-import { buildInstanceConfig, getIncusClient, createInstance, deleteInstance, startInstance, stopInstance, getInstanceState } from '../lib/incus/index.js'
+import { getIncusClient } from '../lib/incus/index.js'
 import { restoreBandwidth } from '../lib/incus/incus-traffic.js'
 import { calculateCreateBilling, getMaxRefundable } from '../db/billing-operations.js'
 import { shouldSyncInstanceSwapSizeWithPlan } from '../lib/instance-swap.js'
 import { resolveInstanceTrafficLimitForHost } from '../lib/traffic-multiplier.js'
 import { normalizePlanTrafficLimitSpeed } from '../services/traffic-bandwidth.js'
 import { calculateInstanceTrafficStatus } from '../services/traffic-utils.js'
-import type { Host } from '../types/database.js'
-import type { PublicIpv4Assignment } from '../db/public-ipv4.js'
 import { INSTANCE_OPERATION_LOCK_NAMESPACE, USER_BALANCE_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from '../db/advisory-locks.js'
 import { sanitizeObject } from '../lib/log-sanitizer.js'
 import {
   networkModeAllowsPortMapping,
-  networkModeNeedsNatIpv4,
-  networkModeNeedsPublicIpv4,
-  networkModeNeedsRoutedIpv6,
   normalizeNetworkMode
 } from '../lib/network-modes.js'
 import { calculateDailyPrice } from '../lib/billing-calc.js'
@@ -3738,7 +3733,7 @@ if (provider.type === 'yipay') {
         return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS, 'KVM packages do not support IPv4 NAT & IPv6 NAT or IPv6 NAT network modes'))
       }
       const autoPassword = generateRandomPassword(16)
-      const { configPayload, metaData } = generateIncusConfig({
+      const { metaData } = generateIncusConfig({
         instanceName: name,
         imageAlias: image,
         rootPassword: autoPassword,
@@ -3778,6 +3773,7 @@ if (provider.type === 'yipay') {
           ownerId: pkg.user_id!,
           packageId,
           networkMode,
+          instanceType: effectiveInstanceType,
           portCount: networkModeAllowsPortMapping(networkMode) ? (selectedPlan?.portLimit || pkgWithExtras.port_limit || 0) : 0
         })
 
@@ -3957,6 +3953,26 @@ if (provider.type === 'yipay') {
           })
         }
 
+        const ioMode = pkgWithExtras.io_limit_mode || 'throughput'
+        await createPreparingProvisionJob(tx, instance.id, {
+          hostId: lockedHost.id, userId: targetUser.id,
+          resources: { cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk },
+          preparation: { displayName: name, sshKey, extraShellCommands },
+          config: {
+            name: incusId, image, cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk,
+            networkMode, instanceType: effectiveInstanceType, nested: Boolean(pkg.nested), privileged: Boolean(pkg.privileged),
+            portLimit: instanceQuota.portLimit ?? 0, sshPort: metaData.sshPort, swapEnabled: false, swapSize: instanceQuota.swapSize,
+            limitsRead: ioMode === 'throughput' ? pkgWithExtras.limits_read : null,
+            limitsWrite: ioMode === 'throughput' ? pkgWithExtras.limits_write : null,
+            limitsReadIops: ioMode === 'iops' ? pkgWithExtras.limits_read_iops : null,
+            limitsWriteIops: ioMode === 'iops' ? pkgWithExtras.limits_write_iops : null,
+            limitsIngress: planBandwidthLimit || pkgWithExtras.limits_ingress,
+            limitsEgress: planBandwidthLimit || pkgWithExtras.limits_egress,
+            limitsProcesses: pkgWithExtras.limits_processes, limitsCpuPriority: pkgWithExtras.limits_cpu_priority,
+            bootAutostart: pkgWithExtras.boot_autostart, bootAutostartPriority: pkgWithExtras.boot_autostart_priority,
+            bootAutostartDelay: pkgWithExtras.boot_autostart_delay, bootHostShutdownTimeout: pkgWithExtras.boot_host_shutdown_timeout
+          }
+        })
         return { instanceId: instance.id, host: lockedHost, planBandwidthLimit }
       }, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -3970,184 +3986,6 @@ if (provider.type === 'yipay') {
         throw new Error('Host should not be null after successful transaction')
       }
 
-      // 16. 分配 IP
-      let staticIPv4: string | null = null
-      let staticIPv6: string | null = null
-      let publicIpv4Assignment: PublicIpv4Assignment | null = null
-
-      if (networkModeNeedsNatIpv4(networkMode)) {
-        try {
-          staticIPv4 = await db.allocateAndReserveNatIpv4(host.id, instanceId)
-        } catch (err) {
-          console.error('[Admin Create Instance] IPv4 分配错误:', err)
-        }
-      } else if (networkModeNeedsPublicIpv4(networkMode)) {
-        publicIpv4Assignment = await prisma.$transaction((tx) => db.reservePublicIpv4ForInstance(tx, { hostId: host.id, instanceId }))
-        if (!publicIpv4Assignment) {
-          await prisma.instance.updateMany({
-            where: { id: instanceId, status: 'creating' },
-            data: { status: 'error' }
-          }).catch((err) => console.error('[Admin Create Instance] 独立 IPv4 分配失败后实例状态更新失败:', err))
-          await db.rollbackResources({
-            hostId: host.id,
-            cpu: requestedCpu,
-            memory: requestedMemory,
-            disk: requestedDisk,
-            portCount: networkModeAllowsPortMapping(networkMode) ? (selectedPlan?.portLimit || pkgWithExtras.port_limit || 0) : 0
-          }).catch((err) => console.error('[Admin Create Instance] 独立 IPv4 分配失败后资源回滚失败:', err))
-          await db.compensateFailedInstancePurchase(instanceId, targetUser.id, host.id).catch((err) => {
-            console.error('[Admin Create Instance] 独立 IPv4 分配失败后计费补偿失败:', err)
-          })
-          return reply.status(503).send({ error: `宿主机 ${host.name} 没有可用独立 IPv4 地址` })
-        }
-        staticIPv4 = publicIpv4Assignment.address
-      }
-
-      const hostWithIpv6 = host as typeof host & {
-        ipv6_mode?: number
-        ipv6_subnet?: string | null
-        ipv6_gateway?: string | null
-        ipv6_parent_interface?: string | null
-      }
-
-      // 仅 Routed 模式（需要独立 IPv6 地址）才从子网分配
-      const needsRoutedIPv6 = networkModeNeedsRoutedIpv6(networkMode)
-      if (hostWithIpv6.ipv6_subnet && needsRoutedIPv6) {
-        try {
-          let attempts = 0
-          const maxAttempts = 50
-          while (attempts < maxAttempts) {
-            staticIPv6 = generateRandomIPv6(hostWithIpv6.ipv6_subnet)
-            const exists = await db.isIpAddressExists(staticIPv6)
-            if (!exists) break
-            attempts++
-            staticIPv6 = null
-          }
-        } catch (err) {
-          console.warn('[Admin Create Instance] IPv6 分配错误:', err)
-        }
-      }
-
-      // VM 和容器都需要在 IP 分配完成后重新生成 cloud-init network-config
-      let finalConfigPayload = configPayload
-      const ipv4Cidr = publicIpv4Assignment
-        ? `${publicIpv4Assignment.address}/${publicIpv4Assignment.prefixLength}`
-        : (staticIPv4 ? `${staticIPv4}/22` : null)
-      const ipv4Gateway = publicIpv4Assignment?.gateway || '10.10.0.1'
-      const ipv4Dns = publicIpv4Assignment?.dns || ['10.10.0.1']
-      if (effectiveInstanceType === 'vm') {
-        const { generateVmConfig } = await import('../lib/incus-config-vm.js')
-        const vmResult = generateVmConfig({
-          instanceName: name,
-          instanceIdSeed: incusId,
-          imageAlias: image,
-          rootPassword: metaData.rootPassword,
-          sshKey: sshKey,
-          network: staticIPv4 && ipv4Cidr ? {
-            ipAddress: ipv4Cidr,
-            gateway: ipv4Gateway,
-            dns: ipv4Dns,
-            ipv6Address: staticIPv6 ? `${staticIPv6}` : undefined,
-            ipv6Gateway: staticIPv6 ? (hostWithIpv6.ipv6_gateway || undefined) : undefined
-          } : undefined,
-          extraShellCommands
-        })
-        finalConfigPayload = vmResult.configPayload
-        console.log(`[Admin Create Instance] VM network-config 已更新: IPv4=${staticIPv4 || 'dhcp'}, IPv6=${staticIPv6 || 'none'}`)
-      } else if (staticIPv4 && ipv4Cidr) {
-        // 容器类型：重新生成包含静态 IP 的 cloud-init 配置
-        const containerResult = generateIncusConfig({
-          instanceName: name,
-          imageAlias: image,
-          rootPassword: metaData.rootPassword,
-          sshKey: sshKey,
-          networkMode,
-          type: 'container',
-          network: {
-            ipAddress: ipv4Cidr,
-            gateway: ipv4Gateway,
-            dns: ipv4Dns,
-            ipv6Address: staticIPv6 ? `${staticIPv6}/128` : undefined,
-            ipv6Gateway: staticIPv6 ? 'fe80::1' : undefined
-          },
-          extraShellCommands
-        })
-        finalConfigPayload = containerResult.configPayload
-        console.log(`[Admin Create Instance] Container network-config 已更新: IPv4=${staticIPv4}, IPv6=${staticIPv6 || 'none'}`)
-      }
-
-      // 17. 选择存储池
-      let selectedStoragePool = await db.resolveStoragePoolForNewInstance(host.id, { packageId })
-      if (!selectedStoragePool) {
-        throw new Error(`STORAGE_POOL_UNAVAILABLE: 宿主机 ${host.name} 未配置可用于实例系统盘的存储池`)
-      }
-
-      await prisma.instance.update({
-        where: { id: instanceId },
-        data: {
-          storagePoolName: selectedStoragePool
-        }
-      })
-
-      // 18. 异步创建实例
-      const pkgConfig = pkg as typeof pkg & {
-        io_limit_mode?: string
-        limits_read?: string | null
-        limits_write?: string | null
-        limits_read_iops?: number | null
-        limits_write_iops?: number | null
-        limits_ingress?: string | null
-        limits_egress?: string | null
-        limits_processes?: number | null
-        limits_cpu_priority?: number | null
-        boot_autostart?: boolean | null
-        boot_autostart_priority?: number | null
-        boot_autostart_delay?: number | null
-        boot_host_shutdown_timeout?: number | null
-      }
-
-      // 计算带宽限制：使用事务中计算的方案带宽限制（如果有），否则使用套餐默认值
-      const effectiveBandwidthLimit = result.planBandwidthLimit
-
-      // 根据 ioLimitMode 选择性传入 IO 限制参数
-      const ioMode = pkgConfig.io_limit_mode || 'throughput'
-
-      createInstanceAsync(instanceId, host, {
-        name: incusId,
-        image,
-        cpu: requestedCpu,
-        memory: requestedMemory,
-        disk: requestedDisk,
-        swapEnabled: false,
-        swapSize: effectiveInstanceType === 'container' ? (selectedPlan?.swapSize ?? null) : null,
-        cloudInitConfig: finalConfigPayload,
-        networkMode,
-        nested: Boolean(pkg.nested),
-        privileged: Boolean(pkg.privileged),
-        portLimit: pkgWithExtras.port_limit || 20,
-        instanceType: effectiveInstanceType,
-        sshPort: metaData.sshPort,
-        storagePool: selectedStoragePool,
-        ipv4Address: staticIPv4,
-        ipv6Address: staticIPv6,
-        ipv6Gateway: hostWithIpv6.ipv6_gateway || null,
-        hostInterface: hostWithIpv6.ipv6_parent_interface || 'eth0',
-        limitsRead: ioMode === 'throughput' ? pkgConfig.limits_read : null,
-        limitsWrite: ioMode === 'throughput' ? pkgConfig.limits_write : null,
-        limitsReadIops: ioMode === 'iops' ? pkgConfig.limits_read_iops : null,
-        limitsWriteIops: ioMode === 'iops' ? pkgConfig.limits_write_iops : null,
-        limitsIngress: effectiveBandwidthLimit || pkgConfig.limits_ingress,
-        limitsEgress: effectiveBandwidthLimit || pkgConfig.limits_egress,
-        limitsProcesses: pkgConfig.limits_processes,
-        limitsCpuPriority: pkgConfig.limits_cpu_priority,
-        bootAutostart: pkgConfig.boot_autostart,
-        bootAutostartPriority: pkgConfig.boot_autostart_priority,
-        bootAutostartDelay: pkgConfig.boot_autostart_delay,
-        bootHostShutdownTimeout: pkgConfig.boot_host_shutdown_timeout
-      }, targetUser.id, { cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk }).catch(err => {
-        console.error(`[Admin Create Instance] 实例 ${instanceId} 创建失败:`, err)
-      })
-
       // 19. 记录操作日志
       const logDetail = selectedPlan
         ? `Admin created paid instance "${name}" for user ${targetUser.username} (Package: ${pkg.name}, Plan: ${selectedPlan.name}, Charged: ${chargeFirstMonth ? `¥${billing!.totalPrice.toFixed(2)}` : 'Free first month'})`
@@ -4160,85 +3998,7 @@ if (provider.type === 'yipay') {
         logDetail,
         'success',
         { instanceId }
-      )
-
-      // 20. 发送站内信通知用户
-      // 格式化资源配置
-      const formatMemory = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`
-      const formatDiskSize = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(0)} GB` : `${mb} MB`
-      const resourceInfo = `CPU ${requestedCpu}% | 内存 ${formatMemory(requestedMemory)} | 磁盘 ${formatDiskSize(requestedDisk)}`
-
-      // 构建通知内容
-      let notifyContent: string
-      let notifyTitle: string
-      if (selectedPlan) {
-        notifyTitle = chargeFirstMonth ? '开通付费实例' : '收到付费实例赠送'
-        notifyContent = chargeFirstMonth
-          ? `管理员为您开通了一台付费实例：${name}
-套餐：${pkg.name}
-方案：${selectedPlan.name}
-配置：${resourceInfo}
-节点：${host.name}
-扣费：¥${billing!.totalPrice.toFixed(2)}
-到期时间：${billing!.expiresAt.toLocaleDateString()}`
-          : `管理员为您赠送了一台付费实例：${name}
-套餐：${pkg.name}
-方案：${selectedPlan.name}
-配置：${resourceInfo}
-节点：${host.name}
-首月免费，到期时间：${billing!.expiresAt.toLocaleDateString()}
-次月将按方案价格正常计费`
-      } else {
-        notifyTitle = '收到实例赠送'
-        notifyContent = `管理员为您创建了一台实例：${name}\n套餐：${pkg.name}\n配置：${resourceInfo}\n节点：${host.name}`
-      }
-
-      await createInboxMessage({
-        userId: targetUser.id,
-        eventType: selectedPlan ? 'instance_paid_created' : 'instance_gift',
-        title: notifyTitle,
-        content: notifyContent,
-        data: {
-          instanceId,
-          instanceName: name,
-          packageName: pkg.name,
-          planName: selectedPlan?.name ?? null,
-          cpu: requestedCpu,
-          memory: requestedMemory,
-          disk: requestedDisk,
-          hostName: host.name,
-          isPaid: !!selectedPlan,
-          charged: chargeFirstMonth,
-          amount: billing?.totalPrice ?? 0,
-          expiresAt: billing?.expiresAt?.toISOString() ?? null
-        }
-      })
-
-      // 发送管理员创建实例邮件通知
-      try {
-        const targetUserWithEmail = await prisma.user.findUnique({
-          where: { id: targetUser.id },
-          select: { email: true }
-        })
-        if (targetUserWithEmail?.email) {
-          await sendAdminInstanceCreatedEmail(targetUserWithEmail.email, {
-            username: targetUser.username,
-            instanceName: name,
-            packageName: pkg.name,
-            planName: selectedPlan?.name,
-            hostName: host.name,
-            cpu: requestedCpu,
-            memory: requestedMemory,
-            disk: requestedDisk,
-            isPaid: !!selectedPlan,
-            charged: chargeFirstMonth,
-            amount: billing?.totalPrice,
-            expiresAt: billing?.expiresAt
-          })
-        }
-      } catch (emailErr) {
-        console.warn(`[Admin Create Instance] 发送邮件失败:`, emailErr)
-      }
+      ).catch(error => request.log.error(error, '管理員建機已受理，審計日誌寫入失敗'))
 
       return reply.status(202).send({
         message: '实例创建中',
@@ -4684,217 +4444,4 @@ if (provider.type === 'yipay') {
       return reply.status(500).send({ error: '升级方案失败' })
     }
   })
-}
-
-// 异步创建实例函数（从 instances.ts 复制，简化版）
-async function createInstanceAsync(
-  instanceId: number,
-  host: Host,
-  config: {
-    name: string
-    image: string
-    cpu: number
-    memory: number
-    disk: number
-    swapEnabled?: boolean
-    swapSize?: number | null
-    cloudInitConfig?: Record<string, string>
-    networkMode: 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat' | 'public_ipv4' | 'public_ipv4_ipv6'
-    nested?: boolean
-    privileged?: boolean
-    portLimit?: number
-    instanceType?: 'container' | 'vm'
-    sshPort?: number | null
-    storagePool?: string | null
-    ipv4Address?: string | null
-    ipv6Address?: string | null
-    ipv6Gateway?: string | null
-    hostInterface?: string | null
-    limitsRead?: string | null
-    limitsWrite?: string | null
-    limitsReadIops?: number | null
-    limitsWriteIops?: number | null
-    limitsIngress?: string | null
-    limitsEgress?: string | null
-    limitsProcesses?: number | null
-    limitsCpuPriority?: number | null
-    bootAutostart?: boolean | null
-    bootAutostartPriority?: number | null
-    bootAutostartDelay?: number | null
-    bootHostShutdownTimeout?: number | null
-  },
-  userId: number,
-  resources: { cpu: number; memory: number; disk: number }
-): Promise<void> {
-  try {
-    console.log(`\n[Admin Provisioning] ===== 开始创建实例流程 =====`)
-    console.log(`[Admin Provisioning] 实例ID: ${instanceId}, 名称: ${config.name}, 宿主机: ${host.name}`)
-
-    const client = await getIncusClient(host)
-
-    const ipv6Config = config.ipv6Address ? { primaryIp: config.ipv6Address } : null
-
-    const incusConfig = buildInstanceConfig({
-      name: config.name,
-      image: config.image,
-      cpu: config.cpu,
-      memory: config.memory,
-      disk: config.disk,
-      swapEnabled: config.swapEnabled,
-      swapSize: config.swapSize,
-      sshKey: '',
-      password: '',
-      cloudInitConfig: config.cloudInitConfig as { 'user.user-data': string } | undefined,
-      networkMode: config.networkMode,
-      nested: config.nested || false,
-      privileged: config.privileged || false,
-      instanceType: config.instanceType || 'container',
-      storagePool: config.storagePool || 'default',
-      ipv4Address: config.ipv4Address,
-      ipv6Config,
-      hostInterface: config.hostInterface || 'eth0',
-      ipv6Address: config.ipv6Address,
-      ipv6Gateway: config.ipv6Gateway,
-      limitsRead: config.limitsRead,
-      limitsWrite: config.limitsWrite,
-      limitsReadIops: config.limitsReadIops,
-      limitsWriteIops: config.limitsWriteIops,
-      limitsIngress: config.limitsIngress,
-      limitsEgress: config.limitsEgress,
-      limitsProcesses: config.limitsProcesses,
-      limitsCpuPriority: config.limitsCpuPriority,
-      bootAutostart: config.bootAutostart,
-      bootAutostartPriority: config.bootAutostartPriority,
-      bootAutostartDelay: config.bootAutostartDelay,
-      bootHostShutdownTimeout: config.bootHostShutdownTimeout
-    })
-
-    console.log(`[Admin Provisioning] 正在调用 Incus API 创建实例...`)
-    await createInstance(client, incusConfig)
-
-    // 等待实例创建完成
-    let ready = false
-    for (let i = 0; i < 60; i++) {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      try {
-        const stateResp = await getInstanceState(client, config.name) as { status?: string }
-        if (stateResp?.status) {
-          ready = true
-          break
-        }
-      } catch {
-        // 继续等待
-      }
-    }
-
-    if (!ready) {
-      throw new Error('实例创建超时')
-    }
-
-    // 启动实例
-    console.log(`[Admin Provisioning] 正在启动实例...`)
-    await startInstance(client, config.name)
-
-    // 等待启动完成
-    for (let i = 0; i < 30; i++) {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      try {
-        const stateResp = await getInstanceState(client, config.name) as { status?: string }
-        if (stateResp?.status === 'Running') {
-          break
-        }
-      } catch {
-        // 继续等待
-      }
-    }
-
-    // 获取 IP 地址
-    let ipv4: string | null = config.ipv4Address || null
-    let ipv6: string | null = config.ipv6Address || null
-
-    try {
-      const stateResp = await getInstanceState(client, config.name) as { network?: Record<string, { addresses?: Array<{ family: string; scope: string; address: string }> }> }
-      const network = stateResp?.network
-      if (network?.eth0?.addresses) {
-        for (const addr of network.eth0.addresses) {
-          if (addr.family === 'inet' && addr.scope === 'global') {
-            ipv4 = addr.address
-          } else if (addr.family === 'inet6' && addr.scope === 'global') {
-            ipv6 = addr.address
-          }
-        }
-      }
-    } catch {
-      // 使用预分配的 IP
-    }
-
-    // 更新数据库
-    const updateResult = await prisma.instance.updateMany({
-      where: { id: instanceId, status: 'creating' },
-      data: {
-        status: 'running',
-        ipv4,
-        ipv6,
-        storagePoolName: config.storagePool || 'default'
-      }
-    })
-
-    if (updateResult.count === 0) {
-      console.log(`[Admin Provisioning] 实例 ${instanceId} 已被超时清理任务处理，清理已创建的 Incus 实例`)
-      try {
-        await stopInstance(client, config.name, true)
-        await deleteInstance(client, config.name)
-      } catch (cleanupErr) {
-        console.error(`[Admin Provisioning] 清理超时实例失败:`, cleanupErr)
-      }
-      return
-    }
-
-    console.log(`[Admin Provisioning] 实例 ${instanceId} 创建成功`)
-
-  } catch (error) {
-    console.error(`[Admin Provisioning] 实例 ${instanceId} 创建失败:`, error)
-
-    const updateResult = await prisma.instance.updateMany({
-      where: { id: instanceId, status: 'creating' },
-      data: { status: 'error' }
-    }).catch(() => ({ count: 0 }))
-
-    if (updateResult.count > 0) {
-      try {
-        await db.rollbackResources({
-          hostId: host.id,
-          cpu: resources.cpu,
-          memory: resources.memory,
-          disk: resources.disk,
-          portCount: networkModeAllowsPortMapping(config.networkMode) ? (config.portLimit || 0) : 0
-        })
-      } catch (rollbackErr) {
-        console.error(`[Admin Provisioning] 资源回滚失败:`, rollbackErr)
-      }
-
-      if (networkModeNeedsPublicIpv4(config.networkMode)) {
-        try {
-          await prisma.$transaction((tx) => db.releasePublicIpv4ForInstance(tx, instanceId))
-        } catch (releaseErr) {
-          console.error(`[Admin Provisioning] 释放独立 IPv4 失败:`, releaseErr)
-        }
-      }
-
-      try {
-        await db.compensateFailedInstancePurchase(instanceId, userId, host.id)
-      } catch (compensationErr) {
-        console.error(`[Admin Provisioning] 创建失败后的账务补偿失败:`, compensationErr)
-      }
-    }
-
-    try {
-      const client = await getIncusClient(host)
-      await deleteInstance(client, config.name)
-    } catch {
-      // 实例可能尚未创建或已被超时清理流程删除。
-    }
-
-    throw error
-  }
 }

@@ -104,7 +104,7 @@ class BootstrapTests(unittest.TestCase):
         previous = self.current()
         self.run_bootstrap('update', checksum='0' * 64, success=False)
         for options in [dict(version='v9.0.0'), dict(missing='panel.sh'),
-                        dict(missing='compose.release.yaml'), dict(image_version='latest'),
+                        dict(missing='compose.release.yaml'), dict(missing='operations.py'), dict(image_version='latest'),
                         dict(extra=tarfile.TarInfo('../escape'))]:
             self.make_archive(**options)
             self.run_bootstrap('update', success=False)

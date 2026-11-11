@@ -100,6 +100,7 @@ import orderRoutes from './routes/orders.js'
 import giftCardsRoutes from './routes/gift-cards.js'
 import networkProbeRoutes from './routes/network-probe.js'
 import adminPanelBackupRoutes from './routes/admin-panel-backups.js'
+import operationsRoutes from './routes/operations.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -501,6 +502,7 @@ fastify.get('/api/health', async () => {
 // 注册 API 路由
 await fastify.register(authRoutes, { prefix: '/api/auth' })
 await fastify.register(userRoutes, { prefix: '/api/users' })
+await fastify.register(operationsRoutes, { prefix: '/api/operations' })
 await fastify.register(instanceRoutes, { prefix: '/api/instances' })
 await fastify.register(hostRoutes, { prefix: '/api/hosts' })
 await fastify.register(packageRoutes, { prefix: '/api/packages' })

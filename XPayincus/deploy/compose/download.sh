@@ -382,6 +382,7 @@ files = (
 managed = (*files, 'compose.release.yaml')
 wanted = {'XPayincus/deploy/compose/' + name: name for name in managed}
 wanted['XPayincus/deploy/compose/update.py'] = 'update.py'
+wanted['XPayincus/deploy/compose/operations.py'] = 'operations.py'
 wanted['VERSION'] = 'VERSION'
 release = scratch / 'release'
 release.mkdir()
@@ -412,6 +413,11 @@ if any(not (release / name).is_file() for name in (*managed, 'VERSION')):
     raise SystemExit('下載缺少完整的部署檔案')
 if artifact == f'xpayincus-compose-{version}.tar.gz' and not (release / 'update.py').is_file():
     raise SystemExit('最小 Compose bundle 缺少 update.py')
+if 'incudal-operations-v1' in (release / 'README.md').read_text() and not (release / 'operations.py').is_file():
+    raise SystemExit('最小 Compose bundle 缺少同版本 operations.py')
+if (release / 'operations.py').is_file():
+    compile((release / 'operations.py').read_text(), 'operations.py', 'exec')
+    managed = (*managed, 'operations.py')
 if (release / 'VERSION').read_text().strip() != version:
     raise SystemExit('Release 的 VERSION 與要求版本不符')
 for name in files:
@@ -449,7 +455,7 @@ if action == 'update':
         raise SystemExit('目前 receipt 版本無效或要求降版，拒絕更新')
     for name in managed:
         target = destination / name
-        if name == 'update.py' and not os.path.lexists(target) and not (previous / name).exists():
+        if name in {'update.py', 'operations.py'} and not os.path.lexists(target) and not (previous / name).exists():
             continue
         if not target.is_symlink() or os.readlink(target) != f'.bootstrap/current/{name}':
             raise SystemExit(f'部署入口曾被修改，拒絕覆寫：{name}')
@@ -462,7 +468,7 @@ created = []
 pointer = scratch / 'next'
 try:
     for name in managed:
-        if action == 'install' or (name == 'update.py' and not os.path.lexists(destination / name)):
+        if action == 'install' or (name in {'update.py', 'operations.py'} and not os.path.lexists(destination / name)):
             os.symlink(f'.bootstrap/current/{name}', destination / name)
             created.append(destination / name)
     os.symlink(release_name, pointer)

@@ -4,7 +4,7 @@
 
 import { prisma } from './prisma.js'
 import type { InstanceTaskType, InstanceTaskStatus, Prisma } from '@prisma/client'
-import { INSTANCE_OPERATION_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from './advisory-locks.js'
+import { HOST_TASK_CLAIM_LOCK_NAMESPACE, INSTANCE_OPERATION_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from './advisory-locks.js'
 
 export interface CreateInstanceTaskData {
   instanceId: number
@@ -88,6 +88,14 @@ export async function createInstanceTask(data: CreateInstanceTaskData): Promise<
     if (!locked) {
       throw new InstanceTaskConflictError()
     }
+
+    const instance = await tx.instance.findUnique({ where: { id: data.instanceId }, select: { hostId: true, status: true } })
+    if (!instance || instance.hostId !== data.hostId || instance.status === 'deleted') throw new InstanceTaskConflictError()
+    const hostIds = [...new Set([data.hostId, ...(data.targetHostId ? [data.targetHostId] : [])])].sort((a, b) => a - b)
+    for (const hostId of hostIds) if (!await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, hostId)) throw new InstanceTaskConflictError()
+    const maintenance = await tx.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'review_required', 'completed', 'recovering'] }, OR: [{ sourceHostId: { in: hostIds } }, { targetHostId: { in: hostIds } }] }, select: { id: true } })
+    if (maintenance) throw new InstanceTaskConflictError()
+    if (await tx.provisioningJob.findFirst({ where: { instanceId: data.instanceId, status: { in: ['preparing', 'pending', 'processing', 'review_required'] } }, select: { id: true } })) throw new InstanceTaskConflictError()
 
     const activeTask = await tx.instanceTask.findFirst({
       where: {

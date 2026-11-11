@@ -34,7 +34,8 @@ import { clampAgentHeartbeatIntervalSeconds, deriveAgentStatus, getAgentHeartbea
 import { AgentReleaseCache, readBoundedAgentResponse, validateCachedAgentManifest } from '../lib/agent-release-cache.js'
 import { homedir } from 'node:os'
 import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } from '../lib/system-version.js'
-import { AgentUpgradeRequests, agentVersionStatus } from '../lib/agent-upgrade.js'
+import { agentVersionStatus } from '../lib/agent-upgrade.js'
+import { DurableAgentUpgradeRequests, ingestAgentHistory, readAgentHistory, serializeAgentHeartbeat } from '../services/agent-durable-state.js'
 import { readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
 
 interface AgentCredentialsParams {
@@ -60,6 +61,9 @@ interface AgentHeartbeatBody {
   instances?: Record<string, unknown>
   resources?: Record<string, unknown>
   metrics?: Record<string, unknown>
+  components?: Record<string, unknown>
+  upgradeStatus?: Record<string, unknown>
+  history?: Record<string, unknown>
 }
 
 interface AgentBinaryParams {
@@ -123,7 +127,7 @@ interface AgentUpgradeInstruction {
 
 const agentModel = prisma.hostAgent
 const nonceModel = prisma.hostAgentNonce
-const agentUpgradeRequests = new AgentUpgradeRequests()
+const agentUpgradeRequests = new DurableAgentUpgradeRequests()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const agentBinaryNamePattern = /^xpayincus-agent-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?-linux-(amd64|arm64)(?:\.gz)?$/
@@ -925,6 +929,9 @@ function buildHeartbeatReport(body: AgentHeartbeatBody): Record<string, unknown>
   return {
     runtime: body.runtime ?? {},
     incus: body.incus ?? {},
+    components: body.components ?? {},
+    upgradeStatus: body.upgradeStatus ?? {},
+    instanceSampledAt: body.instances?.reportedAt ?? null,
     resources: body.resources ?? {},
     metrics: normalizeAgentMetrics(body.metrics)
   }
@@ -1230,6 +1237,28 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       },
       agent: agent ? await serializeAgentStatus(agent) : null
     }
+  })
+
+  fastify.get<{ Params: AgentCredentialsParams; Querystring: { from?: string; to?: string; limit?: string; resolutionSeconds?: string } }>('/hosts/:hostId/history', {
+    onRequest: [fastify.authenticate]
+  }, async (request, reply) => {
+    const hostId = parsePositiveId(request.params.hostId)
+    if (!hostId) return reply.code(400).send({ error: 'Invalid host ID', code: 'INVALID_HOST_ID' })
+    const host = await prisma.host.findUnique({ where: { id: hostId }, select: { userId: true } })
+    if (!host) return reply.code(404).send({ error: 'Host not found', code: 'HOST_NOT_FOUND' })
+    if (host.userId !== request.user.id && request.user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
+    const now = Date.now()
+    const from = request.query.from ? Date.parse(request.query.from) : now - 86400000
+    const to = request.query.to ? Date.parse(request.query.to) : now
+    const limit = Number(request.query.limit ?? 1000)
+    const resolutionSeconds = Number(request.query.resolutionSeconds ?? 60)
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from > to || !Number.isInteger(limit) || limit < 1 || limit > 2000 ||
+      !Number.isInteger(resolutionSeconds) || resolutionSeconds < 30 || resolutionSeconds > 86400) {
+      return reply.code(400).send({ error: 'Invalid history range, limit or resolution', code: 'AGENT_HISTORY_INVALID_QUERY' })
+    }
+    const agent = await agentModel.findUnique({ where: { hostId } })
+    return { hostId, retentionDays: 30, recentResolutionSeconds: 30, archiveResolutionSeconds: 3600,
+      samples: agent ? readAgentHistory(agent.agentId, from, to, limit, resolutionSeconds * 1000) : [] }
   })
 
   fastify.post<{ Params: AgentCredentialsParams; Body: { confirm: boolean; targetVersion: string } }>('/hosts/:hostId/upgrade', {
@@ -1571,7 +1600,10 @@ export default async function agentRoutes(fastify: FastifyInstance) {
           incus: { type: 'object', additionalProperties: true },
           instances: { type: 'object', additionalProperties: true },
           resources: { type: 'object', additionalProperties: true },
-          metrics: { type: 'object', additionalProperties: true }
+          metrics: { type: 'object', additionalProperties: true },
+          components: { type: 'object', additionalProperties: true },
+          upgradeStatus: { type: 'object', additionalProperties: true },
+          history: { type: 'object', additionalProperties: true }
         }
       }
     }
@@ -1581,10 +1613,24 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       return
     }
 
+    return serializeAgentHeartbeat(agent.agentId, async () => {
+    const latestAgent = await agentModel.findUnique({ where: { agentId: agent.agentId } })
+    if (!latestAgent?.enabled) return reply.code(409).send({ error: 'Agent is disabled', code: 'AGENT_HEARTBEAT_REJECTED' })
     const now = new Date()
+    const previousReport = isRecord(latestAgent.lastReport) ? latestAgent.lastReport : {}
+    const nextReport = buildHeartbeatReport(request.body)
+    nextReport.instanceSampledAt = previousReport.instanceSampledAt ?? null
     let instanceReport: Awaited<ReturnType<typeof processAgentInstanceReport>> | null = null
     try {
-      instanceReport = await processAgentInstanceReport(agent.hostId, request.body.instances)
+      const reportedAt = request.body.instances?.reportedAt
+      const sampledAt = typeof reportedAt === 'string' ? Date.parse(reportedAt) : now.getTime()
+      const previousTime = typeof previousReport.instanceSampledAt === 'string' ? Date.parse(previousReport.instanceSampledAt) : 0
+      const previousAt = Number.isFinite(previousTime) ? previousTime : 0
+      const freshWindow = Math.max(120000, getAgentHeartbeatIntervalSeconds(agent) * 2000)
+      if (Number.isFinite(sampledAt) && sampledAt > previousAt && sampledAt <= now.getTime() + 60000 && sampledAt >= now.getTime() - freshWindow) {
+        instanceReport = await processAgentInstanceReport(agent.hostId, request.body.instances)
+        nextReport.instanceSampledAt = new Date(sampledAt).toISOString()
+      }
     } catch (error) {
       request.log.warn(
         { agentId: agent.agentId, hostId: agent.hostId, error },
@@ -1602,7 +1648,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         status: 'online',
         version: sanitizeShortString(request.body.version, 128),
         capabilities: normalizeCapabilities(request.body.capabilities) as Prisma.InputJsonValue,
-        lastReport: buildHeartbeatReport(request.body) as Prisma.InputJsonObject,
+        lastReport: nextReport as Prisma.InputJsonObject,
         lastSeenAt: now,
         lastHeartbeatIp: sanitizeShortString(getAgentHeartbeatIp(request), 128)
       }
@@ -1612,12 +1658,26 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       return reply.code(409).send({ error: 'Agent heartbeat is superseded or Agent is disabled', code: 'AGENT_HEARTBEAT_REJECTED' })
     }
 
+    let acceptedSampleIds: string[] = []
+    try {
+      acceptedSampleIds = ingestAgentHistory(agent.agentId, request.body.history)
+    } catch (error) {
+      request.log.warn({ error, agentId: agent.agentId }, 'Agent history persistence unavailable; samples retained by Agent')
+    }
+    let upgrade: AgentUpgradeInstruction = { available: false }
+    try {
+      upgrade = agentUpgradeRequests.heartbeat(agent.agentId, request.body.version, request.body.runtime ?? {}, now.getTime(), request.body.upgradeStatus, normalizeCapabilities(request.body.capabilities))
+    } catch (error) {
+      request.log.warn({ error, agentId: agent.agentId }, 'Agent upgrade journal unavailable')
+    }
     return {
       ok: true,
+      acceptedSampleIds,
       serverTime: now.toISOString(),
       taskPollIntervalSeconds: 15,
       instanceReport,
-      upgrade: agentUpgradeRequests.heartbeat(agent.agentId, request.body.version, request.body.runtime ?? {})
+      upgrade
     }
+    })
   })
 }

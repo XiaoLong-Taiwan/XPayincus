@@ -299,6 +299,10 @@ async function processQueue(): Promise<void> {
   const startTime = Date.now()
 
   try {
+    const { processProvisioningJobs } = await import('../routes/instances.js')
+    const { checkStockSubscriptions } = await import('../services/stock-subscriptions.js')
+    void processProvisioningJobs().catch(error => console.error('[ProvisioningWorker]', error))
+    void checkStockSubscriptions().catch(error => console.error('[StockSubscriptions]', error))
     // 批量获取所有待处理任务（一次查询）
     const pendingTasks = await prisma.instanceTask.findMany({
       where: { status: 'PENDING' },
@@ -439,7 +443,9 @@ async function claimLightTask(hostId: number, taskId: number) {
     const task = await tx.instanceTask.findUnique({
       where: { id: taskId }
     })
-    if (!task || task.status !== 'PENDING') return null
+    if (!task || task.status !== 'PENDING' || task.hostId !== hostId) return null
+    if (task.targetHostId && !await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, task.targetHostId)) return null
+    if (await tx.hostMaintenancePlan.count({ where: { status: { in: ['running', 'review_required', 'completed', 'recovering'] }, OR: [{ sourceHostId: { in: [task.hostId, ...(task.targetHostId ? [task.targetHostId] : [])] } }, { targetHostId: { in: [task.hostId, ...(task.targetHostId ? [task.targetHostId] : [])] } }] } })) return null
 
     const instanceOperationLocked = await tryAdvisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, task.instanceId)
     if (!instanceOperationLocked) return null
@@ -465,6 +471,7 @@ async function claimNextTask(hostId: number) {
   return prisma.$transaction(async (tx) => {
     const locked = await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, hostId)
     if (!locked) return null
+    if (await tx.hostMaintenancePlan.count({ where: { status: { in: ['running', 'review_required', 'completed', 'recovering'] }, OR: [{ sourceHostId: hostId }, { targetHostId: hostId }] } })) return null
 
     // 检查是否有正在执行的实例任务
     const runningTask = await tx.instanceTask.findFirst({
@@ -490,6 +497,10 @@ async function claimNextTask(hostId: number) {
       orderBy: { createdAt: 'asc' }
     })
     if (!taskToRun) return null
+    if (taskToRun.targetHostId) {
+      if (!await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, taskToRun.targetHostId)) return null
+      if (await tx.hostMaintenancePlan.count({ where: { status: { in: ['running', 'review_required', 'completed', 'recovering'] }, OR: [{ sourceHostId: taskToRun.targetHostId }, { targetHostId: taskToRun.targetHostId }] } })) return null
+    }
 
     const instanceOperationLocked = await tryAdvisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, taskToRun.instanceId)
     if (!instanceOperationLocked) return null

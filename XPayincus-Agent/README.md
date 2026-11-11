@@ -2,7 +2,9 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.10`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.11`（v1.0.10 已正式發布，發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+
+本輪加入背景採集、有限額與保留期的歷史補送 spool、持久化升級階段及 RFW／ZFS 唯讀狀態，詳見 [v1.0.11 發行說明](../XPayincus/docs-site/release-notes/v1.0.11.md) 與 [宿主元件管理](components/README.md)。新版能力仍待 CI 與隔離宿主驗收。
 
 ## 宿主元件整合
 
@@ -20,6 +22,9 @@ agent_id: "<面板產生的 Agent ID>"
 agent_secret: "<面板產生的私密金鑰>"
 heartbeat_interval_seconds: 60
 request_timeout_seconds: 10
+state_dir: "/var/lib/incudal-agent"
+spool_max_bytes: 16777216
+spool_retention_hours: 72
 ```
 
 請使用面板產生的設定，限制檔案權限，不要提交金鑰。可用 `INCUDAL_PANEL_URL`、`INCUDAL_AGENT_ID`、`INCUDAL_AGENT_SECRET`、`INCUDAL_HEARTBEAT_INTERVAL_SECONDS`、`INCUDAL_REQUEST_TIMEOUT_SECONDS` 覆寫。
@@ -109,13 +114,13 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 宿主詳情的 Agent 區塊在 Agent 在線、啟用且發現較新版本時顯示「一鍵更新 Agent」。確認視窗列出目前及目標版本，明確授權替換 Agent binary 並重啟 Agent 服務；只有宿主擁有者或管理員可操作。不輪換憑證，不更新 Incus／RFW／ZFS 或 systemd unit。
 
-`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.10" }`（版本僅為範例）。後端重新驗證目標版本、平台與最低 updater 版本，固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
+`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.11" }`（版本僅為範例，須已正式發布）。後端重新驗證目標版本、平台與最低 updater 版本，固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
 
-未授權心跳不再自動下發新版。每次授權只下發一次，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`（等待心跳）、`delivered`（已下發）、`succeeded`（後續 HMAC 心跳版本達到目標或更新）、`unconfirmed`（逾時未確認），附目標、請求／下發及到期時間。成功只代表新版心跳，並不證明所有宿主功能健康。
+未授權心跳不自動下發新版，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`、`delivered`、`succeeded`、`failed`、`unconfirmed`，附 operation ID、目標版本、階段、錯誤及時間。支援 `upgrade-status-v1` 的 Agent 以相同 operation ID 去重，回應遺失時可重新下發同一操作；舊 Agent 維持一次下發相容行為。新版成功須符合目標版本及 `healthy` 回報，舊版僅確認目標版本心跳，皆不代表所有宿主功能已驗收。
 
-Go Agent 保留原本最多 5 分鐘隨機延遲與 10 分鐘執行逾時。面板等待視窗為兩次心跳間隔加 20 分鐘；下發或 HTTP 成功都不代表安裝成功。下載／校驗／重啟錯誤目前只記錄宿主 `journalctl -u incudal-agent`，舊 Agent 無細分進度／錯誤回報；未確認時先查心跳和日誌，再明確重試。下發回應遺失也不自動重送，避免無限執行。
+Go Agent 保留原本最多 5 分鐘隨機延遲與 10 分鐘執行逾時。面板等待視窗為兩次心跳間隔加 20 分鐘；下發或 HTTP 成功都不代表安裝成功。新版將下載、校驗、替換及等待健康確認等階段存入 `upgrade.json`，由重啟後的新程序在資源心跳成功後確認健康；中斷或健康確認逾時標記失敗。舊 Agent 無細分進度／錯誤回報，未確認時先查心跳與 `journalctl -u incudal-agent`，再明確重試。
 
-授權及狀態保存在單一 API 程序記憶體，不新增資料庫遷移；API 重啟後清除未下發授權與狀態，需要重新確認。已下發的 Agent 更新可能仍在執行，重啟 API 不會取消宿主工作。授權綁定 Agent ID，輪換憑證後不沿用；請求以 `host.agent_upgrade_request` 留存稽核日誌。不可部署多個 API 副本。
+授權及狀態由單一 API 程序持久寫入檔案 journal；API 端 `INCUDAL_AGENT_STATE_DIR` 須為應用倉庫外的私人可寫絕對目錄，預設為服務帳號的 `~/.local/state/xpayincus/agent`。容器部署須確保此目錄位於持久掛載，僅寫入容器層不能保證重建後保留。已下發的 Agent 更新可能仍在執行，重啟 API 不會取消宿主工作。授權綁定 Agent ID，輪換憑證後不沿用；請求以 `host.agent_upgrade_request` 留存稽核日誌。檔案 journal 不提供跨程序鎖，仍禁止多個 API 副本。
 
 本機驗證：在 `XPayincus/` 執行 `pnpm --filter server test:agent-upgrade`、Agent 相關守衛、前後端 type-check 及雙端 build；在本目錄執行 `go test ./...`。Linux 真機驗收需用測試宿主：取消確認不應呼叫更新 API，確認後依序看到等待／下發／新版心跳；另驗證未授權心跳、非擁有者、離線、較新版本及校驗失敗。真機驗收不包含在本機守衛通過的證據內。
 

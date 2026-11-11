@@ -189,6 +189,68 @@ model RestoreTask {
 
 // ==================== 实例操作任务模型 ====================
 
+model HostMaintenancePlan {
+  id Int @id @default(autoincrement())
+  sourceHostId Int @map("source_host_id")
+  targetHostId Int @map("target_host_id")
+  createdBy Int @map("created_by")
+  status String @default("pending")
+  instanceIds Json @map("instance_ids")
+  results Json @default("[]")
+  error String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  sourceHost Host @relation("MaintenanceSource", fields: [sourceHostId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  targetHost Host @relation("MaintenanceTarget", fields: [targetHostId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  creator User @relation(fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@index([status])
+  @@map("host_maintenance_plans")
+}
+
+model StockSubscription {
+  id Int @id @default(autoincrement())
+  userId Int @map("user_id")
+  packageId Int @map("package_id")
+  planId Int @map("plan_id")
+  region String @default("")
+  active Boolean @default(true)
+  cooldownHours Int @default(24) @map("cooldown_hours")
+  wasAvailable Boolean @default(false) @map("was_available")
+  lastNotifiedAt DateTime? @map("last_notified_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  plan PackagePlan @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@unique([userId, planId, region])
+  @@index([packageId, active])
+  @@map("stock_subscriptions")
+}
+
+model ProvisioningJob {
+  id Int @id @default(autoincrement())
+  instanceId Int @unique @map("instance_id")
+  status String @default("pending")
+  phase String @default("queued")
+  payload String
+  error String?
+  attempts Int @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([status])
+  instance Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@map("provisioning_jobs")
+}
+
+model ProvisioningEvent {
+  id Int @id @default(autoincrement())
+  instanceId Int @map("instance_id")
+  phase String
+  createdAt DateTime @default(now()) @map("created_at")
+  @@index([instanceId, id])
+  instance Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  @@map("provisioning_events")
+}
+
 model InstanceTask {
   id         Int                @id @default(autoincrement())
   instanceId Int                @map("instance_id")
@@ -531,6 +593,9 @@ model User {
   oauthRefreshTokens OAuthRefreshToken[] @relation("OAuthRefreshTokenUser")
   oauthGrants OAuthGrant[] @relation("OAuthGrantUser")
 
+  stockSubscriptions StockSubscription[]
+  maintenancePlans HostMaintenancePlan[]
+
   @@map("users")
 }
 
@@ -762,6 +827,9 @@ model Host {
 
   @@unique([userId, name]) // 同一用户下名称唯一
   @@index([userId])
+  maintenanceSources HostMaintenancePlan[] @relation("MaintenanceSource")
+  maintenanceTargets HostMaintenancePlan[] @relation("MaintenanceTarget")
+
   @@map("hosts")
 }
 
@@ -977,6 +1045,8 @@ model Package {
   @@unique([userId, name]) // 同一用户下名称唯一
   @@index([userId])
   @@index([requiredPackageId])
+  stockSubscriptions StockSubscription[]
+
   @@map("packages")
 }
 
@@ -1112,6 +1182,9 @@ model Instance {
   @@index([hostId, status]) // 高可用优化：状态同步调度器使用
   @@index([expiresAt])      // 计费调度器使用：查找即将到期的实例
   @@index([userId, displayOrder, createdAt(sort: Desc)])
+  provisioningJob ProvisioningJob?
+  provisioningEvents ProvisioningEvent[]
+
   @@map("instances")
 }
 
@@ -2805,6 +2878,8 @@ model PackagePlan {
 
   @@unique([packageId, name]) // 同一套餐下方案名称唯一
   @@index([packageId, isActive])
+  stockSubscriptions StockSubscription[]
+
   @@map("package_plans")
 }
 
@@ -3268,6 +3343,9 @@ enum WithdrawalStatus {
   approved  // 已通过
   rejected  // 已拒绝
   completed // 已完成
+  processing
+  paid
+  failed
 }
 
 enum WithdrawalTarget {
@@ -3449,6 +3527,11 @@ model HostingWithdrawal {
   target       WithdrawalTarget
   usdtAddress  String?          @map("usdt_address") // USDT地址（仅USDT提现）
   status       WithdrawalStatus @default(pending)
+  paymentMethod String?        @map("payment_method")
+  paymentReference String?     @map("payment_reference")
+  paymentProof String?         @map("payment_proof")
+  failureReason String?        @map("failure_reason")
+  refundedAt DateTime?         @map("refunded_at")
   rejectReason String?          @map("reject_reason")
   processedAt  DateTime?        @map("processed_at")
   processedBy  Int?             @map("processed_by") // 处理的管理员ID

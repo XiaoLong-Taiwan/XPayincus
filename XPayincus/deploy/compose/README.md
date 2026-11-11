@@ -1,8 +1,8 @@
-# 面板 Compose v1.0.10 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.11 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-本文件描述統一版 v1.0.10 Compose 配置（發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.11 Compose 配置（v1.0.10 已正式發布，發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
 
@@ -17,7 +17,7 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 可使用完整倉庫執行 `up` 或 `up build`，或解壓已發布的 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。使用官方發行包時保留附帶的 `compose.release.yaml`；也可只複製該包完整 `deploy/compose/` 目錄，執行 init 與預設 pull 部署。手動／自訂部署沒有該 release 檔時，`up` 與 `up pull` 直接依既有 Compose 的 image 拉取，不要求先以 `update` 納管或改用 build。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.10`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.10`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.11`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.11`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。缺少新入口的舊部署，CLI 與 `init` 回退使用 `compose.yaml`；已存在但損壞的入口不會被忽略。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -85,7 +85,7 @@ Cloudflare 接著隱藏詢問 Tunnel token，寫入 `secrets/cloudflare_tunnel_t
 固定版本可信 SHA256 模式仍相容；請從獨立可信管道確認入口與 archive 的預期值，不能下載後自行計算就視為驗證：
 
 ```bash
-VERSION=v1.0.10
+VERSION=v1.0.11
 BOOTSTRAP_SHA256='填入可信的入口腳本64位小寫SHA256'
 ARCHIVE_SHA256='填入可信的Dashboard封裝64位小寫SHA256'
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
@@ -95,7 +95,7 @@ printf '%s  %s\n' "$BOOTSTRAP_SHA256" "xpayincus-compose-$VERSION.sh" | sha256su
   bash "xpayincus-compose-$VERSION.sh" install /srv/incudal-panel "$VERSION" "$ARCHIVE_SHA256"
 ```
 
-此處使用 v1.0.10 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
+此處使用 v1.0.11 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
 
 ```bash
 cd /srv/incudal-panel
@@ -258,7 +258,7 @@ bash panel.sh logs api
 bash panel.sh down
 ```
 
-`status` 包含已退出的容器，`logs` 顯示全部或指定服務最近 100 行且不持續追蹤。分享日誌前先移除敏感資料。`down` 保留部署目錄內的 bind mount 資料；不要刪除資料目錄，也不要使用 `docker compose down -v`，仍待遷移的舊 named volumes 可能因此被刪除。CLI 固定 project 名稱及 Compose 路徑，可從其他目錄使用腳本絕對路徑執行。所有 CLI 操作使用同一把非阻塞鎖；直接呼叫 Docker 或其他專案副本不受這把鎖保護。
+`status` 包含已退出的容器，`logs` 顯示全部或指定服務最近 100 行且不持續追蹤。分享日誌前先移除敏感資料。`down` 保留部署目錄內的 bind mount 資料；不要刪除資料目錄，也不要使用 `docker compose down -v`，仍待遷移的舊 named volumes 可能因此被刪除。CLI 固定 project 名稱及 Compose 路徑，可從其他目錄使用腳本絕對路徑執行。部署與資料庫操作使用同一把非阻塞鎖；doctor、migration-plan 與預設 recover 為唯讀診斷，不建立鎖或狀態目錄，診斷期間狀態仍可能變動。直接呼叫 Docker 或其他專案副本不受這把鎖保護。
 
 初始化後，在部署目錄可直接使用 Compose；`.env` 的 `COMPOSE_FILE` 與 `BUILD_CONTEXT` 已指向相同來源：
 
@@ -291,6 +291,27 @@ curl --fail --silent --show-error https://admin.example.org/api/health
 | Incus 連線或憑證失敗 | 檢查容器到宿主的可路由位址、防火牆、`certs/` 內容與 UID 1000 讀取權限 |
 
 不要用 `prisma db push --accept-data-loss`、刪除 migration 紀錄或清除 volume 來繞過啟動錯誤。若已有 DB migration 失敗，須先備份並診斷該 migration，再按 Prisma 的既有資料庫修復流程處理。
+
+## 同版本操作能力（incudal-operations-v1）
+
+最小 Compose bundle 同時交付 `operations.py`、`update.py` 與本指引；它們由同一版本 archive 的 SHA256 核驗。能力包含唯讀 doctor、舊宿主 migration plan、更新 plan、持久 journal 及中斷恢復。最小包沒有應用 schema、migration 原始碼或舊宿主 exporter；schema 比對須另外取得目標同版本完整來源或官方 API image，exporter 隨原生 Panel／Dashboard 來源包交付。
+
+```bash
+bash panel.sh doctor
+bash panel.sh doctor --json
+python3 operations.py doctor --base /opt/incudal --mode native --env-file /opt/incudal/.env --proxy external --json
+bash panel.sh update-plan
+bash panel.sh recover --json
+bash panel.sh migration-plan /srv/private/legacy-export --target-schema /srv/target/server/prisma/schema.prisma --json
+```
+
+Doctor 僅使用 Python 3 標準函式庫，不需要 pnpm；Compose 模式另外需要 Docker Compose，TLS 配對需 OpenSSL，原生 ledger 與遷移 archive 檢查需 PostgreSQL client。接受 `docker-compose.yml`、`compose.yaml`、`compose.yaml:compose.release.yaml` 三種官方入口；存在 release override 時採後兩檔合併，避免 include 重複服務。它核對雙 HTTPS origin／不同 hostname、代理 profile、網站 TLS 或 Tunnel token、單 API 容器與 Node 程序、唯讀 migration ledger 及兩個公開 `/api/health`。HTTPS probe 驗證公開信任鏈且拒絕 redirect。原生自訂程序管理器、外部代理內部設定與 migration 是否涵蓋目標版本仍需人工核對；ledger clean 不表示 schema 已相容。`--env-file` 應是實際生效設定的私有副本，不執行 shell 語法或插值。JSON 的 checks 逐項包含 pass／warn／fail；fail 回傳非零，warn 必須另行驗收，`ok=true` 不等於可上線。
+
+`update-plan` 取得既有非阻塞鎖，下載並核驗固定正式版本、目前部署與容器、目標 Compose，再列出計畫；會建立鎖與暫存目錄，但不備份、不切換、不停服務，也不改 journal。一般 `update` 將進度原子寫入 `.state/update-journal.json` 並 fsync，記錄版本、artifact SHA256、備份路徑／雜湊、備份完成、切換及最後階段；舊完成 journal 留存於 `.state/update-*.json`。此檔不含 secret，但包含部署路徑，仍須私有保存。SIGINT／SIGTERM 記錄中斷；斷電／SIGKILL 可能留下 running，須結合操作鎖與容器狀態判斷。
+
+更新中斷後先執行 `recover`、`doctor`、`status` 與 `logs api`。未完成 journal 會阻止新更新；僅在 `backupComplete=false` 時可執行 `bash panel.sh recover --retry-preflight`，保留舊 journal 後重做前置流程。目標已切換且備份／journal 雜湊、版本與 receipt 相符時，可人工確認 migration 狀態後執行 `bash panel.sh recover --resume-up`，取得同一把鎖並重跑 `up`。已備份但未完成切換、檔案有衝突或 receipt 不符時須依備份人工修復；助手拒絕猜測。任何恢復均不自動還原 DB，也不以程式退版取代 migration 修復。
+
+Migration plan 只讀 export 目錄，核對 v1 manifest、COMPLETE／INCOMPLETE、inventory 大小及 SHA256、非空 DB／env／encryption_key、原 secret、Incus 配對必要性與 OpenSSL 配對、`pg_restore --list`、來源與目標 schema，列出不含值的 env 映射與隔離還原命令。新版 exporter 會擷取可取得的來源 schema／migration，缺少時保留警告。`exportComplete` 僅表示 manifest 記錄的匯出完整，不能證明金鑰確為來源有效值、跨資源快照一致或可切換；`switchReady` 保守維持 false，須在隔離 PostgreSQL 16 還原、比對 ledger／checksum、以原 encryption_key 驗證解密／登入／Incus 信任，停舊 API／worker 後重新匯出並人工驗收。網站 `tls/` 與 Incus `certs/` 為不同身分；不應重生原 Incus 私鑰來略過警告。助手不連正式 DB、不執行還原或切流。
 
 ## 更新與移機
 

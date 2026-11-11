@@ -599,6 +599,36 @@ function generateEmailText(options: {
  */
 export type VerificationPurpose = 'register' | 'reset_password' | 'change_email'
 
+export async function sendNotificationEmail(
+    email: unknown,
+    title: string,
+    message: string
+): Promise<{ success: boolean; error: string | null }> {
+    if (typeof email !== 'string' || email.length > 254 || !/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/.test(email)) {
+        return { success: false, error: 'Invalid email address' }
+    }
+    try {
+        const transporter = await getTransporter()
+        if (!transporter) return { success: false, error: 'SMTP not configured' }
+        const { config, brandName, brandLogoUrl } = await getMailContext()
+        const options = { title, paragraphs: message.split('\n'), brandName, brandLogoUrl }
+        const info = await transporter.sendMail({
+            from: { name: config.fromName || brandName, address: config.fromEmail },
+            to: { address: email, name: '' },
+            subject: formatBrandSubject(brandName, title),
+            html: generateEmailHtml(options),
+            text: generateEmailText(options)
+        })
+        if (!info.accepted?.length || info.rejected?.length || info.pending?.length) {
+            return { success: false, error: 'SMTP did not accept notification recipient' }
+        }
+        return { success: true, error: null }
+    } catch (error) {
+        const smtpError = error as { code?: string; responseCode?: number }
+        return { success: false, error: `Email delivery failed (${smtpError.responseCode ?? smtpError.code ?? 'SMTP error'})` }
+    }
+}
+
 /**
  * 发送验证码邮件
  * @param email 收件人邮箱

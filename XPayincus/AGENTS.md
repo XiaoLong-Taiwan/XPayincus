@@ -10,7 +10,7 @@
 - 與 owner 預設用**繁體中文**溝通。
 
 ## 1. 这是什么项目
-**XPayincus**（內部代號 `incudal`）——商用 Incus（LXC/KVM）NAT VPS 銷售與交付平台。統一發行版本以根 `../VERSION` 為準，目前為 **v1.0.10（發行目標；發布狀態以 GitHub Release 為準）**；不從歷史交接檔推定目前生產版本。本目錄是統一倉庫中的 pnpm workspace，下表路徑相對於本目錄：
+**XPayincus**（內部代號 `incudal`）——商用 Incus（LXC/KVM）NAT VPS 銷售與交付平台。統一發行版本以根 `../VERSION` 為準，目前為 **v1.0.11（發行目標；v1.0.10 已正式發布，發布狀態以 GitHub Release 為準）**；不從歷史交接檔推定目前生產版本。本目錄是統一倉庫中的 pnpm workspace，下表路徑相對於本目錄：
 
 | 目录 | 技术栈 / 作用 |
 |------|----------------|

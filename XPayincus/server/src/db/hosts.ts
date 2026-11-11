@@ -1,5 +1,5 @@
 /**
- * 主机相关数据库操�?
+ * 主机相关数据库操�?
  * 使用 Prisma ORM
  */
 
@@ -56,7 +56,7 @@ export interface PlanUpgradeCapacityCheck {
 }
 
 /**
- * 获取所有主�?
+ * 获取所有主�?
  */
 export async function getAllHosts(): Promise<Host[]> {
   const hosts = await prisma.host.findMany({
@@ -94,7 +94,7 @@ export async function getAllHosts(): Promise<Host[]> {
 
 /**
  * 检查是否有可用的节点（非离线状态）
- * @param userId 可选，指定用户 ID 则只检查该用户的节�?
+ * @param userId 可选，指定用户 ID 则只检查该用户的节�?
  */
 export async function hasAvailableHosts(userId?: number): Promise<boolean> {
   const count = await prisma.host.count({
@@ -163,7 +163,7 @@ export async function getHostById(id: number): Promise<Host | null> {
     notify_purchase: host.notifyPurchase,
     notify_renew: host.notifyRenew,
     notify_destroy: host.notifyDestroy,
-    // 资源池玩�?
+    // 资源池玩�?
     enable_resource_pool: host.enableResourcePool,
     // 节点公告
     announcement: host.announcement,
@@ -175,7 +175,7 @@ export async function getHostById(id: number): Promise<Host | null> {
 }
 
 /**
- * 根据用户ID和名称获取主�?
+ * 根据用户ID和名称获取主�?
  */
 export async function getHostByUserAndName(userId: number, name: string): Promise<Host | null> {
   const host = await prisma.host.findUnique({
@@ -266,7 +266,7 @@ export async function getHostByInstallToken(token: string): Promise<{
  * 创建主机
  */
 export async function createHost(data: {
-  userId: number  // 所有�?
+  userId: number  // 所有�?
   name: string
   url: string
   location?: string | null
@@ -421,7 +421,7 @@ export async function updateHost(id: number, data: {
 }
 
 /**
- * 更新主机状�?
+ * 更新主机状�?
  */
 export async function updateHostStatus(
   id: number,
@@ -436,27 +436,43 @@ export async function updateHostStatus(
 /**
  * 基于数据库实例统计节点的已用资源（排除已删除的实例）
  */
-export async function calculateHostResourcesFromInstances(hostId: number): Promise<{
+export async function calculateHostResourcesFromInstances(hostId: number, client: DbClient = prisma): Promise<{
   cpuUsed: number
   memoryUsed: number
   diskUsed: number
 }> {
-  const result = await prisma.instance.aggregate({
+  const result = await client.instance.aggregate({
     where: {
       hostId,
-      status: { not: 'deleted' }
+      status: { not: 'deleted' },
+      NOT: { status: 'error', provisioningJob: { is: { status: 'failed', phase: 'compensated' } } }
     },
-    _sum: {
-      cpu: true,
-      memory: true,
-      disk: true
-    }
+    _sum: { cpu: true, memory: true, disk: true }
   })
 
+  const retained = { cpu: 0, memory: 0, disk: 0 }
+  const counted = new Set<number>()
+  const plans = await client.hostMaintenancePlan.findMany({ where: { OR: [{ sourceHostId: hostId }, { targetHostId: hostId }] }, orderBy: { id: 'desc' } })
+  for (const plan of plans) {
+    const rows = plan.results as Array<{ instanceId: number; sourceRetained?: boolean; targetRetained?: boolean; cpu?: number; memory?: number; disk?: number }>
+    const instances = await client.instance.findMany({ where: { id: { in: plan.instanceIds as number[] } }, select: { id: true, hostId: true, status: true, cpu: true, memory: true, disk: true } })
+    for (const row of rows) {
+      const instance = instances.find(instance => instance.id === row.instanceId)
+      if (counted.has(row.instanceId)) continue
+      if (instance?.hostId === hostId) continue
+      const sourceCopy = plan.sourceHostId === hostId && row.sourceRetained !== false
+      const targetCopy = plan.targetHostId === hostId && (row.targetRetained === true || (row.targetRetained !== false && ['running', 'completed', 'review_required', 'recovering'].includes(plan.status)))
+      if (!sourceCopy && !targetCopy) continue
+      counted.add(row.instanceId)
+      retained.cpu += row.cpu ?? instance?.cpu ?? 0
+      retained.memory += row.memory ?? instance?.memory ?? 0
+      retained.disk += row.disk ?? instance?.disk ?? 0
+    }
+  }
   return {
-    cpuUsed: result._sum.cpu ?? 0,
-    memoryUsed: result._sum.memory ?? 0,
-    diskUsed: result._sum.disk ?? 0
+    cpuUsed: (result._sum.cpu ?? 0) + retained.cpu,
+    memoryUsed: (result._sum.memory ?? 0) + retained.memory,
+    diskUsed: (result._sum.disk ?? 0) + retained.disk
   }
 }
 
@@ -619,21 +635,14 @@ export async function checkPlanUpgradeCapacity(
         storageSize: true
       }
     }),
-    client.instance.aggregate({
-      where: { hostId: instance.hostId, status: { not: 'deleted' } },
-      _sum: { cpu: true, memory: true, disk: true }
-    })
+    calculateHostResourcesFromInstances(instance.hostId, client)
   ])
 
   return buildPlanUpgradeCapacityResult({
     instance,
     newPlan,
     host,
-    aggregate: {
-      cpuUsed: resourceSum._sum.cpu ?? 0,
-      memoryUsed: resourceSum._sum.memory ?? 0,
-      diskUsed: resourceSum._sum.disk ?? 0
-    }
+    aggregate: resourceSum
   })
 }
 
@@ -658,20 +667,13 @@ export async function reservePlanUpgradeCapacityWithLock(
     WHERE id = ${instance.hostId}
     FOR UPDATE
   `
-  const resourceSum = await tx.instance.aggregate({
-    where: { hostId: instance.hostId, status: { not: 'deleted' } },
-    _sum: { cpu: true, memory: true, disk: true }
-  })
+  const resourceSum = await calculateHostResourcesFromInstances(instance.hostId, tx)
 
   const capacity = buildPlanUpgradeCapacityResult({
     instance,
     newPlan,
     host: hosts[0] ?? null,
-    aggregate: {
-      cpuUsed: resourceSum._sum.cpu ?? 0,
-      memoryUsed: resourceSum._sum.memory ?? 0,
-      diskUsed: resourceSum._sum.disk ?? 0
-    }
+    aggregate: resourceSum
   })
 
   if (!capacity.canUpgrade) return capacity
@@ -692,28 +694,28 @@ export async function reservePlanUpgradeCapacityWithLock(
 
 /**
  * 删除主机
- * 注意：在删除宿主机之前，必须先删除所有关联的记录以解除外键约�?
+ * 注意：在删除宿主机之前，必须先删除所有关联的记录以解除外键约�?
  */
 export async function deleteHost(id: number): Promise<void> {
-  // 1. 先删除所有端口映射（PortMapping 的外键到 Host �?RESTRICT�?
+  // 1. 先删除所有端口映射（PortMapping 的外键到 Host �?RESTRICT�?
   await prisma.portMapping.deleteMany({
     where: { hostId: id }
   })
   
-  // 2. 删除所有关联的实例记录（包括已删除状态的�?
-  // 这会自动删除关联的快照、备份、端口映射等（通过 Cascade�?
+  // 2. 删除所有关联的实例记录（包括已删除状态的�?
+  // 这会自动删除关联的快照、备份、端口映射等（通过 Cascade�?
   await prisma.instance.deleteMany({
     where: { hostId: id }
   })
   
-  // 3. 删除宿主机（会自动删除关联的 PackageHost，因为它�?Cascade�?
+  // 3. 删除宿主机（会自动删除关联的 PackageHost，因为它�?Cascade�?
   await prisma.host.delete({
     where: { id }
   })
 }
 
 /**
- * 获取主机的实例数�?
+ * 获取主机的实例数�?
  */
 export async function getInstanceCountByHost(hostId: number): Promise<number> {
   const count = await prisma.instance.count({
@@ -727,7 +729,7 @@ export async function getInstanceCountByHost(hostId: number): Promise<number> {
 }
 
 /**
- * 获取主机的所有实�?
+ * 获取主机的所有实�?
  */
 export async function getInstancesByHost(hostId: number): Promise<unknown[]> {
   const instances = await prisma.instance.findMany({
@@ -744,7 +746,7 @@ export async function getInstancesByHost(hostId: number): Promise<unknown[]> {
 }
 
 /**
- * 增加宿主�?NAT 端口使用计数
+ * 增加宿主�?NAT 端口使用计数
  */
 export async function incrementHostPortCount(hostId: number, count: number = 1): Promise<void> {
   await prisma.host.update({
@@ -758,7 +760,7 @@ export async function incrementHostPortCount(hostId: number, count: number = 1):
 }
 
 /**
- * 减少宿主�?NAT 端口使用计数
+ * 减少宿主�?NAT 端口使用计数
  */
 export async function decrementHostPortCount(hostId: number, count: number = 1): Promise<void> {
   // 先获取当前值，确保不会小于 0
@@ -781,16 +783,30 @@ export async function decrementHostPortCount(hostId: number, count: number = 1):
 
 
 /**
- * 智能选择可用宿主�?
- * 考虑节点组、标签选择器、资源容�?
+ * 智能选择可用宿主�?
+ * 考虑节点组、标签选择器、资源容�?
  * 
- * 安全说明�?
+ * 安全说明�?
  * - ownerId 参数用于限制只能在指定用户的宿主机上创建实例
  * - 当使用共享套餐时，必须传入套餐所有者的ID，确保实例只能创建在套餐所有者的宿主机上
  * 
- * 注意：NAT端口检查已移除，系统使用独立的端口映射表记录端口分�?
+ * 注意：NAT端口检查已移除，系统使用独立的端口映射表记录端口分�?
  */
+export type HostAvailabilityCache = Map<string, Promise<unknown>>
+
+async function availabilityLookup<T>(cache: HostAvailabilityCache | undefined, key: string, load: () => Promise<T>): Promise<T> {
+  if (!cache) return load()
+  let value = cache.get(key)
+  if (!value) {
+    value = load()
+    cache.set(key, value)
+  }
+  return value as Promise<T>
+}
+
 export async function selectAvailableHost(options: {
+  availabilityCache?: HostAvailabilityCache
+  region?: string
   packageHostIds?: number[]  // 套餐绑定的宿主机ID列表
   nodeSelectors?: string[]
   cpu: number
@@ -800,26 +816,26 @@ export async function selectAvailableHost(options: {
   ownerId?: number  // 套餐所有者ID，用于限制只能在该用户的宿主机上创建实例
   packageId?: number | null
   networkMode?: NetworkMode | string | null
+  portCount?: number
+  instanceType?: 'container' | 'vm'
 }): Promise<(Host & { cpu_allowance_max?: number; memory_max?: number }) | null> {
   const { packageHostIds, nodeSelectors = [], cpu, memory, disk, hostId, ownerId, packageId, networkMode } = options
 
   // 构建查询条件
-  const where: {
-    status: 'online'
-    id?: number | { in: number[] }
-    userId?: number
-    tags?: { path: string[]; array_contains: string }
-  } = {
-    status: 'online'
+  const where: Prisma.HostWhereInput = {
+    status: 'online',
+    ...(options.region ? { location: options.region } : {}),
+    maintenanceSources: { none: { status: { in: ['running', 'completed', 'review_required', 'recovering'] } } },
+    maintenanceTargets: { none: { status: { in: ['running', 'completed', 'review_required', 'recovering'] } } }
   }
 
-  // 安全检查：用户指定�?hostId 必须在套餐绑定的宿主机列表中
+  // 安全检查：用户指定�?hostId 必须在套餐绑定的宿主机列表中
   if (hostId) {
     // 如果套餐绑定了宿主机，用户指定的 hostId 必须在列表中
     if (packageHostIds && packageHostIds.length > 0) {
       if (!packageHostIds.includes(hostId)) {
         console.log(`[selectAvailableHost] 安全拒绝: hostId=${hostId} 不在套餐绑定的宿主机列表 [${packageHostIds.join(', ')}] 中`)
-        return null  // 拒绝不在套餐绑定列表中的宿主�?
+        return null  // 拒绝不在套餐绑定列表中的宿主�?
       }
     }
     where.id = hostId
@@ -831,81 +847,72 @@ export async function selectAvailableHost(options: {
     where.userId = ownerId
   }
 
-  // 获取候选宿主机（包含实例信息用于实时计算资源使用量�?
-  const hosts = await prisma.host.findMany({
+  if (ownerId && !packageHostIds?.length) where.userId = ownerId
+  if (options.instanceType) where.instanceType = { in: [options.instanceType, 'both'] }
+
+  const hosts = await availabilityLookup(options.availabilityCache, `hosts:${JSON.stringify(where)}`, () => prisma.host.findMany({
     where,
-    include: {
-      instances: {
-        where: {
-          status: { not: 'deleted' }
-        },
-        select: {
-          cpu: true,
-          memory: true,
-          disk: true
-        }
-      }
-    },
     orderBy: [
-      { memoryUsed: 'asc' }, // 优先选择负载较低�?
+      { memoryUsed: 'asc' }, // 优先选择负载较低�?
       { cpuUsed: 'asc' }
     ]
-  })
+  }))
 
-  // 过滤和评�?
+  // 过滤和评�?
   for (const host of hosts) {
-    // 检查标签选择�?
+    // 检查标签选择�?
     if (nodeSelectors.length > 0) {
       const hostTags = (host.tags as string[]) || []
       const hasAllTags = nodeSelectors.every(tag => hostTags.includes(tag))
       if (!hasAllTags) {
-        console.log(`[selectAvailableHost] 宿主�?${host.name} 不满足标签选择器要求`)
+        console.log(`[selectAvailableHost] 宿主�?${host.name} 不满足标签选择器要求`)
         continue
       }
     }
 
-    // 计算资源使用�?= 关联该宿主机的实例的资源总和
-    const cpuUsedCalculated = host.instances.reduce((sum, inst) => sum + inst.cpu, 0)
-    const memoryUsedCalculated = host.instances.reduce((sum, inst) => sum + inst.memory, 0)
-    const diskUsedCalculated = host.instances.reduce((sum, inst) => sum + inst.disk, 0)
+    // 计算资源使用�?= 关联该宿主机的实例的资源总和
+    const calculated = await availabilityLookup(options.availabilityCache, `usage:${host.id}`, () => calculateHostResourcesFromInstances(host.id))
+    const cpuUsedCalculated = calculated.cpuUsed
+    const memoryUsedCalculated = calculated.memoryUsed
+    const diskUsedCalculated = calculated.diskUsed
     const cpuUsedEffective = Math.max(cpuUsedCalculated, host.cpuUsed ?? 0)
     const memoryUsedEffective = Math.max(memoryUsedCalculated, host.memoryUsed ?? 0)
     const diskUsedEffective = Math.max(diskUsedCalculated, host.diskUsed ?? 0)
 
     console.log(`[selectAvailableHost] 检查宿主机 ${host.name} (ID: ${host.id})`)
-    console.log(`  资源使用�? CPU=${cpuUsedCalculated}%, Memory=${memoryUsedCalculated}MB, Disk=${diskUsedCalculated}MB`)
+    console.log(`  资源使用�? CPU=${cpuUsedCalculated}%, Memory=${memoryUsedCalculated}MB, Disk=${diskUsedCalculated}MB`)
     console.log(`  请求资源: CPU=${cpu}%, Memory=${memory}MB, Disk=${disk}MB`)
     console.log(`  配额配置: cpuAllowanceMax=${host.cpuAllowanceMax}, memoryMax=${host.memoryMax}, storageSize=${host.storageSize}GB`)
 
-    // 检�?CPU 配额
-    // 剩余�?= 用户输入的CPU配额上限 - 实例资源总和
+    // 检�?CPU 配额
+    // 剩余�?= 用户输入的CPU配额上限 - 实例资源总和
     const cpuAllowanceMax = host.cpuAllowanceMax
     if (cpuAllowanceMax != null && cpuAllowanceMax > 0) {
       // 剩余CPU配额 = cpuAllowanceMax - cpuUsedCalculated
       // 需要满足：剩余CPU配额 >= 请求的CPU
       if ((cpuUsedEffective + cpu) > cpuAllowanceMax) {
-        console.log(`[selectAvailableHost] 宿主�?${host.name} CPU配额不足: ${cpuUsedEffective} + ${cpu} > ${cpuAllowanceMax}`)
+        console.log(`[selectAvailableHost] 宿主�?${host.name} CPU配额不足: ${cpuUsedEffective} + ${cpu} > ${cpuAllowanceMax}`)
         continue // CPU配额不足
       }
     } else {
       // 如果没有设置CPU配额上限，该宿主机不可用（必须设置配额）
-      console.log(`[selectAvailableHost] 宿主�?${host.name} 未设置CPU配额上限`)
+      console.log(`[selectAvailableHost] 宿主�?${host.name} 未设置CPU配额上限`)
       continue
     }
 
-    // 检查内存配�?
-    // 剩余�?= 用户输入的内存配额上�?- 实例资源总和
+    // 检查内存配�?
+    // 剩余�?= 用户输入的内存配额上�?- 实例资源总和
     const memoryMax = host.memoryMax
     if (memoryMax != null && memoryMax > 0) {
       // 剩余内存配额 = memoryMax - memoryUsedCalculated
-      // 需要满足：剩余内存配额 >= 请求的内�?
+      // 需要满足：剩余内存配额 >= 请求的内�?
       if ((memoryUsedEffective + memory) > memoryMax) {
-        console.log(`[selectAvailableHost] 宿主�?${host.name} 内存配额不足: ${memoryUsedEffective} + ${memory} > ${memoryMax}`)
+        console.log(`[selectAvailableHost] 宿主�?${host.name} 内存配额不足: ${memoryUsedEffective} + ${memory} > ${memoryMax}`)
         continue // 内存配额不足
       }
     } else {
       // 如果没有设置内存配额上限，该宿主机不可用（必须设置配额）
-      console.log(`[selectAvailableHost] 宿主�?${host.name} 未设置内存配额上限`)
+      console.log(`[selectAvailableHost] 宿主�?${host.name} 未设置内存配额上限`)
       continue
     }
 
@@ -915,7 +922,7 @@ export async function selectAvailableHost(options: {
       continue
     }
 
-    const storagePoolName = await resolveStoragePoolForNewInstance(host.id, { packageId })
+    const storagePoolName = await availabilityLookup(options.availabilityCache, `pool:${host.id}:${packageId}`, () => resolveStoragePoolForNewInstance(host.id, { packageId }))
     if (!storagePoolName) {
       console.log(`[selectAvailableHost] 宿主机 ${host.name} 未配置可用于实例系统盘的存储池`)
       continue
@@ -927,7 +934,7 @@ export async function selectAvailableHost(options: {
     }
 
     if (networkModeNeedsPublicIpv4(networkMode)) {
-      const freePublicIpv4Count = await countFreePublicIpv4ForHost(prisma, host.id)
+      const freePublicIpv4Count = await availabilityLookup(options.availabilityCache, `ipv4:${host.id}`, () => countFreePublicIpv4ForHost(prisma, host.id))
       if (freePublicIpv4Count <= 0) {
         console.log(`[selectAvailableHost] 宿主机 ` + host.name + ` 没有可用独立 IPv4 地址`)
         continue
@@ -935,10 +942,13 @@ export async function selectAvailableHost(options: {
     }
 
 
-    // NAT端口检查已移除：系统使用独立的端口映射表记录端口分配，不再限制NAT端口数量
-    console.log(`[selectAvailableHost] 宿主�?${host.name} 通过所有检查，可以使用`)
+    if ((options.portCount || 0) > 0) {
+      const total = host.natPortStart && host.natPortEnd ? host.natPortEnd - host.natPortStart + 1 : 0
+      if (host.natPortsUsedCount + options.portCount! > total) continue
+    }
+    console.log(`[selectAvailableHost] 宿主�?${host.name} 通过所有检查，可以使用`)
 
-    // 找到合适的宿主�?
+    // 找到合适的宿主�?
     return {
       id: host.id,
       name: host.name,
@@ -953,7 +963,7 @@ export async function selectAvailableHost(options: {
       nat_port_end: host.natPortEnd,
       cpu_used: cpuUsedEffective,  // 实例资源总和
       memory_used: memoryUsedEffective,  // 实例资源总和
-      disk_total: host.storageSize ? host.storageSize * 1024 : 0,  // 只使�?storageSize（GB转MB�?
+      disk_total: host.storageSize ? host.storageSize * 1024 : 0,  // 只使�?storageSize（GB转MB�?
       disk_used: diskUsedEffective,  // 实例资源总和
       created_at: host.createdAt.toISOString(),
       updated_at: host.updatedAt.toISOString(),
@@ -971,17 +981,17 @@ export async function selectAvailableHost(options: {
 }
 
 /**
- * 带行锁的宿主机选择和资源预占（原子操作�?
+ * 带行锁的宿主机选择和资源预占（原子操作�?
  * 解决并发创建实例时的资源超额问题
  * 
- * 关键改进�?
+ * 关键改进�?
  * - 使用 FOR UPDATE 行锁防止并发资源分配
  * - 在同一事务中完成资源检查和预占
- * - 基于实时计算的实例资源总和进行检�?
+ * - 基于实时计算的实例资源总和进行检�?
  * 
- * @param tx - Prisma 事务客户�?
+ * @param tx - Prisma 事务客户�?
  * @param options - 选择条件和请求的资源
- * @returns 选中的宿主机�?null
+ * @returns 选中的宿主机�?null
  */
 export async function selectAndReserveHostWithLock(
   tx: Omit<typeof prisma, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>,
@@ -996,6 +1006,7 @@ export async function selectAndReserveHostWithLock(
     portCount?: number
     packageId?: number | null
     networkMode?: NetworkMode | string | null
+    instanceType?: 'container' | 'vm'
   }
 ): Promise<(Host & { cpu_allowance_max?: number; memory_max?: number }) | null> {
   const { packageHostIds, nodeSelectors = [], cpu, memory, disk, hostId, ownerId, portCount = 0, packageId, networkMode } = options
@@ -1019,6 +1030,15 @@ export async function selectAndReserveHostWithLock(
     // 套餐没有绑定宿主机时，限制只能在套餐所有者的宿主机上创建实例
     whereConditions.push(`user_id = $${params.length + 1}`)
     params.push(ownerId)
+  }
+
+  if (ownerId && !packageHostIds?.length && hostId) {
+    whereConditions.push(`user_id = $${params.length + 1}`)
+    params.push(ownerId)
+  }
+  if (options.instanceType) {
+    whereConditions.push(`instance_type::text IN ($${params.length + 1}, 'both')`)
+    params.push(options.instanceType)
   }
 
   // 使用 FOR UPDATE 锁定候选宿主机记录
@@ -1070,60 +1090,50 @@ export async function selectAndReserveHostWithLock(
 
   // 遍历候选宿主机，检查资源并预占
   for (const host of hosts) {
-    // 检查标签选择�?
+    if (await tx.hostMaintenancePlan.count({ where: { status: { in: ['running', 'completed', 'review_required', 'recovering'] }, OR: [{ sourceHostId: host.id }, { targetHostId: host.id }] } })) continue
+    // 检查标签选择�?
     if (nodeSelectors.length > 0) {
       const hostTags = (host.tags as string[]) || []
       const hasAllTags = nodeSelectors.every(tag => hostTags.includes(tag))
       if (!hasAllTags) {
-        console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 不满足标签选择器要求`)
+        console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 不满足标签选择器要求`)
         continue
       }
     }
 
     // 实时计算该宿主机上所有活跃实例的资源总和
-    const resourceSum = await tx.instance.aggregate({
-      where: {
-        hostId: host.id,
-        status: { not: 'deleted' }
-      },
-      _sum: {
-        cpu: true,
-        memory: true,
-        disk: true
-      }
-    })
-
-    const cpuUsedCalculated = resourceSum._sum.cpu ?? 0
-    const memoryUsedCalculated = resourceSum._sum.memory ?? 0
-    const diskUsedCalculated = resourceSum._sum.disk ?? 0
+    const calculated = await calculateHostResourcesFromInstances(host.id, tx)
+    const cpuUsedCalculated = calculated.cpuUsed
+    const memoryUsedCalculated = calculated.memoryUsed
+    const diskUsedCalculated = calculated.diskUsed
     const cpuUsedEffective = Math.max(cpuUsedCalculated, host.cpu_used ?? 0)
     const memoryUsedEffective = Math.max(memoryUsedCalculated, host.memory_used ?? 0)
     const diskUsedEffective = Math.max(diskUsedCalculated, host.disk_used ?? 0)
 
     console.log(`[selectAndReserveHostWithLock] 检查宿主机 ${host.name} (ID: ${host.id})`)
-    console.log(`  实时资源使用�? CPU=${cpuUsedCalculated}%, Memory=${memoryUsedCalculated}MB, Disk=${diskUsedCalculated}MB`)
+    console.log(`  实时资源使用�? CPU=${cpuUsedCalculated}%, Memory=${memoryUsedCalculated}MB, Disk=${diskUsedCalculated}MB`)
     console.log(`  请求资源: CPU=${cpu}%, Memory=${memory}MB, Disk=${disk}MB`)
     console.log(`  配额配置: cpuAllowanceMax=${host.cpu_allowance_max}, memoryMax=${host.memory_max}`)
 
-    // 检�?CPU 配额
+    // 检�?CPU 配额
     const cpuAllowanceMax = host.cpu_allowance_max ?? 0
     if (cpuAllowanceMax <= 0) {
-      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 未设置CPU配额上限`)
+      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 未设置CPU配额上限`)
       continue
     }
     if ((cpuUsedEffective + cpu) > cpuAllowanceMax) {
-      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} CPU配额不足: ${cpuUsedEffective} + ${cpu} > ${cpuAllowanceMax}`)
+      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} CPU配额不足: ${cpuUsedEffective} + ${cpu} > ${cpuAllowanceMax}`)
       continue
     }
 
-    // 检查内存配�?
+    // 检查内存配�?
     const memoryMax = host.memory_max ?? 0
     if (memoryMax <= 0) {
-      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 未设置内存配额上限`)
+      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 未设置内存配额上限`)
       continue
     }
     if ((memoryUsedEffective + memory) > memoryMax) {
-      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 内存配额不足: ${memoryUsedEffective} + ${memory} > ${memoryMax}`)
+      console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 内存配额不足: ${memoryUsedEffective} + ${memory} > ${memoryMax}`)
       continue
     }
 
@@ -1155,18 +1165,18 @@ export async function selectAndReserveHostWithLock(
       }
     }
 
-    // 检�?NAT 端口配额（如果需要）
+    // 检�?NAT 端口配额（如果需要）
     if (portCount > 0) {
       const natPortsTotal = (host.nat_port_start && host.nat_port_end) 
         ? (host.nat_port_end - host.nat_port_start + 1) 
         : 0
       if (host.nat_ports_used_count + portCount > natPortsTotal) {
-        console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} NAT端口不足`)
+        console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} NAT端口不足`)
         continue
       }
     }
 
-    console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 通过检查，执行资源预占`)
+    console.log(`[selectAndReserveHostWithLock] 宿主�?${host.name} 通过检查，执行资源预占`)
 
     // 资源检查通过，更新宿主机资源使用量（在同一事务中原子执行）
     await tx.host.update({

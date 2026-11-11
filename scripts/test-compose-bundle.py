@@ -53,10 +53,10 @@ class ComposeBundleTests(unittest.TestCase):
         tree = ast.parse(code)
         files = next(ast.literal_eval(node.value) for node in tree.body
                      if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'files' for target in node.targets))
-        expected = {'VERSION', *(f'XPayincus/deploy/compose/{name}' for name in (*files, 'compose.release.yaml', 'update.py'))}
+        expected = {'VERSION', *(f'XPayincus/deploy/compose/{name}' for name in (*files, 'compose.release.yaml', 'update.py', 'operations.py'))}
         with tarfile.open(archive_path) as archive:
             self.assertEqual({member.name for member in archive}, expected)
-            self.assertEqual(len(archive.getmembers()), 18)
+            self.assertEqual(len(archive.getmembers()), 19)
             for member in archive:
                 self.assertTrue(member.isfile())
                 self.assertGreater(member.size, 0)
@@ -94,6 +94,16 @@ class ComposeBundleTests(unittest.TestCase):
         self.package(False)
         shutil.copyfile(ROOT / 'VERSION', self.source / 'VERSION')
         (self.compose / 'compose.release.yaml').write_text('{}')
+        self.package(False)
+
+    def test_missing_operations_and_capability_guide_rejected(self):
+        tool = self.compose / 'operations.py'
+        original = tool.read_bytes()
+        tool.unlink()
+        self.package(False)
+        tool.write_bytes(original)
+        guide = self.compose / 'README.md'
+        guide.write_text(guide.read_text().replace('incudal-operations-v1', 'removed-capability'))
         self.package(False)
 
     @unittest.skipIf(os.name == 'nt', 'Windows 符號連結需額外權限')

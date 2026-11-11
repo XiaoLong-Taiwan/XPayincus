@@ -2,7 +2,7 @@ import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
 import { ErrorCode, type ErrorCodeType } from './errors.js'
 import { addDevice, removeDevice } from './incus/incus-instances.js'
-import { getIncusClient } from './incus/index.js'
+import { getIncusClient, getInstance } from './incus/index.js'
 import { selectBindableIpv4ListenAddress } from './network-address.js'
 import { ProxyStrategyFactory } from './proxy/index.js'
 import { networkModeAllowsPortMapping } from './network-modes.js'
@@ -30,19 +30,41 @@ export async function provisionAutoRemotePort(input: {
   image: string
   networkMode: string
   autoRemotePort?: boolean
+  strict?: boolean
 }): Promise<void> {
   try {
     if (input.autoRemotePort === false) return
     if (!networkModeAllowsPortMapping(input.networkMode)) return
-    if (!(await isInstanceAutoRemotePortEnabled())) return
+    const enabled = await isInstanceAutoRemotePortEnabled()
 
     const instance = await db.getInstanceById(input.instanceId)
-    if (!instance) return
+    if (!instance) throw new Error('交付實例不存在')
 
     const host = await db.getHostById(instance.host_id)
-    if (!host) return
+    if (!host) throw new Error('交付節點不存在')
 
     const privatePort = resolveRemotePrivatePort(input.image)
+    const existing = await prisma.portMapping.findFirst({ where: { instanceId: input.instanceId, systemManaged: true, protocol: 'tcp', privatePort } })
+    if (existing) {
+      const client = await getIncusClient(host)
+      const remote = await getInstance(client, instance.incus_id) as { devices?: Record<string, Record<string, string>> }
+      const pkg = instance.package_id ? await prisma.package.findUnique({ where: { id: instance.package_id } }) : null
+      const strategy = ProxyStrategyFactory.getStrategy(pkg?.instanceType === 'vm' ? 'virtual-machine' : 'container')
+      let ipv6 = host.nat_bind_ipv6 || host.nat_public_ipv6 || host.ipv6_gateway || (host.ip_address?.includes(':') ? host.ip_address : null)
+      if (!ipv6) ipv6 = (await prisma.hostAddressAlias.findFirst({ where: { hostId: host.id, kind: 'ipv6' }, select: { address: true } }))?.address || null
+      const proxy = strategy.createProxyDevice(selectBindableIpv4ListenAddress(host.nat_bind_ip || null, host.nat_public_ip || null, host.url, host.ip_address || null), ipv6, input.networkMode, 'tcp', existing.publicPort, privatePort)
+      const devices = proxy.deviceConfigs || (proxy.deviceConfig ? [{ deviceConfig: proxy.deviceConfig, nameSuffix: '' }] : [])
+      if (!proxy.success || !devices.length) throw new Error('無法恢復自動端口配置')
+      for (const entry of devices) {
+        const name = `proxy-tcp-${existing.publicPort}${entry.nameSuffix || ''}`
+        const device = remote.devices?.[name]
+        const expected = entry.deviceConfig as Record<string, string>
+        if (device && Object.entries(expected).some(([key, value]) => device[key] !== value)) throw new Error('既有自動端口裝置配置不符，需人工核實')
+        if (!device) await addDevice(client, instance.incus_id, name, expected)
+      }
+      return
+    }
+    if (!enabled) return
     const result = await addInstancePortMapping({
       instance,
       host,
@@ -54,9 +76,11 @@ export async function provisionAutoRemotePort(input: {
     if (result.ok) {
       console.log(`[AutoRemotePort] instance ${input.instanceId}: ${result.mapping.publicPort} -> ${privatePort}`)
     } else {
+      if (input.strict) throw new Error(`自動端口配置失敗：${result.code}`)
       console.warn(`[AutoRemotePort] skipped for instance ${input.instanceId}: ${result.code}`)
     }
   } catch (error) {
+    if (input.strict) throw error
     console.warn(`[AutoRemotePort] failed for instance ${input.instanceId}:`, error)
   }
 }

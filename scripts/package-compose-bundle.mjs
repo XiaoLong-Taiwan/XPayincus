@@ -19,6 +19,9 @@ for (const file of composeBundleFiles) {
   fs.accessSync(path.join(source, file), fs.constants.R_OK)
 }
 if (fs.readFileSync(path.join(source, 'VERSION'), 'utf8').replace(/\r?\n$/, '') !== version) throw new Error('Compose bundle VERSION mismatch')
+if (!fs.readFileSync(path.join(source, 'XPayincus/deploy/compose/README.md'), 'utf8').includes('incudal-operations-v1')) {
+  throw new Error('Compose bundle is missing operations capability and recovery guidance')
+}
 const expected = { services: Object.fromEntries(Object.entries(composeImages(version)).map(([service, image]) => [service, { image }])) }
 if (JSON.stringify(JSON.parse(fs.readFileSync(path.join(source, 'XPayincus/deploy/compose/compose.release.yaml'), 'utf8'))) !== JSON.stringify(expected)) {
   throw new Error('Compose bundle release override mismatch')

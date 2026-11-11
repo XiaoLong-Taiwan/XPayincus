@@ -75,6 +75,9 @@ Environment=HOME=${INSTALL_DIR}
 Environment=PATH=/usr/local/libexec/incudal:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NPM_CONFIG_CACHE=${INSTALL_DIR}/.npm
 Environment=XDG_CACHE_HOME=${INSTALL_DIR}/.cache
+Environment=INCUDAL_AGENT_STATE_DIR=/var/lib/incudal-panel-agent
+StateDirectory=incudal-panel-agent
+StateDirectoryMode=0700
 
 ExecStartPre=/usr/bin/bash -lc 'cd ${app_dir}/server && pnpm exec prisma migrate deploy'
 ExecStart=/usr/bin/node ${app_dir}/server/dist/app.js

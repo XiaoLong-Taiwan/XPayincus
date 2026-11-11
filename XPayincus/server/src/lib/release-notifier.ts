@@ -7,6 +7,7 @@
 import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
 import { sendToChannel } from './notifier.js'
+import { checkStockSubscriptions } from '../services/stock-subscriptions.js'
 
 /**
  * 格式化内存显示
@@ -45,6 +46,7 @@ export async function sendReleaseNotification(params: {
   const { packageId, cpu, memory, source: _source } = params
 
   try {
+    await checkStockSubscriptions(packageId).catch(error => console.error('[StockSubscriptions]', error))
     const globalChannel = await getFirstGlobalChannel()
     if (!globalChannel) return
 

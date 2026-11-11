@@ -6,6 +6,7 @@
 
 import * as db from '../db/index.js'
 import { createInboxMessage } from '../db/inbox.js'
+import { sendNotificationEmail } from './mailer.js'
 import { prisma } from '../db/prisma.js'
 import { assertSafeWebhookUrl, safeFetch } from './outbound-security.js'
 import { sanitizeTokensInString } from './log-sanitizer.js'
@@ -869,6 +870,8 @@ function isNonRetryableError(error: string | null): boolean {
     'Missing webhookUrl',
     'Missing webhook URL',
     'Invalid Discord Webhook URL',
+    'Invalid email address',
+    'SMTP not configured',
     'not yet implemented',
     'Unknown channel type',
     'Unsupported channel type',
@@ -900,7 +903,8 @@ async function readSafeNotificationError(response: Response): Promise<string> {
 export async function sendNotification(
   userId: number,
   eventType: EventType,
-  data: EventData
+  data: EventData,
+  options: { provisioningInstanceId?: number } = {}
 ): Promise<SendResult> {
   try {
     const template = EVENT_TEMPLATES[eventType]
@@ -914,7 +918,8 @@ export async function sendNotification(
 
     // 1. 创建站内信（始终创建）
     try {
-      await createInboxMessage({
+      const existing = options.provisioningInstanceId ? await prisma.inboxMessage.findFirst({ where: { userId, eventType, data: { path: ['instanceId'], equals: options.provisioningInstanceId } }, select: { id: true } }) : null
+      if (!existing) await createInboxMessage({
         userId,
         eventType,
         title,
@@ -922,6 +927,7 @@ export async function sendNotification(
         data: data as Record<string, unknown>
       })
     } catch (err) {
+      if (options.provisioningInstanceId) throw err
       console.error('[Notifier] Failed to create inbox message:', err)
     }
 
@@ -937,6 +943,8 @@ export async function sendNotification(
 
     for (const channel of channels) {
       try {
+        const phase = `notification_channel_${channel.id}_completed`
+        if (options.provisioningInstanceId && await prisma.provisioningEvent.findFirst({ where: { instanceId: options.provisioningInstanceId, phase }, select: { id: true } })) continue
         const config = typeof channel.config === 'string'
           ? JSON.parse(channel.config)
           : channel.config
@@ -972,7 +980,7 @@ export async function sendNotification(
             )
             break
           case 'email':
-            result = { success: false, error: 'Email notifications not yet implemented' }
+            result = await sendWithRetry(() => sendNotificationEmail(config.email, title, message), 'Email')
             break
           default:
             result = { success: false, error: `Unknown channel type: ${channel.type}` }
@@ -982,6 +990,7 @@ export async function sendNotification(
         await db.updateNotificationLogStatus(logId, result.success ? 'sent' : 'failed', result.error)
 
         if (result.success) {
+          if (options.provisioningInstanceId) await prisma.provisioningEvent.create({ data: { instanceId: options.provisioningInstanceId, phase } })
           sent++
         } else {
           failed++
@@ -995,6 +1004,7 @@ export async function sendNotification(
 
     return { sent, failed }
   } catch (err) {
+    if (options.provisioningInstanceId) throw err
     console.error('[Notifier] sendNotification error:', err)
     return { sent: 0, failed: 0 }
   }
@@ -1372,6 +1382,12 @@ export async function testNotificationChannel(channel: NotificationChannel): Pro
         'Webhook'
       )
       break
+    case 'email':
+      result = await sendWithRetry(
+        () => sendNotificationEmail(config.email, '測試通知', '這是一則測試通知。收到此郵件表示通知渠道設定正確。'),
+        'Email'
+      )
+      break
     default:
       result = { success: false, error: `Unsupported channel type: ${channel.type}` }
   }
@@ -1552,6 +1568,12 @@ export async function sendToChannel(
         )
         break
       }
+      case 'email':
+        result = await sendWithRetry(
+          () => sendNotificationEmail(config.email, title, link ? `${message}\n${link.label}: ${link.url}` : message),
+          'Email'
+        )
+        break
       default:
         result = { success: false, error: `Unsupported channel type: ${channel.type}` }
     }

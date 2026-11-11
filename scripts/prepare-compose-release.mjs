@@ -12,7 +12,7 @@ for (const file of [
   'server/scripts/export-legacy-host.mjs', 'server/scripts/LEGACY_HOST_EXPORT.md',
   'deploy/compose/docker-compose.yml', 'deploy/compose/compose.yaml', 'deploy/compose/compose.build.yaml', 'deploy/compose/Dockerfile', 'deploy/compose/Dockerfile.dockerignore',
   'deploy/compose/web-entrypoint.sh', 'client/public/runtime-config.js', 'client/src/utils/runtime-config.ts',
-  'deploy/compose/panel.sh', 'deploy/compose/download.sh', 'deploy/compose/update.py', 'deploy/compose/api-entrypoint.sh', 'deploy/compose/nginx.conf.template',
+  'deploy/compose/panel.sh', 'deploy/compose/download.sh', 'deploy/compose/update.py', 'deploy/compose/operations.py', 'deploy/compose/api-entrypoint.sh', 'deploy/compose/nginx.conf.template',
   'deploy/compose/origin-entrypoint.sh', 'deploy/compose/edge-nginx.conf.template', 'deploy/compose/tunnel-nginx.conf.template',
   'deploy/compose/README.md', 'deploy/compose/https-proxy.conf.example'
 ]) {

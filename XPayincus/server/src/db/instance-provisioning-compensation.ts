@@ -9,9 +9,10 @@ import { prisma } from './prisma.js'
 export async function compensateFailedInstancePurchase(
   instanceId: number,
   userId: number,
-  hostId: number
+  hostId: number,
+  transaction?: Prisma.TransactionClient
 ): Promise<{ refunded: boolean; refundAmount: number; reason?: string }> {
-  return prisma.$transaction(async (tx) => {
+  const compensate = async (tx: Prisma.TransactionClient): Promise<{ refunded: boolean; refundAmount: number; reason?: string }> => {
     await advisoryTransactionLock(tx, USER_BALANCE_LOCK_NAMESPACE, userId)
 
     const instance = await tx.instance.findUnique({
@@ -180,7 +181,9 @@ export async function compensateFailedInstancePurchase(
     })
 
     return { refunded: true, refundAmount }
-  }, {
+  }
+  if (transaction) return compensate(transaction)
+  return prisma.$transaction(compensate, {
     isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     timeout: 15000
   })

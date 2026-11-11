@@ -21,6 +21,9 @@ spec.loader.exec_module(update)
 
 class UpdateTests(unittest.TestCase):
     def setUp(self):
+        update.JOURNAL, update.JOURNAL_DATA, update.PLAN_ONLY = None, {}, False
+        self.addCleanup(setattr, update, 'JOURNAL', None)
+        self.addCleanup(setattr, update, 'PLAN_ONLY', False)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name) / 'deployment'
@@ -156,7 +159,7 @@ class UpdateTests(unittest.TestCase):
             update.resolve_images(self.base, self.base / 'compose.yaml')
         run.assert_not_called()
 
-    def run_flow(self, failure=None, version='v1.0.5', prerelease=False):
+    def run_flow(self, failure=None, version='v1.0.5', prerelease=False, plan=False):
         def fetch(url, target):
             self.commands.append(('fetch', url))
             target.write_text(json.dumps({'tag_name': version, 'draft': False, 'prerelease': prerelease}))
@@ -179,14 +182,14 @@ class UpdateTests(unittest.TestCase):
                 raise OSError('fixture switch failed')
             self.commands.append(('activate',))
 
-        with patch.object(sys, 'argv', ['update', str(self.base)]), \
+        with patch.object(sys, 'argv', ['update', str(self.base)] + (['--plan'] if plan else [])), \
                 patch.object(update, 'fetch', side_effect=fetch), \
                 patch.object(update, 'stage', side_effect=stage), \
                 patch.object(update, 'validate_containers'), \
                 patch.object(update, 'activate', side_effect=activate), \
                 patch.object(update, 'run', side_effect=run), patch.dict(os.environ, {}, clear=True):
             try:
-                update.main()
+                update.dispatch()
             except (SystemExit, subprocess.CalledProcessError):
                 if not failure and version == 'v1.0.5' and not prerelease:
                     raise
@@ -207,6 +210,46 @@ class UpdateTests(unittest.TestCase):
         self.assertLess(activate, up)
         self.assertEqual(private, {name: Path(name).read_bytes() for name in private})
         self.assertTrue(list((self.base / 'backups').glob('before-update-*/panel.dump')))
+
+    def test_plan_never_backs_up_switches_or_writes_journal(self):
+        self.run_flow(plan=True)
+        self.assertNotIn(('activate',), self.commands)
+        self.assertFalse(any('export' in command or command[-1] == 'up' for command in self.commands))
+        self.assertFalse((self.base / '.state/update-journal.json').exists())
+
+    def test_journal_success_and_failure_preserve_backup_evidence(self):
+        self.run_flow()
+        file = self.base / '.state/update-journal.json'
+        data = json.loads(file.read_text())
+        self.assertEqual(data['status'], 'complete')
+        self.assertTrue(data['backupComplete'])
+        self.assertTrue(data['activated'])
+        self.assertEqual(data['backupSha256'], update.backup_digest(Path(data['backup']) / 'panel.dump'))
+        self.commands = []
+        self.run_flow(failure='up')
+        data = json.loads(file.read_text())
+        self.assertEqual(data['status'], 'failed')
+        self.assertTrue(data['backupComplete'])
+        self.assertTrue(list((self.base / '.state').glob('update-*.json')))
+
+    def test_unfinished_journal_is_not_overwritten(self):
+        state = self.base / '.state'
+        state.mkdir()
+        file = state / 'update-journal.json'
+        original = '{"format":"incudal-update-journal-v1","status":"interrupted"}'
+        file.write_text(original)
+        with patch.object(sys, 'argv', ['update', str(self.base)]), self.assertRaises(SystemExit):
+            update.dispatch()
+        self.assertEqual(file.read_text(), original)
+
+    def test_recovery_rejects_missing_backup_without_running_commands(self):
+        state = self.base / '.state'
+        state.mkdir()
+        (state / 'update-journal.json').write_text(json.dumps({
+            'format': 'incudal-update-journal-v1', 'status': 'interrupted', 'backupComplete': False}))
+        with patch.object(update, 'run') as run, self.assertRaises(SystemExit):
+            update.recover_update(self.base, '--resume-up')
+        run.assert_not_called()
 
     def test_backup_failure_never_activates_or_starts(self):
         self.run_flow(failure='export')
@@ -265,6 +308,9 @@ class UpdateTests(unittest.TestCase):
     def test_downgrade_and_prerelease_rejected_before_download(self):
         for version, prerelease in [('v1.0.4', False), ('v01.0.5', False), ('main', False), ('v1.0.5', True)]:
             self.commands = []
+            journal = self.base / '.state/update-journal.json'
+            if journal.exists():
+                journal.unlink()
             self.run_flow(version=version, prerelease=prerelease)
             self.assertFalse(any(command[0] == 'stage' for command in self.commands))
 

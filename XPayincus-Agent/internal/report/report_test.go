@@ -15,11 +15,11 @@ func TestHeartbeatPayloadIncludesHostMetrics(t *testing.T) {
 	if !containsCapability(capabilities, "host-metrics") {
 		t.Fatalf("host-metrics capability missing: %#v", capabilities)
 	}
-	if !containsCapability(capabilities, "instance-status") {
-		t.Fatalf("instance-status capability missing: %#v", capabilities)
+	if containsCapability(capabilities, "instance-status") != (cachedInstances()["available"] == true) {
+		t.Fatalf("instance-status capability must reflect collector: %#v", capabilities)
 	}
-	if !containsCapability(capabilities, "traffic-counters") {
-		t.Fatalf("traffic-counters capability missing: %#v", capabilities)
+	if containsCapability(capabilities, "traffic-counters") != (cachedInstances()["trafficAvailable"] == true) {
+		t.Fatalf("traffic-counters capability must reflect successful state collection: %#v", capabilities)
 	}
 
 	instances, ok := payload["instances"].(map[string]any)

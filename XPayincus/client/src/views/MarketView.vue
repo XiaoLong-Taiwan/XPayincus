@@ -8,6 +8,7 @@ import { useBrand } from '@/composables/useBrand'
 import FlagIcon from '@/components/FlagIcon.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
+import { useToast } from '@/stores/toast'
 import { getLocalizedCountryName } from '@/utils/countryDisplay'
 import {
   formatPublicPrice,
@@ -17,6 +18,7 @@ import {
   parsePackageIdQuery,
   parseTextQuery,
   type PublicPackage,
+  type PublicPackagePlan,
   type PublicRegion
 } from '@/utils/publicCatalog'
 import { freeSiteCopy, getFreeSiteBillingCycleLabel } from '@/utils/freeSiteFun'
@@ -33,6 +35,7 @@ const router = useRouter()
 const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const configStore = useConfigStore()
+const toast = useToast()
 const brand = useBrand()
 void configStore.loadPublicConfig()
 
@@ -54,6 +57,30 @@ const packages = ref<PublicPackage[]>([])
 const regions = ref<PublicRegion[]>([])
 const loading = ref(true)
 const loadError = ref('')
+const stockSubscriptions = ref<Array<{ id: number; packageId: number; planId: number; region: string; cooldownHours: number; active: boolean; lastNotifiedAt: string | null }>>([])
+const stockSubscriptionsOpen = ref(false)
+const stockBusy = ref(false)
+
+const minCpu = ref<number | ''>('')
+const minRam = ref<number | ''>('')
+const minDisk = ref<number | ''>('')
+const maxPrice = ref<number | ''>('')
+const instanceType = ref('')
+const comparisons = ref<Array<{ key: string; pkg: PublicPackage; plan: PublicPackagePlan }>>([])
+function matchesResources(plan: { cpu: number; memory: number; disk: number; monthlyPrice: number }) {
+  return plan.cpu >= Number(minCpu.value) && plan.memory >= Number(minRam.value)
+    && plan.disk >= Number(minDisk.value)
+    && (maxPrice.value === '' || plan.monthlyPrice / 100 <= Number(maxPrice.value))
+}
+function addComparison() {
+  const pkg = selectedPackage.value
+  const plan = selectedPlan.value
+  if (!pkg || !plan || comparisons.value.length >= 4) return
+  const key = `${pkg.sourceType}:${pkg.id}:${plan.id}`
+  if (!comparisons.value.some(item => item.key === key)) comparisons.value.push({ key, pkg: { ...pkg }, plan: { ...plan } })
+}
+const canCompare = computed(() => !!selectedPackage.value && !!selectedPlan.value && comparisons.value.length < 4
+  && !comparisons.value.some(item => item.key === `${selectedPackage.value?.sourceType}:${selectedPackage.value?.id}:${selectedPlan.value?.id}`))
 
 let searchTimer: number | null = null
 
@@ -85,6 +112,9 @@ const filteredPackages = computed(() => {
     })
   }
 
+  result = result.filter(pkg => (!instanceType.value || pkg.instance_type === instanceType.value)
+    && (pkg.plans.length ? pkg.plans.some(matchesResources) : matchesResources({ cpu: pkg.cpu_max, memory: pkg.memory_max, disk: pkg.disk_max, monthlyPrice: 0 })))
+
   return [...result].sort((left, right) => {
     if (left.soldOut !== right.soldOut) {
       return left.soldOut ? 1 : -1
@@ -114,9 +144,7 @@ const selectedPackage = computed(() => {
     return null
   }
 
-  return filteredPackages.value.find(pkg => pkg.id === selectedPackageId.value)
-    || packages.value.find(pkg => pkg.id === selectedPackageId.value)
-    || null
+  return filteredPackages.value.find(pkg => pkg.id === selectedPackageId.value) || null
 })
 
 const selectedPlan = computed(() => {
@@ -124,7 +152,7 @@ const selectedPlan = computed(() => {
     return null
   }
 
-  return selectedPackage.value.plans.find(plan => plan.id === selectedPlanId.value && !plan.isSoldOut) || null
+  return selectedPackage.value.plans.find(plan => plan.id === selectedPlanId.value && !plan.isSoldOut && matchesResources(plan)) || null
 })
 
 const ui = {
@@ -386,10 +414,10 @@ function ensureSelectedPlan(preferredPlanId: number | null = selectedPlanId.valu
   }
 
   const matchedPlan = preferredPlanId
-    ? selectedPackage.value.plans.find(plan => plan.id === preferredPlanId && !plan.isSoldOut)
+    ? selectedPackage.value.plans.find(plan => plan.id === preferredPlanId && !plan.isSoldOut && matchesResources(plan))
     : null
 
-  const firstAvailablePlan = selectedPackage.value.plans.find(plan => !plan.isSoldOut)
+  const firstAvailablePlan = selectedPackage.value.plans.find(plan => !plan.isSoldOut && matchesResources(plan))
   selectedPlanId.value = matchedPlan?.id || firstAvailablePlan?.id || null
 }
 
@@ -486,7 +514,7 @@ function selectPackage(pkg: PublicPackage): void {
 
 function selectPlan(planId: number): void {
   const plan = selectedPackage.value?.plans.find(item => item.id === planId)
-  if (!plan || plan.isSoldOut) {
+  if (!plan || plan.isSoldOut || !matchesResources(plan)) {
     return
   }
 
@@ -505,6 +533,16 @@ function handleSearchInput(): void {
     syncRouteQuery()
     searchTimer = null
   }, 120)
+}
+
+function resetFilters(): void {
+  searchQuery.value = ''
+  minCpu.value = ''
+  minRam.value = ''
+  minDisk.value = ''
+  maxPrice.value = ''
+  instanceType.value = ''
+  selectRegion(null)
 }
 
 function clearSearch(): void {
@@ -539,6 +577,14 @@ function createInstance(pkg: PublicPackage): void {
   })
 }
 
+watch([minCpu, minRam, minDisk, maxPrice, instanceType], () => {
+  if (!filteredPackages.value.some(pkg => pkg.id === selectedPackageId.value)) {
+    selectedPackageId.value = filteredPackages.value[0]?.id || null
+  }
+  const plans = selectedPackage.value?.plans.filter(plan => matchesResources(plan) && !plan.isSoldOut) || []
+  if (!plans.some(plan => plan.id === selectedPlanId.value)) selectedPlanId.value = plans[0]?.id || null
+})
+
 watch(
   () => route.fullPath,
   () => {
@@ -548,7 +594,47 @@ watch(
 
 onMounted(() => {
   void loadData(selectedPackageId.value)
+  if (authStore.isAuthenticated) void loadStockSubscriptions()
 })
+
+async function loadStockSubscriptions() {
+  try {
+    const response = await api.packages.getStockSubscriptions()
+    stockSubscriptions.value = response.subscriptions
+  } catch {
+    stockSubscriptions.value = []
+  }
+}
+
+async function subscribeToStock(pkg: PublicPackage, plan?: PublicPackagePlan) {
+  if (!plan) return
+  if (!authStore.isAuthenticated) {
+    const query = new URLSearchParams({ source: pkg.sourceType === 'official' ? 'official' : 'market', package: String(pkg.id), plan: String(plan.id) })
+    void router.push({ path: loginPath(), query: { redirect: `${instanceCreatePath()}?${query}` } })
+    return
+  }
+  stockBusy.value = true
+  try {
+    await api.packages.createStockSubscription(pkg.id, { planId: plan.id, region: selectedRegion.value || '' })
+    await loadStockSubscriptions()
+  } catch (error: any) {
+    toast.error(error?.message || t('publicSite.market.stockSubscribeFailed'))
+  } finally {
+    stockBusy.value = false
+  }
+}
+
+async function unsubscribeFromStock(id: number) {
+  stockBusy.value = true
+  try {
+    await api.packages.deleteStockSubscription(id)
+    stockSubscriptions.value = stockSubscriptions.value.filter(item => item.id !== id)
+  } catch (error: any) {
+    toast.error(error?.message || t('publicSite.market.stockUnsubscribeFailed'))
+  } finally {
+    stockBusy.value = false
+  }
+}
 
 onUnmounted(() => {
   if (searchTimer !== null) {
@@ -601,6 +687,16 @@ onUnmounted(() => {
     <section class="relative px-4 pb-20 sm:px-6 lg:px-8">
       <div class="mx-auto max-w-7xl">
         <div class="market-toolbar" data-reveal>
+          <div v-if="authStore.isAuthenticated" class="mb-3 flex flex-wrap justify-end gap-2">
+            <button class="btn btn-secondary" @click="stockSubscriptionsOpen = !stockSubscriptionsOpen">{{ t('publicSite.market.stockSubscriptions', { count: stockSubscriptions.filter(item => item.active).length }) }}</button>
+          </div>
+          <div v-if="stockSubscriptionsOpen" class="mb-4 space-y-2 border-b border-themed pb-4">
+            <p v-if="stockSubscriptions.length === 0" class="text-sm text-themed-muted">{{ t('publicSite.market.stockSubscriptionsEmpty') }}</p>
+            <div v-for="subscription in stockSubscriptions" :key="subscription.id" class="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span>{{ subscription.packageId }} / {{ subscription.planId }} <span v-if="subscription.region">· {{ subscription.region }}</span></span>
+              <button class="btn btn-secondary text-xs" :disabled="stockBusy" @click="unsubscribeFromStock(subscription.id)">{{ t('publicSite.market.stockUnsubscribe') }}</button>
+            </div>
+          </div>
           <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
             <div class="inline-flex shrink-0 items-center gap-0.5 rounded-xl border border-themed bg-themed-surface p-1">
               <button
@@ -672,6 +768,22 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <label class="text-sm">{{ t('operations.minCpu') }}<input v-model.number="minCpu" type="number" min="0" class="input w-full" /></label>
+          <label class="text-sm">{{ t('operations.minRam') }}<input v-model.number="minRam" type="number" min="0" class="input w-full" /></label>
+          <label class="text-sm">{{ t('operations.minDisk') }}<input v-model.number="minDisk" type="number" min="0" class="input w-full" /></label>
+          <label class="text-sm">{{ t('operations.type') }}<select v-model="instanceType" class="input w-full"><option value="">{{ t('operations.all') }}</option><option value="container">LXC</option><option value="vm">KVM</option></select></label>
+          <label class="text-sm">{{ t('operations.maxPrice') }}<input v-model.number="maxPrice" type="number" min="0" step="0.01" class="input w-full" /></label>
+        </div>
+        <section v-if="comparisons.length" class="mt-5 space-y-3 rounded-xl border border-themed p-4">
+          <h2 class="font-semibold">{{ t('operations.compare') }}</h2>
+          <p class="text-sm text-themed-muted">{{ t('operations.compareHint') }}</p>
+          <div class="flex flex-wrap gap-2"><button v-for="item in comparisons" :key="item.key" class="btn btn-secondary break-words" @click="comparisons = comparisons.filter(entry => entry.key !== item.key)">{{ item.pkg.name }} / {{ item.plan.name }} · {{ t('operations.remove') }}</button></div>
+          <template v-if="comparisons.length >= 2">
+            <div class="grid gap-3 lg:hidden"><article v-for="item in comparisons" :key="item.key" class="space-y-2 rounded-lg border border-themed p-3"><h3 class="break-words font-medium">{{ item.pkg.name }} / {{ item.plan.name }}</h3><p>{{ item.pkg.instance_type === 'vm' ? 'KVM' : 'LXC' }} · CPU {{ item.plan.cpu }}% · {{ formatMemory(item.plan.memory) }} · {{ formatDisk(item.plan.disk) }}</p><p>{{ t('operations.price') }}: ¥{{ formatPublicPrice(item.plan.monthlyPrice) }} / {{ t('common.month') }}</p><p>{{ t('operations.cycle') }}: {{ item.plan.billingCycle }} · ¥{{ formatPublicPrice(item.plan.price) }}</p><p>{{ t('operations.setup') }}: ¥{{ formatPublicPrice(item.plan.setupFee) }}</p><p>{{ t('operations.stock') }}: {{ t(item.pkg.soldOut || item.plan.isSoldOut ? 'operations.soldOut' : 'operations.available') }}</p></article></div>
+            <div class="hidden overflow-hidden lg:block"><table class="w-full table-fixed text-sm"><thead><tr class="text-left"><th class="w-[25%] p-2">{{ t('operations.name') }}</th><th class="w-[25%] p-2">CPU / RAM / Disk</th><th class="w-[25%] p-2">{{ t('operations.price') }} / {{ t('operations.cycle') }}</th><th class="w-[25%] p-2">{{ t('operations.setup') }} / {{ t('operations.stock') }}</th></tr></thead><tbody><tr v-for="item in comparisons" :key="item.key"><td class="break-words p-2">{{ item.pkg.name }} / {{ item.plan.name }}<br />{{ item.pkg.instance_type === 'vm' ? 'KVM' : 'LXC' }}</td><td class="break-words p-2">{{ item.plan.cpu }}% / {{ formatMemory(item.plan.memory) }} / {{ formatDisk(item.plan.disk) }}</td><td class="break-words p-2">¥{{ formatPublicPrice(item.plan.monthlyPrice) }} / {{ t('common.month') }}<br />{{ item.plan.billingCycle }} {{ t('operations.cycle') }} · ¥{{ formatPublicPrice(item.plan.price) }}</td><td class="break-words p-2">¥{{ formatPublicPrice(item.plan.setupFee) }}<br />{{ t(item.pkg.soldOut || item.plan.isSoldOut ? 'operations.soldOut' : 'operations.available') }}</td></tr></tbody></table></div>
+          </template>
+        </section>
         <div v-if="loadError" class="mt-6 flex items-start gap-3 rounded-lg px-4 py-4 text-sm leading-6" :class="ui.errorBanner">
           <svg class="mt-0.5 h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M4.93 19h14.14a2 2 0 001.73-3l-7.07-12a2 2 0 00-3.46 0L3.2 16a2 2 0 001.73 3z" />
@@ -704,10 +816,10 @@ onUnmounted(() => {
                 {{ t('publicSite.market.noResults') }}
               </div>
               <button
-                v-if="searchQuery || selectedRegion"
+                v-if="searchQuery || selectedRegion || minCpu !== '' || minRam !== '' || minDisk !== '' || maxPrice !== '' || instanceType"
                 class="mt-4 inline-flex h-10 items-center rounded-full px-6 text-sm font-semibold transition-colors duration-150"
                 :class="ui.emptyStateButton"
-                @click="searchQuery = ''; selectRegion(null)"
+                @click="resetFilters"
               >
                 {{ t('common.reset') }}
               </button>
@@ -844,7 +956,7 @@ onUnmounted(() => {
 
                   <div v-if="selectedPackage.isPaid && selectedPackage.plans.length > 0" class="mt-3 space-y-2">
                     <button
-                      v-for="plan in selectedPackage.plans"
+                      v-for="plan in selectedPackage.plans.filter(matchesResources)"
                       :key="plan.id"
                       class="kawaii-market-plan w-full rounded-lg px-3 py-3 text-left transition-[background-color,border-color,transform] duration-150"
                       :class="[
@@ -937,6 +1049,13 @@ onUnmounted(() => {
                   </div>
                 </div>
 
+                <button v-if="selectedPlan" class="btn btn-secondary mt-4 w-full" :disabled="!canCompare" @click="addComparison">{{ t('operations.addCompare') }} ({{ comparisons.length }}/4)</button>
+                <div v-if="selectedPackage.isPaid && selectedPackage.plans.some(plan => plan.isSoldOut)" class="mt-3 space-y-2">
+                  <div v-for="plan in selectedPackage.plans.filter(item => item.isSoldOut)" :key="plan.id" class="flex flex-wrap items-center justify-between gap-2 border-t border-themed pt-2 text-xs">
+                    <span>{{ plan.name }}</span>
+                    <button class="btn btn-secondary text-xs" :disabled="stockBusy" @click="subscribeToStock(selectedPackage!, plan)">{{ t('publicSite.market.stockSubscribe') }}</button>
+                  </div>
+                </div>
                 <button
                   class="mt-8 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full px-6 text-sm font-extrabold tracking-normal transition-[background-color,box-shadow,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-60"
                   :class="ui.ctaButton"

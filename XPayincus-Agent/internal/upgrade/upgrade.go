@@ -35,6 +35,7 @@ var systemdServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]+$`)
 type RestartFunc func(ctx context.Context, serviceName string) error
 
 type Runner struct {
+	StatePath string
 	BinaryPath       string
 	BackupPath       string
 	LockPath         string
@@ -52,6 +53,7 @@ func DefaultRunner(cfg config.Config) *Runner {
 	}
 
 	return &Runner{
+		StatePath:        filepath.Join(cfg.StateDir, "upgrade.json"),
 		BinaryPath:       binaryPath,
 		BackupPath:       binaryPath + ".bak",
 		LockPath:         defaultLockPath(),
@@ -75,7 +77,12 @@ func RandomJitter(max time.Duration) time.Duration {
 	return time.Duration(value.Int64())
 }
 
-func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstruction, currentVersion string) error {
+func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstruction, currentVersion string) (applyErr error) {
+	defer func() {
+		if applyErr != nil {
+			_ = runner.recordOperation(instruction.OperationID, instruction.Version, "failed", "upgrade failed; inspect local service logs")
+		}
+	}()
 	if !instruction.Available {
 		if instruction.Error != "" {
 			return errors.New(instruction.Error)
@@ -107,10 +114,12 @@ func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstru
 	}
 	defer unlock()
 
+	if err := runner.recordOperation(instruction.OperationID, instruction.Version, "downloading", ""); err != nil { return err }
 	packageBytes, err := runner.download(ctx, instruction.URL)
 	if err != nil {
 		return err
 	}
+	if err := runner.recordOperation(instruction.OperationID, instruction.Version, "verifying", ""); err != nil { return err }
 	if err := verifySHA256(packageBytes, instruction.SHA256); err != nil {
 		return err
 	}
@@ -133,11 +142,13 @@ func (runner *Runner) Apply(ctx context.Context, instruction panel.UpgradeInstru
 	if err != nil {
 		return err
 	}
+	if err := runner.recordOperation(instruction.OperationID, instruction.Version, "replacing", ""); err != nil { _ = os.Remove(tempPath); return err }
 	if err := runner.replaceBinary(tempPath); err != nil {
 		_ = os.Remove(tempPath)
 		return err
 	}
 
+	if err := runner.recordOperation(instruction.OperationID, instruction.Version, "awaiting-health", ""); err != nil { return err }
 	if err := runner.restart(ctx); err != nil {
 		return fmt.Errorf("restart agent after upgrade: %w", err)
 	}

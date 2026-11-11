@@ -12,6 +12,7 @@ const instancesRoute = read('server/src/routes/instances.ts')
 const hostsRoute = read('server/src/routes/hosts.ts')
 const adminBillingRoute = read('server/src/routes/admin-billing.ts')
 const taskWorker = read('server/src/workers/instanceTaskWorker.ts')
+const durableProvision = read('server/src/lib/durable-instance-provision.ts')
 const lxcProxy = read('server/src/lib/proxy/LxcProxyStrategy.ts')
 
 // ==================== NAT 内网 IPv4 分配竞态 ====================
@@ -87,8 +88,11 @@ for (const [name, source] of [
     `${name} must not run its own uniqueness check: the check-then-use gap is exactly the race being fixed`
   )
   assert.ok(
-    source.includes('allocateAndReserveNatIpv4'),
-    `${name} must allocate through the centralized allocator`
+    name === 'routes/admin-billing.ts'
+      ? source.includes('await createPreparingProvisionJob(tx, instance.id, {') &&
+        durableProvision.includes('if (!ipv4) ipv4 = await db.allocateAndReserveNatIpv4(host.id, instanceId)')
+      : source.includes('allocateAndReserveNatIpv4'),
+    `${name} must allocate through the centralized allocator directly or through the durable preparation job`
   )
 }
 

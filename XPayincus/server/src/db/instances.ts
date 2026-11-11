@@ -613,6 +613,7 @@ export async function getStuckCreatingInstances(timeoutMs: number): Promise<Arra
   const instances = await prisma.instance.findMany({
     where: {
       status: 'creating',
+      provisioningJob: { is: null },
       createdAt: { lt: threshold }
     },
     select: {

@@ -36,7 +36,7 @@ assert.equal(
 
 assert.equal(
   source.match(/parsePositiveRouteId\(request\.params\.id\)/g)?.length ?? 0,
-  3,
+  5,
   'all direct request.params.id routes must use strict positive route ID parsing'
 )
 

@@ -3,7 +3,7 @@
  */
 
 import { prisma } from './prisma.js'
-import { INSTANCE_OPERATION_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from './advisory-locks.js'
+import { HOST_TASK_CLAIM_LOCK_NAMESPACE, INSTANCE_OPERATION_LOCK_NAMESPACE, tryAdvisoryTransactionLock } from './advisory-locks.js'
 
 export interface CreateRestoreTaskData {
     instanceId: number
@@ -24,6 +24,12 @@ export async function createRestoreTask(data: CreateRestoreTaskData): Promise<nu
         if (!locked) {
             return null
         }
+
+        if (!await tryAdvisoryTransactionLock(tx, HOST_TASK_CLAIM_LOCK_NAMESPACE, data.hostId)) return null
+        const instance = await tx.instance.findUnique({ where: { id: data.instanceId }, select: { hostId: true, status: true } })
+        if (!instance || instance.hostId !== data.hostId || !['running', 'stopped'].includes(instance.status)) return null
+        if (await tx.provisioningJob.findFirst({ where: { instanceId: data.instanceId, status: { in: ['preparing', 'pending', 'processing', 'review_required'] } }, select: { id: true } })) return null
+        if (await tx.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'recovering', 'review_required', 'completed'] }, OR: [{ sourceHostId: data.hostId }, { targetHostId: data.hostId }] }, select: { id: true } })) return null
 
         const activeTask = await tx.restoreTask.findFirst({
             where: {

@@ -574,7 +574,8 @@ http.interceptors.response.use(
       message: responseData?.error || responseData?.message || 'Request failed',
       code: responseData?.code || null,
       details: responseData?.details || null,
-      ...responseData  // 保留原始响应中的所有字段
+      ...responseData,  // 保留原始响应中的所有字段
+      status: error.response?.status ?? null
     }
 
     return Promise.reject(apiError)
@@ -582,7 +583,35 @@ http.interceptors.response.use(
 )
 
 // API 模块
+export interface OperationTask {
+  canRetry: boolean
+  id: string
+  kind: string
+  instanceId: number | null
+  name: string
+  status: string
+  progress: number | string | null
+  error: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RenewalForecast {
+  days: number
+  balance: number
+  total: number
+  shortfall: number
+  firstShortfallAt: string | null
+  items: Array<{ instanceId: number; name: string; dueAt: string; amount: number; autoRenew: boolean }>
+}
+
 const api = {
+  operations: {
+    tasks: (params: { page: number; pageSize: number }): Promise<{ items: OperationTask[]; total: number }> =>
+      http.get('/operations/tasks', { params }),
+    renewalForecast: (days: 7 | 30): Promise<RenewalForecast> =>
+      http.get('/operations/renewal-forecast', { params: { days } })
+  },
   // 认证
   auth: {
     check2FA: (username: string): Promise<{ requires2FA: boolean }> =>
@@ -676,6 +705,8 @@ const api = {
 
   // 实例管理
   instances: {
+    getProvisioning: (id: number): Promise<{ job: { id: number; status: string; phase: string; error: string | null; attempts: number } | null; events: Array<{ id: number; phase: string; message: string | null; createdAt: string }> }> => http.get(`/instances/${id}/provisioning`),
+    retryProvisioning: (id: number): Promise<{ success: boolean; action: 'retry' }> => http.post(`/instances/${id}/provisioning/retry`, {}),
     list: (params: Record<string, unknown> = {}): Promise<PaginatedResponse<InstanceWithDetails> & { availableCountries?: string[] }> =>
       http.get('/instances', { params }),
     get: (id: number): Promise<InstanceWithDetails> => http.get(`/instances/${id}`),
@@ -1143,6 +1174,14 @@ const api = {
     sync: (id: number): Promise<void> => http.post(`/hosts/${id}/sync`, {}, { timeout: TIMEOUT.LONG }),
     setMaintenance: (id: number, enabled: boolean): Promise<Host> =>
       http.post(`/hosts/${id}/maintenance`, { enabled }),
+    getAgentHistory: (id: number, params: { from?: string; to?: string; limit?: number; resolutionSeconds?: number } = {}): Promise<{ samples: Array<Record<string, unknown>> }> =>
+      http.get(`/agent/hosts/${id}/history`, { params }),
+    getMaintenancePlans: (id: number): Promise<{ plans: Array<{ id: number; targetHostId: number; status: string; instanceIds: number[]; results: Array<Record<string, unknown>>; error: string | null; createdAt: string }> }> =>
+      http.get(`/hosts/${id}/maintenance-plans`),
+    createMaintenancePlan: (id: number, data: { targetHostId: number; instanceIds: number[]; dryRun?: boolean }): Promise<{ passed?: boolean; cpu?: number; memory?: number; disk?: number; sourceRetained?: boolean; plan?: Record<string, unknown> }> =>
+      http.post(`/hosts/${id}/maintenance-plans`, data),
+    reviewMaintenancePlan: (id: number, planId: number, action: 'review' | 'takeover' | 'rollback' | 'resume' | 'cleanup'): Promise<{ success: boolean; status: string; action?: string }> =>
+      http.post(`/hosts/${id}/maintenance-plans/${planId}/review`, { action }),
     // 存储池管理
     getStoragePools: (id: number): Promise<{ pools: Array<{ name: string; driver: string; description: string; status: string; purpose?: 'instance_data' | 'instance_storage' | null; config: Record<string, string>; usedBy: number; space?: { used: number; total: number } | null }> }> =>
       http.get(`/hosts/${id}/storage-pools`),
@@ -1674,6 +1713,12 @@ const api = {
 
   // 套餐管理
   packages: {
+    getStockSubscriptions: (): Promise<{ subscriptions: Array<{ id: number; packageId: number; planId: number; region: string; cooldownHours: number; active: boolean; wasAvailable: boolean; lastNotifiedAt: string | null; createdAt: string }> }> =>
+      http.get('/packages/stock-subscriptions'),
+    createStockSubscription: (packageId: number, data: { planId: number; region?: string; cooldownHours?: number }): Promise<{ subscription: { id: number; packageId: number; planId: number; region: string; cooldownHours: number; active: boolean; wasAvailable: boolean; lastNotifiedAt: string | null } }> =>
+      http.post(`/packages/${packageId}/stock-subscriptions`, data),
+    deleteStockSubscription: (id: number): Promise<{ success: boolean }> =>
+      http.delete(`/packages/stock-subscriptions/${id}`),
     // 公开 API（无需登录）
     listPublic: (options?: { source?: 'official' | 'market' }): Promise<{ packages: Package[]; total: number }> => {
       const params = new URLSearchParams()

@@ -1,10 +1,22 @@
 # 統一發行
 
-根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.10`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
+根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，v1.0.10 已正式發布，本次發行目標為 `v1.0.11`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
 
 GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent 內兩個宿主元件須納入實際來源，不能只有 gitlink 或 submodule。Git 工作區是否已提交、推送及遠端 CI 是否成功，需另以當次紀錄確認，不應把文件中的工作區描述當作即時狀態。來源碼上傳不等於建立 GitHub Release，也不代表已部署。
 
-## v1.0.10 發行目標
+## v1.0.11 發行目標
+
+- 續作宿主操作工具：既有 ZFS source 資產交付 RFW 管理程式及宿主工具安裝器，獨立 timer 每分鐘原子發布 RFW／ZFS 唯讀狀態 JSON；Agent 安裝模板加入持久 state 目錄與私人權限。CI 接入 `test-compose-operations.py` 與原子 snapshot 測試，最小 Compose bundle 納入 `operations.py`。
+- 本輪前後端新增持久化交付工作與事件、交付進度／重試、任務中心、購買草稿、到貨訂閱及 7／30 天續費預估。
+- 新增節點維護計畫及受限 IPv4 NAT／共享 OVN 冷搬遷，保留來源副本並提供人工核實與回復流程；托管提款新增付款處理、憑證／參考號及失敗退款狀態。
+- Agent 加入背景採集、離線歷史補送、持久化升級操作與健康確認；面板新增持久狀態及歷史查詢，宿主詳情顯示 RFW／ZFS 唯讀狀態。
+- Compose 增加唯讀 doctor、遷移規劃、更新 preflight 與備份清單；新增工具沿用既有資產，完整集合仍為 30 件，Agent／面板 OTA manifest 與最低 updater 版本不變。
+- 同步三份 VERSION、四份 package.json、RFW 三個自家 crate 與 Cargo.lock、Go Agent 預設版本、Compose 映像／建置標籤及現行 fixture／文件。第三方依賴、歷史紀錄與既有 RFW／ZFS 資產釘選保留。
+- 2026-11-11 依維護者提供的 v1.0.10 正式發布狀態準備 v1.0.11，未另行查核遠端。新增功能與 migration 交付要求見 [v1.0.11 發行說明](XPayincus/docs-site/release-notes/v1.0.11.md)。本次僅編輯與靜態差異核對，未執行測試、型別檢查、建置、封裝、提交、推送、發布、部署或 OTA；CI 與真機驗收結果待後續確認。
+
+## v1.0.10 歷史版本準備紀錄（已正式發布）
+
+以下保留當時準備紀錄；正式發布狀態依維護者於 2026-11-11 提供的資訊更新，不改寫當時的查核與驗證證據。
 
 - 新增獨立 Dashboard 短入口，支援 Compose 與原生 Panel 全新安裝；固定正式 Release 與同 tag 安裝器，先驗證 SHA256、封存路徑、連結及 root helpers，再交接原生安裝流程。
 - Compose 選單保留啟動目錄、驗證既有部署結構與權限、要求信任確認，加入 Docker／Compose／daemon 前置檢查及保留資料的容器重建。
@@ -81,9 +93,9 @@ GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent �
 
 ## GHCR 映像發布
 
-`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（本次發行目標 `v1.0.10`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
+`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（本次發行目標 `v1.0.11`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
 
-API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。本次發行目標標籤為 `:v1.0.10`，發布狀態以 registry 與 Actions 為準。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
+API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。本次發行目標標籤為 `:v1.0.11`，發布狀態以 registry 與 Actions 為準。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
 
 發布前同時核對 API／web：既有版本 index 的 revision、version、source 與兩種架構必須符合，且內容必須與該 commit 的 SHA index 完全一致，缺少 SHA 證據或不同 commit 一律失敗。所有 Docker workflow 共用 concurrency group 且不取消執行中的發布；重跑保留既有 SHA index，不以新建置覆寫它，再補上尚未發布的版本標籤。手動發布後，之後同版本 Git tag 必須指向相同 commit；若 main 已新增 commit，須升版，不能重新指定舊版映像。兩個 GHCR package 的標籤更新不是跨 package 原子交易，失敗可能留下部分完成標籤，可在同 commit 重跑補齊。
 
@@ -104,7 +116,7 @@ bash scripts/package-zfs-source.sh
 
 `scripts/release-contract.mjs` 是版本與產物命名的共用入口。所有根層 build／package 腳本、收集器及 manifest 產生器均核對面板根、client、server、docs-site 的 package.json（不含 `v`）、Agent／ZFS VERSION（含 `v`），以及 RFW 的 `rfw`、`rfw-common`、`rfw-ebpf` 三個自家 crate `[package].version`（不含 `v`），要求與根版本逐字一致，包含預發行與 build metadata。Cargo 目前只接受各 crate 明寫的單一雙引號版本，不推測繼承版本；外部依賴版本及真實 ZFS 模組版本不屬於產品版本。全部入口需要 Node 22，不自動改寫版本，也不接受環境變數覆蓋根版本。
 
-Agent 宿主元件以 [bundle／管理文件](XPayincus-Agent/components/README.md) 整合，不新增宿主 bundle 資產，也不改 Agent manifest 或面板 OTA manifest。共用契約先要求 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs` 是實體目錄，拒絕舊頂層元件目錄殘留，再從新路徑核對 RFW crate 與 ZFS 產品版本。Go Agent 不載入 eBPF／ZFS 核心功能，不隨自身升級啟停或替換宿主元件。
+Agent 宿主元件以 [bundle／管理文件](XPayincus-Agent/components/README.md) 整合，不新增宿主 bundle 資產，也不改 Agent manifest 或面板 OTA manifest。ZFS source 包保留原根檔案，新增 Debian CI builder／verifier、ZFS status，以及 `host-tools/` 中的 RFW 管理程式、ZFS 收集器、原子 JSON publisher 與 systemd timer 安裝器；完整資產集合維持 30 件。共用契約先要求 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs` 是實體目錄，拒絕舊頂層元件目錄殘留，再從新路徑核對 RFW crate 與 ZFS 產品版本。Go Agent 不載入 eBPF／ZFS 核心功能，不隨自身升級啟停或替換宿主元件。
 
 ## Dashboard Compose 原始碼包
 
@@ -114,7 +126,7 @@ Agent 宿主元件以 [bundle／管理文件](XPayincus-Agent/components/README.
 
 同一次打包另從 committed `download.sh` 輸出可下載的 `xpayincus-compose-${VERSION}.sh`，納入統一索引、個別 `.sha256` 與 `SHA256SUMS`。使用者先驗證入口，再以 `install DIRECTORY VERSION SHA256` 或 `update DIRECTORY VERSION SHA256` 下載該版本 Dashboard 包；部署檔案更新保留私人資料，另執行 `panel.sh up` 才 pull／重建。入口目前僅接受正式 `vX.Y.Z`；完整命令與部署限制見 [Compose 文件](XPayincus/deploy/compose/README.md#安全下載入口建議-pull-部署)。
 
-同一份 committed staging 另由 `scripts/package-compose-bundle.mjs` 產生 `xpayincus-compose-${VERSION}.tar.gz`。只封裝根 `VERSION` 及 `XPayincus/deploy/compose/` 的固定 17 個部署檔：`docker-compose.yml`、`compose.yaml`、`compose.build.yaml`、`panel.sh`、`download.sh`、`README.md`、`https-proxy.conf.example`、`origin-entrypoint.sh`、`edge-nginx.conf.template`、`tunnel-nginx.conf.template`、`Dockerfile`、`Dockerfile.dockerignore`、`api-entrypoint.sh`、`nginx.conf.template`、`web-entrypoint.sh`、產生的 `compose.release.yaml` 與 `update.py`，共 18 個一般檔案，保留完整相對路徑。逐檔要求可讀、非空、不超過 2 MiB，拒絕符號連結，核對根版本與釘選映像 override；不含 client/server 原始碼、鎖檔、私人設定或額外部署檔。最小 bundle 用於 pull 部署；來源建置仍使用完整 Dashboard 包。
+同一份 committed staging 另由 `scripts/package-compose-bundle.mjs` 產生 `xpayincus-compose-${VERSION}.tar.gz`。只封裝根 `VERSION` 及 `XPayincus/deploy/compose/` 的固定 18 個部署檔：`docker-compose.yml`、`compose.yaml`、`compose.build.yaml`、`panel.sh`、`download.sh`、`README.md`、`https-proxy.conf.example`、`origin-entrypoint.sh`、`edge-nginx.conf.template`、`tunnel-nginx.conf.template`、`Dockerfile`、`Dockerfile.dockerignore`、`api-entrypoint.sh`、`nginx.conf.template`、`web-entrypoint.sh`、產生的 `compose.release.yaml`、`update.py` 與 `operations.py`，共 19 個一般檔案，保留完整相對路徑。逐檔要求可讀、非空、不超過 2 MiB，拒絕符號連結，核對根版本與釘選映像 override；不含 client/server 原始碼、鎖檔、私人設定或額外部署檔。最小 bundle 用於 pull 部署；來源建置仍使用完整 Dashboard 包。
 
 `download.sh install DIRECTORY [latest]` 固定官方最新正式 Release，驗證唯一的最小 bundle 與同 tag `SHA256SUMS`，缺件時拒絕退回完整來源包。顯式 `install-bundle DIRECTORY VERSION SHA256` 使用最小包；既有顯式 `install`／`update` 的完整 Dashboard 包介面與 `.sh` Release 資產保持相容。`scripts/manage.sh` 與 `scripts/agent-menu.sh` 可作 raw 入口，不列入 Release 資產契約。
 
@@ -142,16 +154,16 @@ bash panel.sh status
 | Dashboard Compose 原始碼 | `xpayincus-dashboard-${VERSION}-compose.tar.gz` |
 | 最小 Compose 部署 bundle | `xpayincus-compose-${VERSION}.tar.gz`，根 VERSION 與固定部署檔 |
 | Compose bootstrap 入口 | `xpayincus-compose-${VERSION}.sh` |
-| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.10-linux-{amd64,arm64}.tar.gz` |
-| Agent | `xpayincus-agent-v1.0.10-linux-{amd64,arm64}` 與單檔 `.gz` |
+| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.11-linux-{amd64,arm64}.tar.gz` |
+| Agent | `xpayincus-agent-v1.0.11-linux-{amd64,arm64}` 與單檔 `.gz` |
 | Agent 舊格式 manifest | `manifest.json`，保留 `files.linux-amd64/linux-arm64`、`name/sha256/size/gzip` |
-| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.10-ota-manifest.json`，schemaVersion 1 |
-| RFW | `xpayincus-rfw-v1.0.10-linux-{amd64,arm64}` |
-| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.10-source.tar.gz`，不是核心模組 |
+| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.11-ota-manifest.json`，schemaVersion 1 |
+| RFW | `xpayincus-rfw-v1.0.11-linux-{amd64,arm64}` |
+| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.11-source.tar.gz`，不是核心模組 |
 | 統一索引 | `release-manifest.json`，包含 ZFS source-only 狀態與執行需求 |
 | 雜湊 | 個別產物 `.sha256` 與 `SHA256SUMS`，後者涵蓋產物及三份新增 JSON manifest，不自我雜湊 |
 
-表中的 `v1.0.10` 對應目前根 VERSION；下載前須確認正式 Release 已存在，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
+表中的 `v1.0.11` 對應目前根 VERSION；下載前須確認正式 Release 已存在，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
 
 manifest 產生前目錄必須恰有 13 個一般檔案：Dashboard 包、最小 Compose bundle、Compose bootstrap 腳本、ZFS source 包、兩個 panel tarball、兩個 Agent 二進位與兩個 `.gz`、兩個 RFW 二進位、Agent `manifest.json`。多餘檔案（含舊版、異名、既有 checksum／輸出 manifest）、缺件、目錄及符號連結均拒絕。收集器只接收 9 件建置產物，其餘四件由 assemble 封裝產生，不要求 incoming 預先提供最小 bundle。Agent manifest 的 `files` 必須恰為 `linux-amd64` 與 `linux-arm64`，每項名稱、壓縮檔 SHA256、大小與 `gzip: true` 均核對。完成後再次核對原始 13 件、13 份個別 checksum、三份新增 JSON 與 `SHA256SUMS`，共 30 件；`SHA256SUMS` 共 16 筆。統一索引保留 `compose.artifact` 指向完整 Dashboard 包，新增 `compose.bundle` 指向最小包，兩者皆列入 artifacts 的 URL／大小／SHA256；不將 Compose 包或 bootstrap 混入 OTA。
 
@@ -183,7 +195,7 @@ Agent 安裝模板沒有固定 GitHub 倉庫，維持 `/api/agent/manifest.json`
 
 ## ZFS 與 RFW 限制
 
-ZFS 核心模組依賴 Debian 版本、CPU 架構、目標 kernel ABI、完整 matching headers、DKMS 與實際 ZFS 版本，不能由通用 Ubuntu runner 宣稱建置成功。統一發行僅封裝產品 VERSION、builder 與 README，manifest 明示 `kernelModulesBuilt: false`。需在專用 Debian 編譯主機另行執行既有 `zfs-builder.sh --kernel <kernel>`，該腳本仍會詢問確認，並安裝套件及 DKMS 模組，不適合直接嵌入無人值守 CI。
+ZFS 核心模組依賴 Debian 版本、CPU 架構、目標 kernel ABI、完整 matching headers、DKMS 與實際 ZFS 版本，不能由通用 Ubuntu runner 宣稱建置成功。統一發行封裝產品 VERSION、builder、管理工具與文件的來源，manifest 明示 `kernelModulesBuilt: false`。需在專用 Debian 編譯主機另行執行既有 `zfs-builder.sh --kernel <kernel>`，該腳本仍會詢問確認，並安裝套件及 DKMS 模組，不適合直接嵌入無人值守 CI。
 
 待取得實際模組後，另記錄 ZFS 真實版本、kernel、architecture、vermagic 與 SHA256；不能把 ZFS 模組版本硬改為產品 v1.0.7，也不能跨 kernel 使用。Secure Boot 環境可能需要模組簽章。載入與實機驗證應在專用主機進行，不在面板 Compose 內執行。
 

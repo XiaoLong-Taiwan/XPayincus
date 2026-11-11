@@ -64,7 +64,7 @@ struct PortAccessKey {
 struct PortAccessStats {
     allowed_count: u64, // 允许通过的次数
     blocked_count: u64, // 被阻断的次数
-    last_seen: u64,     // 最后访问时间（保留，暂时未使用）
+    last_seen: u64,     // bpf_ktime_get_ns: monotonic nanoseconds since boot
 }
 
 // 以太网头部
@@ -1070,6 +1070,7 @@ fn log_port_access(src_ip: u32, dst_port: u16, protocol: u8, blocked: bool) {
         Some(stats) => {
             // 更新统计
             let mut new_stats = *stats;
+            new_stats.last_seen = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
             if blocked {
                 new_stats.blocked_count = new_stats.blocked_count.saturating_add(1);
             } else {
@@ -1082,7 +1083,7 @@ fn log_port_access(src_ip: u32, dst_port: u16, protocol: u8, blocked: bool) {
             let new_stats = PortAccessStats {
                 allowed_count: if blocked { 0 } else { 1 },
                 blocked_count: if blocked { 1 } else { 0 },
-                last_seen: 0,
+                last_seen: unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() },
             };
             let _ = PORT_ACCESS_LOG.insert(&key, &new_stats, 0);
         }

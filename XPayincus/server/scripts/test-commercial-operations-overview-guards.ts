@@ -48,7 +48,8 @@ assert.ok(
     adminApi.includes("risks: Array<{") &&
     adminApi.includes("severity: 'info' | 'warning' | 'critical'") &&
     !userApi.includes('/admin/statistics/overview') &&
-    !userApi.includes('operations: {'),
+    !userApi.includes('payment_provider_missing') &&
+    !userApi.includes("severity: 'info' | 'warning' | 'critical'"),
   'commercial operations API typing must be admin-only'
 )
 

@@ -68,7 +68,7 @@ export const composeBundleFiles = [
     'download.sh', 'README.md', 'https-proxy.conf.example', 'origin-entrypoint.sh',
     'edge-nginx.conf.template', 'tunnel-nginx.conf.template',
     'Dockerfile', 'Dockerfile.dockerignore', 'api-entrypoint.sh',
-    'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml', 'update.py'
+    'nginx.conf.template', 'web-entrypoint.sh', 'compose.release.yaml', 'update.py', 'operations.py'
   ].map(name => `XPayincus/deploy/compose/${name}`)
 ]
 

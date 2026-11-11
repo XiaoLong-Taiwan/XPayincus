@@ -1516,24 +1516,36 @@ install_deps() {
 install_zfs_prebuilt() {
     local kernel_ver="$1"
     local prebuilt_url="${ZFS_PREBUILT_URL}/xpayincus-zfs-${ZFS_VERSION:-2.3.4}-linux-${ARCH}-${kernel_ver}.tar.gz"
-    local tmp_tar="/tmp/zfs-prebuilt-$$.tar.gz"
-    local tmp_dir="/tmp/zfs-prebuilt-$$"
+    local tmp_tar
+    local tmp_dir
 
     # fail-closed：内核不在已核验的哈希清单里就不下载。装进内核的模块必须是我们核验过的那一份。
     local expected_sha=""
-    if ! expected_sha=$(zfs_prebuilt_sha256 "$kernel_ver"); then
+    if [[ -n "${ZFS_ARTIFACT_URL:-}" || -n "${ZFS_ARTIFACT_SHA256:-}" ]]; then
+        [[ "${ZFS_ARTIFACT_URL:-}" == https://* && "${ZFS_ARTIFACT_SHA256:-}" =~ ^[a-fA-F0-9]{64}$ && -n "${ZFS_VERSION:-}" ]] || {
+            error "CI artifact 必須提供 HTTPS URL、獨立核驗的 SHA-256 與實際 ZFS_VERSION"; return 1;
+        }
+        prebuilt_url="$ZFS_ARTIFACT_URL"
+        expected_sha="$ZFS_ARTIFACT_SHA256"
+    elif ! expected_sha=$(zfs_prebuilt_sha256 "$kernel_ver"); then
         info "ZFS ${ZFS_VERSION:-2.3.4} / ${ARCH} / ${kernel_ver} 没有匹配的已核验预编译资产，回退 DKMS"
         return 1
     fi
 
-    info "ZFS v1.0.0 尚未登记已核验资产，使用旧发行 Debian-ZFS 的 ZFS ${ZFS_PREBUILT_VERIFIED_VERSION} 预编译包"
+    if [[ -n "${ZFS_ARTIFACT_URL:-}" ]]; then
+        info "使用明確釘選的 CI artifact：ZFS ${ZFS_VERSION} / ${ARCH} / ${kernel_ver}"
+    else
+        info "使用已核驗舊發行 Debian-ZFS 的 ZFS ${ZFS_PREBUILT_VERIFIED_VERSION} 預編譯包"
+    fi
     info "尝试下载预编译 ZFS 模块 (${kernel_ver})..."
 
+    tmp_tar=$(mktemp /tmp/zfs-prebuilt.XXXXXXXX.tar.gz) || return 1
+    tmp_dir=$(mktemp -d /tmp/zfs-prebuilt.XXXXXXXX) || { rm -f "$tmp_tar"; return 1; }
     # 下载预编译包
     if ! curl -sSfL --connect-timeout 10 --max-time 60 \
         "$prebuilt_url" -o "$tmp_tar" 2>/dev/null; then
         info "未找到内核 ${kernel_ver} 的预编译包"
-        rm -f "$tmp_tar" 2>/dev/null || true
+        rm -rf "$tmp_tar" "$tmp_dir" 2>/dev/null || true
         return 1
     fi
 
@@ -1541,14 +1553,26 @@ install_zfs_prebuilt() {
     if ! verify_sha256 "$tmp_tar" "$expected_sha"; then
         error "预编译 ZFS 模块校验失败（SHA-256 不匹配），已拒绝安装"
         error "这可能意味着上游产物被替换或下载被篡改，请勿手动绕过"
-        rm -f "$tmp_tar" 2>/dev/null || true
+        rm -rf "$tmp_tar" "$tmp_dir" 2>/dev/null || true
         return 1
     fi
     info "预编译包 SHA-256 校验通过，开始安装..."
 
     # 解压
     mkdir -p "$tmp_dir"
-    if ! tar -xzf "$tmp_tar" -C "$tmp_dir" 2>/dev/null; then
+    if ! python3 - "$tmp_tar" "$tmp_dir" <<'PY_ZFS_EXTRACT'
+import pathlib, sys, tarfile
+with tarfile.open(sys.argv[1], 'r:gz') as archive:
+    members = archive.getmembers()
+    if len(members) > 128 or sum(m.size for m in members) > 512 * 1024 * 1024:
+        raise ValueError('Oversized ZFS archive')
+    for member in members:
+        path = pathlib.PurePosixPath(member.name)
+        if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
+            raise ValueError('Unsafe ZFS archive entry')
+    archive.extractall(sys.argv[2], members=members)
+PY_ZFS_EXTRACT
+    then
         warn "预编译包解压失败"
         rm -rf "$tmp_tar" "$tmp_dir" 2>/dev/null || true
         return 1
@@ -1556,7 +1580,50 @@ install_zfs_prebuilt() {
 
     # 读取元数据，获取模块安装路径
     local pack_dir
-    pack_dir=$(find "$tmp_dir" -name "metadata.txt" -printf '%h\n' 2>/dev/null | head -n1)
+    local json_metadata
+    json_metadata=$(find "$tmp_dir" -name metadata.json -type f -print -quit)
+    if [[ -n "$json_metadata" ]]; then
+        pack_dir=$(dirname "$json_metadata")
+        if ! python3 - "$pack_dir" "$kernel_ver" "$ARCH" "${ZFS_VERSION:-2.3.4}" <<'PY_ZFS_METADATA'
+import hashlib, json, pathlib, re, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+m = json.loads((root / 'metadata.json').read_text())
+kernel, arch, version = sys.argv[2:]
+if (m.get('schemaVersion'), m.get('distribution'), m.get('kernel'), m.get('architecture'), m.get('zfsVersion')) != (1, 'debian-13', kernel, arch, version):
+    raise ValueError('ZFS metadata identity mismatch')
+if arch != 'amd64' or not re.fullmatch(r'6\.12\.[0-9]{1,6}\+deb13-cloud-amd64', kernel):
+    raise ValueError('CI artifact outside allowlist')
+records = m.get('modules', [])
+paths = [item['path'] for item in records]
+if not records or len(set(paths)) != len(paths) or 'modules/zfs.ko' not in paths:
+    raise ValueError('Missing or duplicate modules')
+if set(paths) != {str(p.relative_to(root)) for p in (root / 'modules').iterdir()}:
+    raise ValueError('Unexpected module files')
+for item in records:
+    if not re.fullmatch(r'modules/[A-Za-z0-9_-]+\.ko', item['path']):
+        raise ValueError('Unsafe module path')
+    path = root / item['path']
+    data = path.read_bytes()
+    if path.is_symlink() or data[:6] != b'\x7fELF\x02\x01' or data[18:20] != b'\x3e\x00':
+        raise ValueError('Module architecture mismatch')
+    if hashlib.sha256(data).hexdigest() != item['sha256']:
+        raise ValueError('Module checksum mismatch')
+    actual_version = subprocess.check_output(['modinfo', '-F', 'version', str(path)], text=True).strip()
+    magic = subprocess.check_output(['modinfo', '-F', 'vermagic', str(path)], text=True).strip()
+    if actual_version != version or item['version'] != version or magic != item['vermagic'] or magic.split()[0] != kernel:
+        raise ValueError('Module version or exact ABI mismatch')
+# Produce the existing install contract only after all JSON records are verified.
+(root / 'metadata.txt').write_text(f'kernel_version={kernel}\nmodule_path=updates/dkms\n')
+PY_ZFS_METADATA
+        then
+            error "CI ZFS metadata、模組 checksum、架構或 ABI 核驗失敗"
+            rm -rf "$tmp_tar" "$tmp_dir"; return 1
+        fi
+    elif [[ -n "${ZFS_ARTIFACT_URL:-}" ]]; then
+        error "CI artifact 缺少 metadata.json"; rm -rf "$tmp_tar" "$tmp_dir"; return 1
+    else
+        pack_dir=$(find "$tmp_dir" -name "metadata.txt" -printf '%h\n' 2>/dev/null | head -n1)
+    fi
     if [[ -z "$pack_dir" ]]; then
         warn "预编译包格式无效（缺少 metadata.txt）"
         rm -rf "$tmp_tar" "$tmp_dir" 2>/dev/null || true

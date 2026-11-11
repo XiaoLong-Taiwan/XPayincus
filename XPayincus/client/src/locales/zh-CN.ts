@@ -1,4 +1,19 @@
 export default {
+    operations: {
+        provisioningRetry: '重试交付', provisioningRetryConfirm: '已核实实例与远端资源归属，确定继续此交付任务？已完成的建机与账务不会重新执行。',
+        taskKinds: { create: '建立', restore: '还原', start: '启动', stop: '停止', restart: '重启', rebuild: '重装', clone: '克隆', recreate: '重建', change_host: '更换节点' },
+        taskStatuses: { pending: '待处理', processing: '处理中', running: '执行中', completed: '已完成', succeeded: '成功', failed: '失败', cancelled: '已取消' },
+        batchHint: '此处显示 API 响应结果。异步操作的最终结果请到任务中心查看。',
+        forecastHint: '按当前价格预测自动续费。到期时间栏显示预计扣款时间，实际费用可能变化。',
+        title: '任务中心', description: '建立、实例操作与还原结果由服务器保留，离页和刷新后可继续查看。',
+        refresh: '刷新', previous: '上一页', next: '下一页', empty: '暂无结果', error: '加载失败，请重试。',
+        name: '名称', kind: '任务类型', status: '状态', progress: '进度', updated: '更新时间', result: '结果', instance: '实例',
+        forecast: '续费预测', days: '未来 {days} 天', balance: '可用余额', total: '续费总额', shortfall: '余额缺口', firstShortfall: '首次不足时间', due: '到期时间', autoRenew: '自动续费',
+        draft: '购买草稿已恢复。请刷新价格、库存与优惠，成功后确认当前配置再购买。', review: '刷新价格、库存与优惠', confirm: '我已确认最新价格、库存与优惠', recharge: '充值后返回', resume: '继续购买草稿',
+        batchResults: '逐项操作结果', retry: '仅重试失败项目', succeeded: '成功', failed: '失败', skipped: '已跳过', pending: '待处理', unknown: '结果未知，请先刷新任务中心再决定是否重试',
+        keyword: '订单号', from: '建立日期起', to: '建立日期止', instanceSearch: '实例 ID 或名称', export: '导出全部筛选结果', incomplete: '仅载入 {count} / {total} 条订单（上限 5000），搜索与导出结果不完整。', complete: '已载入全部 {count} 条授权订单。', repay: '继续付款', cancel: '取消订单', cancelConfirm: '取消此待付款订单？', manual: '付款说明',
+        minCpu: '最低 CPU (%)', minRam: '最低内存 (MB)', minDisk: '最低磁盘 (MB)', type: '实例类型', maxPrice: '最高月价', all: '全部', compare: '方案比较（2–4 项）', addCompare: '加入所选方案', remove: '移除', compareHint: '选择 2–4 个方案比较。价格为月均价格，开通费与周期另列。', price: '价格', cycle: '月数', setup: '开通费', stock: '库存', available: '有库存', soldOut: '售罄'
+    },
     hostPublicIpv4: {
         title: '独立 IPv4 地址池', description: '为独立 IPv4 套餐提供 routed 公网 IPv4 分配、回收和容量校验。',
         newPool: '新增地址池', newPoolTitle: '新增独立 IPv4 地址池', total: '总地址', empty: '暂无独立 IPv4 地址池。',
@@ -519,6 +534,7 @@ export default {
             browseDescription: '支持按地区、配置与价格筛选套餐，便于新用户选购，也方便老用户补购。',
         },
         market: {
+            stockSubscribe: '订阅到货通知', stockSubscribeFailed: '订阅到货通知失败', stockUnsubscribe: '取消订阅', stockUnsubscribeFailed: '取消订阅失败', stockSubscriptions: '我的到货订阅（{count}）', stockSubscriptionsEmpty: '目前没有到货订阅',
             badge: '公开套餐',
             title: '浏览全部套餐',
             description: '按地区、配置、价格与来源筛选套餐，直接找到合适的 NAT VPS。',
@@ -2885,6 +2901,7 @@ export default {
                 },
             },
         },
+        hostingWithdrawals: { title: '托管提款', description: '审核外部提款并记录付款阶段凭证。', loadFailed: '加载提款记录失败', empty: '没有提款记录', proofRequired: '付款完成前须填写方式、交易编号和付款凭证', reasonRequired: '请填写提款失败原因', confirm: '确定将提款 #{id} 更新为“{status}”？', updateSuccess: '提款状态已更新', updateFailed: '更新提款状态失败', paymentMethod: '付款方式', paymentReference: '交易编号', paymentProof: '付款凭证或可核对链接', failureReason: '失败原因', status_approved: '已批准', status_processing: '处理中', status_paid: '已付款', status_failed: '失败', status_pending: '待审核', action_approve: '批准提款', action_processing: '标记处理中', action_paid: '记录付款完成', action_failed: '标记失败并退款' },
         hosting: {
             title: '托管',
             description: '查看符合条件的托管机主和托管经营数据',
@@ -4159,6 +4176,8 @@ export default {
             agentLoadAverage: '负载',
             agentLoadAverageHint: '1 / 5 / 15 分钟',
             agentProcessCount: '进程数',
+            agentHistoryTitle: 'Agent 历史记录', agentHistoryEmpty: '暂无历史数据', agentHistoryFailed: '加载 Agent 历史失败',
+            maintenanceTitle: '维护计划', maintenanceTarget: '选择目标节点', maintenancePreflight: '执行创建预检', maintenancePreflightFailed: '维护计划预检失败', maintenanceCreate: '创建维护计划', maintenanceCreateConfirm: '预检已通过。创建计划会将来源与目标节点设为维护中并开始迁移，确定继续？', maintenanceCreateFailed: '创建维护计划失败', maintenanceLoadFailed: '加载维护计划失败', maintenanceInstances: '{count} 个实例', maintenanceActionConfirm: '确定对计划 #{id} 执行“{action}”？', maintenanceActionFailed: '维护计划操作失败', maintenanceAction_review: '核实', maintenanceAction_takeover: '接管', maintenanceAction_rollback: '回滚', maintenanceAction_resume: '继续', maintenanceAction_cleanup: '清理副本', maintenanceStatus_running: '执行中', maintenanceStatus_completed: '待核实', maintenanceStatus_review_required: '需要人工处理', maintenanceStatus_recovering: '恢复中', maintenanceStatus_reviewed: '已完成', maintenanceStatus_failed: '失败', maintenanceStatus_unknown: '未知',
             // 存储池管理
             storage: {
                 title: '存储池',

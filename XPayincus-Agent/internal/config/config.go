@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,9 @@ type Config struct {
 	RequestTimeout           time.Duration
 	HeartbeatIntervalSeconds int
 	RequestTimeoutSeconds    int
+	StateDir                 string
+	SpoolMaxBytes            int
+	SpoolRetentionHours      int
 }
 
 func Load(path string) (Config, error) {
@@ -50,8 +54,17 @@ func Load(path string) (Config, error) {
 		MinHeartbeatIntervalSeconds,
 		MaxHeartbeatIntervalSeconds,
 	)
+	overlayEnv(values, "state_dir", "INCUDAL_AGENT_STATE_DIR")
+	overlayEnv(values, "spool_max_bytes", "INCUDAL_AGENT_SPOOL_MAX_BYTES")
+	overlayEnv(values, "spool_retention_hours", "INCUDAL_AGENT_SPOOL_RETENTION_HOURS")
+	if values["state_dir"] == "" {
+		values["state_dir"] = "/var/lib/incudal-agent"
+	}
 	timeoutSeconds := parsePositiveInt(values["request_timeout_seconds"], 10)
 	cfg := Config{
+		StateDir:                 values["state_dir"],
+		SpoolMaxBytes:            clampInt(parsePositiveInt(values["spool_max_bytes"], 16*1024*1024), 65536, 256*1024*1024),
+		SpoolRetentionHours:      clampInt(parsePositiveInt(values["spool_retention_hours"], 72), 1, 168),
 		PanelURL:                 strings.TrimRight(values["panel_url"], "/"),
 		AgentID:                  values["agent_id"],
 		AgentSecret:              values["agent_secret"],
@@ -68,6 +81,7 @@ func Load(path string) (Config, error) {
 }
 
 func (cfg Config) Validate() error {
+	if cfg.StateDir != "" && !filepath.IsAbs(cfg.StateDir) { return errors.New("state_dir must be absolute") }
 	if cfg.PanelURL == "" {
 		return errors.New("panel_url is required")
 	}

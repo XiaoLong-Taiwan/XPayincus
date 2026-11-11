@@ -7,7 +7,8 @@ import { prisma } from './prisma.js'
 import { Prisma, type InstanceStatus } from '@prisma/client'
 import type { Package } from '../types/database.js'
 import { normalizeTrafficMultiplier } from '../lib/traffic-multiplier.js'
-import { resolveStoragePoolForNewInstance } from './storage-pools.js'
+import { selectAvailableHost, type HostAvailabilityCache } from './hosts.js'
+import { networkModeAllowsPortMapping } from '../lib/network-modes.js'
 
 const NORMAL_PACKAGE_INSTANCE_STATUSES: InstanceStatus[] = ['running', 'stopped']
 const PACKAGE_PREREQUISITE_LOCK_NAMESPACE = 4201
@@ -1353,95 +1354,23 @@ export async function increaseHostQuota(hostId: number, cpuAdd: number, memoryAd
  * - 付费套餐：最低配置为最低可售方案的 CPU/内存/磁盘
  */
 export async function checkPackageSoldOut(packageId: number): Promise<boolean> {
-  // 1. 获取套餐绑定的宿主机以及其资源使用情况
-  const packageHosts = await prisma.packageHost.findMany({
-    where: { packageId },
-    include: {
-      host: {
-        select: {
-          id: true,
-          status: true,
-          cpuAllowanceMax: true,
-          memoryMax: true,
-          storageSize: true,
-          instances: {
-            where: { status: { not: 'deleted' } },
-            select: { cpu: true, memory: true, disk: true }
-          }
-        }
-      }
-    }
+  return (await checkPackagesSoldOut([packageId])).get(packageId) ?? true
+}
+
+type AvailabilityPackage = Prisma.PackageGetPayload<{ include: { packageHosts: true } }>
+
+export async function findAvailablePackageHost(packageId: number, resources: { cpu: number; memory: number; disk: number; portLimit?: number | null }, region = '', context?: { pkg: AvailabilityPackage; cache: HostAvailabilityCache }) {
+  const pkg = context?.pkg || await prisma.package.findUnique({ where: { id: packageId }, include: { packageHosts: true } })
+  if (!pkg?.active || (pkg.instanceType === 'vm' && ['nat_ipv6_nat', 'ipv6_nat'].includes(pkg.networkMode))) return null
+  const instanceType = pkg.instanceType === 'both' ? undefined : pkg.instanceType
+  return selectAvailableHost({
+    packageId, ownerId: pkg.userId,
+    packageHostIds: pkg.packageHosts.length ? pkg.packageHosts.map(row => row.hostId) : undefined,
+    ...resources, region, networkMode: pkg.networkMode, instanceType,
+    availabilityCache: context?.cache,
+    portCount: networkModeAllowsPortMapping(pkg.networkMode) ? (resources.portLimit ?? pkg.portLimit) : 0,
+    nodeSelectors: Array.isArray(pkg.nodeSelectors) ? pkg.nodeSelectors.filter((tag): tag is string => typeof tag === 'string') : []
   })
-
-  // 没有绑定宿主机，视为售罄
-  if (packageHosts.length === 0) {
-    return true
-  }
-
-  // 2. 检查是否为付费套餐，并获取最低配置
-  const plans = await prisma.packagePlan.findMany({
-    where: { packageId, isActive: true },
-    select: { cpu: true, memory: true, disk: true, isSoldOut: true },
-    orderBy: [{ cpu: 'asc' }, { memory: 'asc' }]
-  })
-  const availablePlans = plans.filter(plan => !plan.isSoldOut)
-
-  let minCpu: number
-  let minMemory: number
-  let minDisk: number
-
-  if (plans.length > 0) {
-    // 付费套餐：所有活跃方案都手动售罄时，套餐也视为售罄
-    if (availablePlans.length === 0) {
-      return true
-    }
-    // 付费套餐：只按可售方案计算最低可开通资源
-    minCpu = Math.min(...availablePlans.map(p => p.cpu))
-    minMemory = Math.min(...availablePlans.map(p => p.memory))
-    minDisk = Math.min(...availablePlans.map(p => p.disk))
-  } else {
-    // 免费套餐：最低 15% CPU + 128MB 内存 + 512MB 磁盘
-    minCpu = 15
-    minMemory = 128
-    minDisk = 512
-  }
-
-  // 3. 检查是否有任何一个在线宿主机可以满足最低配置
-  for (const ph of packageHosts) {
-    const host = ph.host
-    
-    // 跳过离线节点
-    if (host.status !== 'online') {
-      continue
-    }
-
-    if (!await resolveStoragePoolForNewInstance(host.id, { packageId })) {
-      continue
-    }
-
-    // 检查是否设置了配额
-    if (!host.cpuAllowanceMax || !host.memoryMax) {
-      continue
-    }
-
-    // 计算实际使用量
-    const cpuUsed = host.instances.reduce((sum, inst) => sum + inst.cpu, 0)
-    const memoryUsed = host.instances.reduce((sum, inst) => sum + inst.memory, 0)
-    const diskUsed = host.instances.reduce((sum, inst) => sum + inst.disk, 0)
-
-    // 计算剩余资源
-    const cpuAvailable = host.cpuAllowanceMax - cpuUsed
-    const memoryAvailable = host.memoryMax - memoryUsed
-    const diskAvailable = (host.storageSize || 0) * 1024 - diskUsed
-
-    // 如果能满足最低配置，则未售罄
-    if (cpuAvailable >= minCpu && memoryAvailable >= minMemory && diskAvailable >= minDisk) {
-      return false
-    }
-  }
-
-  // 所有宿主机都无法满足最低配置，售罄
-  return true
 }
 
 /**
@@ -1449,112 +1378,21 @@ export async function checkPackageSoldOut(packageId: number): Promise<boolean> {
  * 优化性能：一次性获取所有需要的数据
  */
 export async function checkPackagesSoldOut(packageIds: number[]): Promise<Map<number, boolean>> {
-  if (packageIds.length === 0) {
-    return new Map()
-  }
-
-  // 1. 一次性获取所有套餐的宿主机绑定和资源信息
-  const allPackageHosts = await prisma.packageHost.findMany({
-    where: { packageId: { in: packageIds } },
-    include: {
-      host: {
-        select: {
-          id: true,
-          status: true,
-          cpuAllowanceMax: true,
-          memoryMax: true,
-          storageSize: true,
-          instances: {
-            where: { status: { not: 'deleted' } },
-            select: { cpu: true, memory: true, disk: true }
-          }
-        }
-      }
-    }
-  })
-
-  // 2. 一次性获取所有套餐的活跃方案
-  const allPlans = await prisma.packagePlan.findMany({
-    where: { packageId: { in: packageIds }, isActive: true },
-    select: { packageId: true, cpu: true, memory: true, disk: true, isSoldOut: true }
-  })
-
-  // 3. 按套餐分组数据
-  const hostsByPackage = new Map<number, typeof allPackageHosts>()
-  for (const ph of allPackageHosts) {
-    const list = hostsByPackage.get(ph.packageId) || []
-    list.push(ph)
-    hostsByPackage.set(ph.packageId, list)
-  }
-
-  const plansByPackage = new Map<number, typeof allPlans>()
-  for (const plan of allPlans) {
-    const list = plansByPackage.get(plan.packageId) || []
-    list.push(plan)
-    plansByPackage.set(plan.packageId, list)
-  }
-
-  // 4. 计算每个套餐的售罄状态
   const result = new Map<number, boolean>()
-  
-  for (const packageId of packageIds) {
-    const packageHosts = hostsByPackage.get(packageId) || []
-    const plans = plansByPackage.get(packageId) || []
-    const availablePlans = plans.filter(plan => !plan.isSoldOut)
-
-    // 没有绑定宿主机，视为售罄
-    if (packageHosts.length === 0) {
-      result.set(packageId, true)
-      continue
-    }
-
-    // 确定最低配置
-    let minCpu: number
-    let minMemory: number
-    let minDisk: number
-
-    if (plans.length > 0) {
-      if (availablePlans.length === 0) {
-        result.set(packageId, true)
-        continue
-      }
-      minCpu = Math.min(...availablePlans.map(p => p.cpu))
-      minMemory = Math.min(...availablePlans.map(p => p.memory))
-      minDisk = Math.min(...availablePlans.map(p => p.disk))
-    } else {
-      minCpu = 15
-      minMemory = 128
-      minDisk = 512
-    }
-
-    // 检查是否有任何宿主机可用
-    let hasAvailableHost = false
-    for (const ph of packageHosts) {
-      const host = ph.host
-      
-      if (host.status !== 'online' || !host.cpuAllowanceMax || !host.memoryMax) {
-        continue
-      }
-
-      if (!await resolveStoragePoolForNewInstance(host.id, { packageId })) {
-        continue
-      }
-
-      const cpuUsed = host.instances.reduce((sum, inst) => sum + inst.cpu, 0)
-      const memoryUsed = host.instances.reduce((sum, inst) => sum + inst.memory, 0)
-      const diskUsed = host.instances.reduce((sum, inst) => sum + inst.disk, 0)
-      const cpuAvailable = host.cpuAllowanceMax - cpuUsed
-      const memoryAvailable = host.memoryMax - memoryUsed
-      const diskAvailable = (host.storageSize || 0) * 1024 - diskUsed
-
-      if (cpuAvailable >= minCpu && memoryAvailable >= minMemory && diskAvailable >= minDisk) {
-        hasAvailableHost = true
+  const ids = [...new Set(packageIds)]
+  if (!ids.length) return result
+  const packages = await prisma.package.findMany({ where: { id: { in: ids } }, include: { plans: true, packageHosts: true } })
+  const cache: HostAvailabilityCache = new Map()
+  for (const id of ids) result.set(id, true)
+  for (const pkg of packages) {
+    if (!pkg.active) continue
+    const plans = pkg.plans.length ? pkg.plans.filter(plan => plan.isActive && !plan.isSoldOut) : [{ cpu: 15, memory: 128, disk: 512 }]
+    for (const plan of plans) {
+      if (await findAvailablePackageHost(pkg.id, plan, '', { pkg, cache })) {
+        result.set(pkg.id, false)
         break
       }
     }
-
-    result.set(packageId, !hasAvailableHost)
   }
-
   return result
 }

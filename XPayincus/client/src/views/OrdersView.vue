@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import api from '@/api'
+import { useI18n } from 'vue-i18n'
 import { useReveal } from '@/composables/useReveal'
+import { instanceDetailPath } from '@/utils/app-paths'
+
+const { t } = useI18n()
 
 const revealRoot = ref<HTMLElement | null>(null)
 useReveal(revealRoot)
@@ -38,14 +42,37 @@ interface OrderItem {
   expiredAt: string | null
 }
 
-const orders = ref<OrderItem[]>([])
+const allOrders = ref<OrderItem[]>([])
+const keyword = ref('')
+const fromDate = ref('')
+const toDate = ref('')
+const instanceQuery = ref('')
+const loadedTotal = ref(0)
+const incomplete = ref(false)
+const paymentBusy = ref(false)
+const paymentInstructions = ref('')
+const paymentUrl = ref('')
+const paymentOrderNo = ref('')
+let detailSequence = 0
+let loadSequence = 0
+const filteredOrders = computed(() => allOrders.value.filter(order => {
+  const created = new Date(order.createdAt).getTime()
+  const instanceText = `${order.instance?.id || ''} ${order.instance?.name || ''} ${order.instance?.displayName || ''}`.toLowerCase()
+  return (!type.value || order.sourceType === type.value)
+    && (!status.value || order.rawStatus === status.value || order.status === status.value)
+    && order.orderNo.toLowerCase().includes(keyword.value.trim().toLowerCase())
+    && (!instanceQuery.value.trim() || instanceText.includes(instanceQuery.value.trim().toLowerCase()))
+    && (!fromDate.value || created >= new Date(`${fromDate.value}T00:00:00`).getTime())
+    && (!toDate.value || created <= new Date(`${toDate.value}T23:59:59.999`).getTime())
+}))
+const orders = computed(() => filteredOrders.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 const selectedOrder = ref<OrderItem | null>(null)
 const loading = ref(false)
 const detailLoading = ref(false)
 const error = ref('')
 const page = ref(1)
 const pageSize = ref(10)
-const total = ref(0)
+const total = computed(() => filteredOrders.value.length)
 const type = ref('')
 const status = ref('')
 
@@ -119,53 +146,110 @@ function instanceName(order: OrderItem): string {
 }
 
 async function loadOrders() {
+  const sequence = ++loadSequence
   loading.value = true
   error.value = ''
+  incomplete.value = true
+  allOrders.value = []
+  loadedTotal.value = 0
+  page.value = 1
+  const unique = new Map<string, OrderItem>()
   try {
-    const res = await api.orders.list({
-      page: page.value,
-      pageSize: pageSize.value,
-      type: type.value || undefined,
-      status: status.value || undefined
-    })
-    orders.value = res.orders as OrderItem[]
-    total.value = res.total
+    for (let requestPage = 1; requestPage <= 50; requestPage++) {
+      const res = await api.orders.list({ page: requestPage, pageSize: 100 })
+      if (sequence !== loadSequence) return
+      loadedTotal.value = res.total
+      for (const order of res.orders as OrderItem[]) unique.set(order.id, order)
+      allOrders.value = [...unique.values()]
+      if (requestPage * 100 >= res.total || res.orders.length < 100) break
+    }
+    incomplete.value = unique.size < loadedTotal.value
   } catch (err: any) {
-    error.value = err?.message || '订单加载失败'
+    if (sequence === loadSequence) error.value = err?.message || t('operations.error')
   } finally {
-    loading.value = false
+    if (sequence === loadSequence) loading.value = false
+  }
+}
+
+function exportOrders() {
+  const cell = (value: unknown) => {
+    let text = String(value ?? '')
+    if (/^\s*[=+@-]|^[\t\r\n]/.test(text)) text = `'${text}`
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  const rows = [
+    [t('operations.keyword'), t('operations.type'), t('operations.status'), t('operations.price'), t('operations.instance'), t('operations.from')],
+    ...filteredOrders.value.map(order => [order.orderNo, order.sourceType, order.rawStatus, order.amount, instanceName(order), order.createdAt])
+  ]
+  const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = incomplete.value ? 'orders-partial.csv' : 'orders.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function orderPayment(order: OrderItem, cancel = false) {
+  if (paymentBusy.value || (cancel && !window.confirm(t('operations.cancelConfirm')))) return
+  paymentBusy.value = true
+  paymentOrderNo.value = order.orderNo
+  paymentInstructions.value = ''
+  paymentUrl.value = ''
+  try {
+    if (cancel) {
+      await api.billing.cancelRechargeOrder(order.orderNo)
+    } else {
+      const result = await api.billing.repayRechargeOrder(order.orderNo)
+      paymentInstructions.value = result.manualPayment?.instructions || ''
+      if (result.payUrl) {
+        const url = new URL(result.payUrl, window.location.origin)
+        if (url.protocol === 'https:' || url.protocol === 'http:') paymentUrl.value = url.href
+      }
+    }
+    await loadOrders()
+    if (selectedOrder.value?.id === order.id) await openDetail(order)
+  } catch (err: any) {
+    error.value = err?.message || t('operations.error')
+  } finally {
+    paymentBusy.value = false
   }
 }
 
 async function openDetail(order: OrderItem) {
+  const sequence = ++detailSequence
   selectedOrder.value = order
   detailLoading.value = true
   try {
     const res = await api.orders.detail(order.sourceType, order.sourceId)
-    selectedOrder.value = res.order as OrderItem
+    if (sequence === detailSequence && selectedOrder.value?.id === order.id) selectedOrder.value = res.order as OrderItem
+  } catch (err: any) {
+    if (sequence === detailSequence) error.value = err?.message || t('operations.error')
   } finally {
-    detailLoading.value = false
+    if (sequence === detailSequence) detailLoading.value = false
   }
 }
 
 function applyFilters() {
   page.value = 1
-  void loadOrders()
 }
 
 function clearFilters() {
   type.value = ''
   status.value = ''
+  keyword.value = ''
+  fromDate.value = ''
+  toDate.value = ''
+  instanceQuery.value = ''
   applyFilters()
 }
 
 function goPage(nextPage: number) {
   if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return
   page.value = nextPage
-  void loadOrders()
 }
 
 onMounted(loadOrders)
+onUnmounted(() => { loadSequence++; detailSequence++ })
 </script>
 
 <template>
@@ -184,6 +268,16 @@ onMounted(loadOrders)
       </button>
     </header>
 
+    <section class="space-y-3 rounded-xl border border-themed p-4">
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label class="text-sm">{{ t('operations.keyword') }}<input v-model="keyword" class="input w-full" @input="applyFilters" /></label>
+        <label class="text-sm">{{ t('operations.instanceSearch') }}<input v-model="instanceQuery" class="input w-full" @input="applyFilters" /></label>
+        <label class="text-sm">{{ t('operations.from') }}<input v-model="fromDate" type="date" class="input w-full" @change="applyFilters" /></label>
+        <label class="text-sm">{{ t('operations.to') }}<input v-model="toDate" type="date" class="input w-full" @change="applyFilters" /></label>
+      </div>
+      <p class="text-sm text-themed-muted" role="status">{{ t(incomplete ? 'operations.incomplete' : 'operations.complete', { count: allOrders.length, total: loadedTotal }) }}</p>
+      <button class="btn btn-secondary" :disabled="loading || !filteredOrders.length" @click="exportOrders">{{ t('operations.export') }}</button>
+    </section>
     <section data-reveal class="nimbus-lift rounded-xl border border-themed bg-themed-surface p-4 shadow-sm">
       <div class="grid gap-3 md:grid-cols-[180px_180px_auto]">
         <select v-model="type" class="input" @change="status = ''; applyFilters()">
@@ -320,6 +414,15 @@ onMounted(loadOrders)
           </button>
         </div>
 
+        <div class="space-y-3 p-4">
+          <div v-if="selectedOrder.sourceType === 'recharge' && selectedOrder.rawStatus === 'pending'" class="flex flex-wrap gap-2">
+            <button class="btn btn-secondary" :disabled="paymentBusy" @click="orderPayment(selectedOrder)">{{ t('operations.repay') }}</button>
+            <button class="btn btn-secondary" :disabled="paymentBusy" @click="orderPayment(selectedOrder, true)">{{ t('operations.cancel') }}</button>
+          </div>
+          <a v-if="paymentUrl && paymentOrderNo === selectedOrder.orderNo" class="btn btn-primary" :href="paymentUrl" rel="noopener noreferrer">{{ t('operations.repay') }}</a>
+          <p v-if="paymentInstructions && paymentOrderNo === selectedOrder.orderNo" class="whitespace-pre-wrap break-words text-sm">{{ t('operations.manual') }}: {{ paymentInstructions }}</p>
+          <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+        </div>
         <div v-if="detailLoading" class="p-6 text-sm text-themed-muted">正在加载详情...</div>
         <dl v-else class="grid gap-px bg-themed-secondary p-px text-sm">
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">状态</dt><dd class="col-span-2 text-themed"><span :class="['inline-flex rounded-full border px-2 py-0.5 text-xs font-medium', statusClass(selectedOrder.status)]">{{ statusLabel(selectedOrder) }}</span></dd></div>
@@ -328,7 +431,7 @@ onMounted(loadOrders)
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">手续费</dt><dd class="col-span-2 font-mono tabular-nums text-themed">{{ formatMoney(selectedOrder.fee) }}</dd></div>
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">支付渠道</dt><dd class="col-span-2 text-themed">{{ selectedOrder.provider?.name || selectedOrder.paymentMethod || '-' }}</dd></div>
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">交易号</dt><dd class="col-span-2 break-all font-mono text-themed">{{ selectedOrder.tradeNo || '-' }}</dd></div>
-          <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">关联实例</dt><dd class="col-span-2 text-themed">{{ instanceName(selectedOrder) }}</dd></div>
+          <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">关联实例</dt><dd class="col-span-2 text-themed"><RouterLink v-if="selectedOrder.instance" class="underline break-words" :to="instanceDetailPath(selectedOrder.instance.id)">{{ instanceName(selectedOrder) }}</RouterLink><span v-else>-</span></dd></div>
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">账期</dt><dd class="col-span-2 text-themed">{{ selectedOrder.months ? `${selectedOrder.months} 个月` : '-' }}</dd></div>
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">开始时间</dt><dd class="col-span-2 text-themed">{{ formatTime(selectedOrder.periodStart) }}</dd></div>
           <div class="grid grid-cols-3 gap-3 bg-themed-surface px-6 py-3"><dt class="text-themed-muted">结束时间</dt><dd class="col-span-2 text-themed">{{ formatTime(selectedOrder.periodEnd) }}</dd></div>

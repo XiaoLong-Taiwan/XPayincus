@@ -151,6 +151,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.wallet', title: '钱包' }
   },
   {
+    path: '/tasks',
+    name: 'tasks',
+    component: () => import('@/views/TasksView.vue'),
+    meta: { requiresAuth: true, requiresUser: true, titleKey: 'operations.title', title: '任務中心' }
+  },
+  {
     path: '/orders',
     name: 'orders',
     component: () => import('@/views/OrdersView.vue'),

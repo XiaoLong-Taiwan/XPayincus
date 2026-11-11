@@ -642,7 +642,23 @@ http.interceptors.response.use(
 )
 
 // API 模块
+export interface OperationTask {
+  id: string
+  kind: string
+  instanceId: number | null
+  name: string
+  status: string
+  progress: number | string | null
+  error: string | null
+  createdAt: string
+  updatedAt: string
+  canRetry: boolean
+}
+
 const api = {
+  operations: {
+    tasks: (params: { page: number; pageSize: number }): Promise<{ items: OperationTask[]; total: number }> => http.get('/operations/tasks', { params })
+  },
   instancePorts: instancePortApi,
   // 认证
   auth: {
@@ -796,6 +812,8 @@ const api = {
 
   // 实例管理
   instances: {
+    getProvisioning: (id: number): Promise<{ job: { id: number; status: string; phase: string; error: string | null; attempts: number } | null; events: Array<{ id: number; phase: string; message: string | null; createdAt: string }> }> => http.get(`/instances/${id}/provisioning`),
+    retryProvisioning: (id: number): Promise<{ success: boolean; action: 'retry' }> => http.post(`/instances/${id}/provisioning/retry`, {}),
     list: (params: Record<string, unknown> = {}): Promise<PaginatedResponse<InstanceWithDetails> & { availableCountries?: string[] }> =>
       http.get('/instances', { params }),
     get: (id: number): Promise<InstanceWithDetails> => http.get(`/instances/${id}`),
@@ -1287,6 +1305,14 @@ const api = {
       http.post(`/agent/hosts/${id}/install-command`, {}),
     requestAgentUpgrade: (id: number, targetVersion: string): Promise<HostAgentUpgradeRequestResponse> =>
       http.post(`/agent/hosts/${id}/upgrade`, { confirm: true, targetVersion }),
+    getAgentHistory: (id: number, params: { from?: string; to?: string; limit?: number; resolutionSeconds?: number } = {}): Promise<{ samples: Array<Record<string, unknown>> }> =>
+      http.get(`/agent/hosts/${id}/history`, { params }),
+    getMaintenancePlans: (id: number): Promise<{ plans: Array<{ id: number; sourceHostId: number; targetHostId: number; status: string; instanceIds: number[]; results: Array<Record<string, unknown>>; error: string | null; createdAt: string; updatedAt: string }> }> =>
+      http.get(`/hosts/${id}/maintenance-plans`),
+    createMaintenancePlan: (id: number, data: { targetHostId: number; instanceIds: number[]; dryRun?: boolean }): Promise<{ passed?: boolean; cpu?: number; memory?: number; disk?: number; sourceRetained?: boolean; plan?: Record<string, unknown> }> =>
+      http.post(`/hosts/${id}/maintenance-plans`, data),
+    reviewMaintenancePlan: (id: number, planId: number, action: 'review' | 'takeover' | 'rollback' | 'resume' | 'cleanup'): Promise<{ success: boolean; status: string; action?: string }> =>
+      http.post(`/hosts/${id}/maintenance-plans/${planId}/review`, { action }),
     sync: (id: number): Promise<void> => http.post(`/hosts/${id}/sync`, {}, { timeout: TIMEOUT.LONG }),
     setMaintenance: (id: number, enabled: boolean): Promise<Host> =>
       http.post(`/hosts/${id}/maintenance`, { enabled }),
@@ -2871,6 +2897,12 @@ const api = {
     }> => http.post('/admin/hosting/zones', data),
     deleteHostingZone: (id: number): Promise<{ message: string }> =>
       http.delete(`/admin/hosting/zones/${id}`),
+    getHostingWithdrawals: (params: { page?: number; pageSize?: number; status?: string } = {}): Promise<{ withdrawals: Array<{ id: number; username?: string; amount: number; target: string; status: string; paymentMethod?: string | null; paymentReference?: string | null; paymentProof?: string | null; failureReason?: string | null; createdAt: string }>; total: number; page: number; pageSize: number }> =>
+      http.get('/hosting/admin/withdrawals', { params }),
+    updateHostingWithdrawalPayment: (id: number, data: { status: 'processing' | 'paid' | 'failed'; paymentMethod?: string; paymentReference?: string; paymentProof?: string; reason?: string }): Promise<{ withdrawal: Record<string, unknown> }> =>
+      http.post(`/hosting/admin/withdrawals/${id}/payment`, data),
+    approveHostingWithdrawal: (id: number): Promise<{ message: string; status: string }> =>
+      http.post(`/hosting/admin/withdrawals/${id}/approve`),
 
     // ==================== 计费管理 ====================
 

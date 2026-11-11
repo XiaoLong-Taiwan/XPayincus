@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "XPayincus backend service",
   "type": "module",
   "main": "dist/app.js",
@@ -187,7 +187,8 @@
     "test:traffic-notification-claim-guards": "node --import tsx scripts/test-traffic-notification-claim-guards.ts",
     "test:traffic-route-limit-guards": "node --import tsx scripts/test-traffic-route-limit-guards.ts",
     "test:traffic-reset-locks": "node --import tsx scripts/test-traffic-reset-locks.ts",
-    "test:instance-create-failure-compensation": "node --import tsx scripts/test-instance-create-failure-compensation.ts",
+    "test:instance-create-failure-compensation": "node --import tsx scripts/test-instance-create-failure-compensation.ts && node --import tsx scripts/test-durable-provisioning-recovery-guards.ts",
+    "test:durable-provisioning-recovery-guards": "node --import tsx scripts/test-durable-provisioning-recovery-guards.ts",
     "test:instance-create-turnstile-guards": "node --import tsx scripts/test-instance-create-turnstile-guards.ts",
     "test:websocket-origin-guard": "node --import tsx scripts/test-websocket-origin-guard.ts",
     "test:nat-ipv4-allocation-guards": "node --import tsx scripts/test-nat-ipv4-allocation-guards.ts",

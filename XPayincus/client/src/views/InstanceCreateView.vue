@@ -34,7 +34,8 @@ import ImageSelector from '@/components/instance/ImageSelector.vue'
 import SSHKeySelector from '@/components/instance/SSHKeySelector.vue'
 import InitCommandSelector from '@/components/extensions/InitCommandSelector.vue'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
-import { instancesPath, profilePath } from '@/utils/app-paths'
+import { instancesPath, profilePath, walletPath } from '@/utils/app-paths'
+import { readPurchaseDraft, savePurchaseDraft, clearPurchaseDraft } from '@/utils/purchaseDraft'
 import UserAvatar from '@/components/UserAvatar.vue'
 import type { Package, UserQuota, SshKey, AvailableHost, CreateInstanceRequest } from '@/types/api'
 import { normalizePackageSourceQuery, toPackageSourceRequest, type PackageSource } from '@/utils/publicCatalog'
@@ -113,6 +114,7 @@ const packagePlans = ref<PackagePlan[]>([])
 const imagesLoading = ref<boolean>(false)
 const hostsLoading = ref<boolean>(false)
 const plansLoading = ref<boolean>(false)
+const plansLoadedPackageId = ref<number | null>(null)
 const loading = ref<boolean>(true)
 const submitting = ref<boolean>(false)
 const error = ref<string>('')
@@ -155,11 +157,67 @@ const form = ref<InstanceForm>({
   autoRemotePort: true
 })
 
-watch(form, () => {
-  if (!submitting.value) {
-    createIntentIdempotencyKey.value = null
+const draftReady = ref(false)
+const draftRestored = ref(false)
+const purchaseReviewed = ref(false)
+const purchaseReviewLoading = ref(false)
+const purchaseReviewReady = ref(false)
+const purchaseBalance = ref<number | null>(null)
+const purchaseShortfall = computed(() => Math.max(0, (planPriceInfo.value?.finalPrice || 0) + (selectedPlan.value?.setupFee || 0) / 100 - (purchaseBalance.value || 0)))
+function persistDraft() {
+  if (!draftReady.value || !authStore.user) return
+  savePurchaseDraft(authStore.user.id, { source: packageSource.value, savedAt: Date.now(), idempotencyKey: createIntentIdempotencyKey.value, form: form.value })
+}
+watch([form, packageSource], () => {
+  purchaseReviewed.value = false
+  if (!submitting.value) createIntentIdempotencyKey.value = null
+  persistDraft()
+}, { deep: true, flush: 'sync' })
+watch(() => [form.value.packageId, form.value.planId, form.value.promoCode, packageSource.value], () => {
+  purchaseReviewReady.value = false
+}, { flush: 'sync' })
+async function reviewPurchase() {
+  if (purchaseReviewLoading.value) return
+  purchaseReviewed.value = false
+  purchaseReviewReady.value = false
+  purchaseBalance.value = null
+  purchaseReviewLoading.value = true
+  const intent = () => JSON.stringify([packageSource.value, form.value.packageId, form.value.planId, form.value.promoCode])
+  const requestedIntent = intent()
+  try {
+    const [catalog, balance] = await Promise.all([
+      api.packages.list(toPackageSourceRequest(packageSource.value)), api.billing.getUserBalance()
+    ])
+    if (requestedIntent !== intent()) return
+    packages.value = ((catalog as { packages?: Package[] }).packages || []).filter(p => p.active === 1)
+    if (form.value.packageId) await loadPackagePlans(form.value.packageId, true)
+    if (requestedIntent !== intent()) return
+    if (selectedPlan.value) {
+      form.value.cpu = selectedPlan.value.cpu
+      form.value.memory = selectedPlan.value.memory
+      form.value.disk = selectedPlan.value.disk
+    }
+    await loadAvailableHosts()
+    if (requestedIntent !== intent()) return
+    purchaseBalance.value = balance.balance.balance
+    promoCodeValid.value = null
+    promoCodeDiscount.value = 0
+    if (form.value.promoCode.trim()) await verifyPromoCode()
+    purchaseReviewReady.value = requestedIntent === intent() && !!selectedPackage.value && !!selectedPlan.value
+      && availableHosts.value.some(host => host.id === form.value.hostId)
+      && !selectedPackage.value.soldOut && !selectedPlan.value.isSoldOut
+      && (!form.value.promoCode.trim() || promoCodeValid.value === true)
+  } catch (err) {
+    purchaseBalance.value = null
+    error.value = translateError(err)
+  } finally {
+    purchaseReviewLoading.value = false
   }
-}, { deep: true })
+}
+function rechargeForPurchase() {
+  persistDraft()
+  void router.push({ path: walletPath(), query: { purchase: '1' } })
+}
 
 // 优惠码验证状态
 const promoCodeVerifying = ref(false)
@@ -371,6 +429,7 @@ const resourceLimitCheck = computed<QuotaCheckResult>(() => {
 
 const canSubmit = computed<boolean>(() => {
   // 售罄套餐不允许创建
+  if (loading.value || plansLoading.value || plansLoadedPackageId.value !== form.value.packageId || purchaseReviewLoading.value || (form.value.planId !== null && !purchaseReviewReady.value)) return false
   if (selectedPackage.value?.soldOut) {
     return false
   }
@@ -393,6 +452,7 @@ const canSubmit = computed<boolean>(() => {
   // 付费套餐需要选择方案
   if (isPaidPackage.value) {
     return baseChecks && form.value.planId !== null && !!selectedPlan.value && !selectedPlan.value.isSoldOut
+      && purchaseReviewReady.value && purchaseReviewed.value && purchaseBalance.value !== null && purchaseShortfall.value === 0
   }
   
   return baseChecks
@@ -578,13 +638,15 @@ onMounted(async (): Promise<void> => {
   await configStore.loadPublicConfig(true)
 
   // 检查 URL 参数（分享链接）
-  const packageParam = route.query.package as string | undefined
-  const planParam = route.query.plan as string | undefined
+  const savedDraft = authStore.user ? readPurchaseDraft(authStore.user.id) : null
+  const restoreDraft = savedDraft && (!route.query.package || Number(route.query.package) === savedDraft.form.packageId) ? savedDraft : null
+  const packageParam = (route.query.package || restoreDraft?.form.packageId) as string | undefined
+  const planParam = (route.query.plan || restoreDraft?.form.planId) as string | undefined
   const targetPackageId = packageParam ? Number(packageParam) : null
   const targetPlanId = planParam ? Number(planParam) : null
   
   // 确定初始加载的套餐来源
-  const initialSource = normalizePackageSourceQuery(route.query.source, route.query.zoneId)
+  const initialSource = normalizePackageSourceQuery(route.query.source || restoreDraft?.source, route.query.zoneId)
   
   try {
     const [zonesRes, userRes, keysRes] = await Promise.all([
@@ -629,19 +691,44 @@ onMounted(async (): Promise<void> => {
         // 套餐不存在，提示用户并选择第一个
         toast.warning(t('instance.createPage.sharedPackageNotFound'))
         if (filteredPackages.value.length > 0) {
-          selectPackage(filteredPackages.value[0])
+          await selectPackage(filteredPackages.value[0])
         }
       }
     } else {
       // 没有分享链接参数，默认选中第一个套餐
       if (filteredPackages.value.length > 0) {
-        selectPackage(filteredPackages.value[0])
+        await selectPackage(filteredPackages.value[0])
       }
     }
-    
-    if (sshKeys.value.length > 0) {
-      form.value.sshKeyId = sshKeys.value[0].id
+
+    if (sshKeys.value.length > 0) form.value.sshKeyId = sshKeys.value[0].id
+    if (restoreDraft && form.value.packageId === restoreDraft.form.packageId) {
+      const saved = restoreDraft.form
+      form.value.name = saved.name
+      instanceNameEditedByUser.value = true
+      if (!isPaidPackage.value) {
+        form.value.cpu = saved.cpu
+        form.value.memory = saved.memory
+        form.value.disk = saved.disk
+      }
+      await loadAvailableHosts()
+      if (availableHosts.value.some(host => host.id === saved.hostId)) form.value.hostId = saved.hostId
+      await loadAvailableImages(selectedPackage.value?.instance_type as 'container' | 'vm', form.value.memory, form.value.hostId || undefined)
+      if (availableImages.value.some(image => image.value === saved.image)) form.value.image = saved.image
+      if (sshKeys.value.some(key => key.id === saved.sshKeyId)) form.value.sshKeyId = saved.sshKeyId
+      form.value.customInitCommandIds = saved.customInitCommandIds || []
+      form.value.promoCode = saved.promoCode || ''
+      form.value.autoRemotePort = saved.autoRemotePort !== false
+      draftRestored.value = true
     }
+    await reviewPurchase()
+    if (restoreDraft && packageSource.value === restoreDraft.source &&
+      (Object.keys(form.value) as Array<keyof InstanceForm>).every(key =>
+        JSON.stringify(form.value[key]) === JSON.stringify(restoreDraft.form[key]))) {
+      createIntentIdempotencyKey.value = restoreDraft.idempotencyKey || null
+    }
+    draftReady.value = true
+    persistDraft()
   } catch (err: any) {
     error.value = t('instance.createPage.loadFailed') + ': ' + (err?.message || String(err))
   } finally {
@@ -812,16 +899,22 @@ async function selectPackage(pkg: Package, preferredPlanId?: number | null): Pro
 /**
  * 加载套餐方案列表
  */
-async function loadPackagePlans(packageId: number): Promise<void> {
+let plansSequence = 0
+async function loadPackagePlans(packageId: number, strict = false): Promise<void> {
+  const sequence = ++plansSequence
   plansLoading.value = true
+  plansLoadedPackageId.value = null
   try {
     const res = await api.packages.getPlans(packageId, { activeOnly: true })
+    if (sequence !== plansSequence || form.value.packageId !== packageId) return
     packagePlans.value = res.plans || []
+    plansLoadedPackageId.value = packageId
   } catch (err) {
     console.warn('Failed to load package plans:', err)
-    packagePlans.value = []
+    if (strict) throw err
+    if (sequence === plansSequence && form.value.packageId === packageId) packagePlans.value = []
   } finally {
-    plansLoading.value = false
+    if (sequence === plansSequence) plansLoading.value = false
   }
 }
 
@@ -925,6 +1018,8 @@ async function loadAvailableHosts(): Promise<void> {
   }
   
   hostsLoading.value = true
+  const hostIntent = () => JSON.stringify([form.value.packageId, form.value.planId, form.value.cpu, form.value.memory, form.value.disk])
+  const requestedHostIntent = hostIntent()
   try {
     const res = await api.instances.getAvailableHosts({
       packageId: form.value.packageId,
@@ -933,6 +1028,7 @@ async function loadAvailableHosts(): Promise<void> {
       memory: form.value.memory,
       disk: form.value.disk
     })
+    if (requestedHostIntent !== hostIntent()) return
     availableHosts.value = (res as { hosts?: AvailableHost[] }).hosts || []
 
     if (availableHosts.value.length === 0) {
@@ -947,6 +1043,7 @@ async function loadAvailableHosts(): Promise<void> {
       form.value.hostId = availableHosts.value[0].id
     }
   } catch (err: any) {
+    if (requestedHostIntent !== hostIntent()) return
     availableHosts.value = []
     form.value.hostId = null
     availableImages.value = []
@@ -1053,6 +1150,8 @@ async function loadAvailableImages(instanceType?: 'container' | 'vm', memory?: n
 
 async function handleSubmit(): Promise<void> {
   if (!canSubmit.value) return
+  if (isPaidPackage.value && (!purchaseReviewed.value || purchaseBalance.value === null || purchaseShortfall.value > 0)) return
+  if (selectedPackage.value?.soldOut || selectedPlan.value?.isSoldOut) return
   
   error.value = ''
   submitting.value = true
@@ -1077,6 +1176,7 @@ async function handleSubmit(): Promise<void> {
     if (isPaidPackage.value && !createIntentIdempotencyKey.value) {
       createIntentIdempotencyKey.value = crypto.randomUUID?.() || `instance-create-${Date.now()}-${Math.random().toString(36).slice(2)}`
     }
+    persistDraft()
     const requestPayload: CreateInstanceRequest = {
       name: form.value.name.trim(),
       packageId: form.value.packageId,
@@ -1095,6 +1195,8 @@ async function handleSubmit(): Promise<void> {
     }
 
     const response = await api.instances.create(requestPayload)
+    draftReady.value = false
+    if (authStore.user) clearPurchaseDraft(authStore.user.id)
     createIntentIdempotencyKey.value = null
     
     toast.success(t('instance.createPage.createSuccess'))
@@ -1129,6 +1231,12 @@ async function handleSubmit(): Promise<void> {
       </RouterLink>
     </header>
 
+    <p v-if="draftRestored" class="mb-3 text-sm text-themed-muted">{{ t('operations.draft') }}</p>
+    <section v-if="!loading && (isPaidPackage || form.planId !== null || plansLoadedPackageId !== form.packageId)" class="mb-4 rounded-xl border border-themed p-4 space-y-2">
+      <p>{{ t('operations.balance') }}: {{ purchaseBalance === null ? '—' : `¥${purchaseBalance.toFixed(2)}` }} · {{ t('operations.shortfall') }}: ¥{{ purchaseShortfall.toFixed(2) }}</p>
+      <div class="flex flex-wrap gap-2"><button type="button" class="btn btn-secondary" :disabled="purchaseReviewLoading || submitting" @click="reviewPurchase">{{ t('operations.review') }}</button><button type="button" class="btn btn-secondary" @click="rechargeForPurchase">{{ t('operations.recharge') }}</button><RouterLink class="btn btn-secondary" to="/tasks">{{ t('operations.title') }}</RouterLink></div>
+      <label class="flex items-start gap-2 text-sm"><input v-model="purchaseReviewed" type="checkbox" :disabled="!purchaseReviewReady || purchaseReviewLoading || purchaseBalance === null || selectedPlan?.isSoldOut || selectedPackage?.soldOut" />{{ t('operations.confirm') }}</label>
+    </section>
     <!-- 套餐来源切换器 -->
     <div v-if="!loading" class="flex justify-center mb-4 lg:mb-3 shrink-0">
       <div

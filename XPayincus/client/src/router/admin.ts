@@ -60,6 +60,12 @@ async function handleOAuthCode(): Promise<boolean> {
 
 const routes: RouteRecordRaw[] = [
   {
+    path: '/admin/tasks',
+    name: 'admin-tasks',
+    component: () => import('@/views/TasksView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'operations.title', title: '任務中心' }
+  },
+  {
     path: '/',
     name: 'admin-root',
     redirect: '/admin/users',
@@ -91,6 +97,12 @@ const routes: RouteRecordRaw[] = [
     name: 'admin-hosting',
     component: () => import('@/views/admin/HostingView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'nav.hosting', title: '托管' }
+  },
+  {
+    path: '/admin/hosting/withdrawals',
+    name: 'admin-hosting-withdrawals',
+    component: () => import('@/views/admin/HostingWithdrawalsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'admin.hostingWithdrawals.title', title: '托管提款' }
   },
   {
     path: '/admin/statistics',

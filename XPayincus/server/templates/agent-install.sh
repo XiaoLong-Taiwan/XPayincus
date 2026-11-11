@@ -624,6 +624,9 @@ agent_id: "${INCUDAL_AGENT_ID}"
 agent_secret: "${INCUDAL_AGENT_SECRET}"
 heartbeat_interval_seconds: ${HEARTBEAT_INTERVAL}
 request_timeout_seconds: ${REQUEST_TIMEOUT}
+state_dir: "/var/lib/incudal-agent"
+spool_max_bytes: 16777216
+spool_retention_hours: 72
 EOF_CONFIG
 fi
 
@@ -639,6 +642,9 @@ ExecStart=${BIN_PATH} -config ${CONFIG_FILE}
 Restart=always
 RestartSec=5
 User=root
+StateDirectory=incudal-agent
+StateDirectoryMode=0700
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

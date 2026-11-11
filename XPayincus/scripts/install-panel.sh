@@ -1112,6 +1112,9 @@ EnvironmentFile=${ENV_FILE}
 Environment=HOME=${INSTALL_DIR}
 Environment=NPM_CONFIG_CACHE=${INSTALL_DIR}/.npm
 Environment=XDG_CACHE_HOME=${INSTALL_DIR}/.cache
+Environment=INCUDAL_AGENT_STATE_DIR=/var/lib/incudal-panel-agent
+StateDirectory=incudal-panel-agent
+StateDirectoryMode=0700
 Environment=PATH=/usr/local/libexec/incudal:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 启动前自动执行数据库迁移

@@ -28,7 +28,7 @@ for entry in \
   server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh \
   server/scripts/export-legacy-host.mjs server/scripts/LEGACY_HOST_EXPORT.md \
   deploy/compose/docker-compose.yml deploy/compose/compose.yaml deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore \
-  deploy/compose/panel.sh deploy/compose/download.sh deploy/compose/update.py deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template \
+  deploy/compose/panel.sh deploy/compose/download.sh deploy/compose/update.py deploy/compose/operations.py deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template \
   deploy/compose/origin-entrypoint.sh deploy/compose/edge-nginx.conf.template deploy/compose/tunnel-nginx.conf.template \
   deploy/compose/README.md deploy/compose/https-proxy.conf.example; do
   [[ -f "$STAGING/source/XPayincus/$entry" && -r "$STAGING/source/XPayincus/$entry" && -s "$STAGING/source/XPayincus/$entry" ]] || { printf 'Missing, unreadable or empty committed Dashboard source: %s\n' "$entry" >&2; exit 1; }

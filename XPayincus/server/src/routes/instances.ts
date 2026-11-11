@@ -95,6 +95,7 @@ import {
 import { acquireLock, releaseLock } from '../lib/distributed-lock.js'
 
 import { resolveEffectiveSwapSize, resolveIncusSwapValue } from '../lib/instance-swap.js'
+import { prepareDurableInstance, type DurableProvisionInput } from '../lib/durable-instance-provision.js'
 
 const PORT_MAPPING_LOCK_OPTIONS = {
   expireMs: 120000,
@@ -102,6 +103,7 @@ const PORT_MAPPING_LOCK_OPTIONS = {
   retryIntervalMs: 100
 }
 const MAX_BATCH_PORT_MAPPINGS = 100
+const activePreparations = new Set<number>()
 
 async function findNormalPaidCreateReplay(userId: number, idempotencyKey: string) {
   const instance = await prisma.instance.findUnique({
@@ -325,6 +327,7 @@ async function claimInstanceForDelete(instanceId: number, currentStatus: Instanc
   return prisma.$transaction(async (tx) => {
     const locked = await tryAdvisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, instanceId)
     if (!locked) return false
+    if (await tx.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'review_required', 'completed', 'recovering'] }, instanceIds: { array_contains: [instanceId] } }, select: { id: true } })) return false
 
     const [activeRestoreTask, activeUploadTask, activeInstanceTask] = await Promise.all([
       tx.restoreTask.findFirst({
@@ -649,6 +652,8 @@ async function buildChangeHostOptions(instance: {
 }
 
 export default async function instanceRoutes(fastify: FastifyInstance) {
+  const { registerMaintenanceMutatorGuard } = await import('../services/host-maintenance.js')
+  registerMaintenanceMutatorGuard(fastify, 'instances')
   // 获取实例列表（支持分页和搜索）
   fastify.get<{
     Querystring: {
@@ -1477,6 +1482,9 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       disk: requestedDisk,
       hostId: hostId,
       ownerId: pkg.user_id!,  // 套餐所有者ID，限制只能在其宿主机上创建实例
+      networkMode: normalizeNetworkMode(pkg.network_mode),
+      instanceType: pkgInstanceType,
+      portCount: networkModeAllowsPortMapping(normalizeNetworkMode(pkg.network_mode)) ? ((pkg as typeof pkg & { port_limit?: number }).port_limit || 0) : 0,
       packageId
     })
 
@@ -1622,7 +1630,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
 
     // ==================== 使用带行锁的事务确保并发安全 ====================
     const { Prisma } = await import('@prisma/client')
-    let instanceId: number
+    let instanceId: number | undefined
     let host: Awaited<ReturnType<typeof db.selectAndReserveHostWithLock>>
     let staticIPv4: string | null = null
     let staticIPv6: string | null = null
@@ -1652,6 +1660,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           ownerId: pkg.user_id!,
           packageId,
           networkMode,
+          instanceType: pkgInstanceType,
           portCount: networkModeAllowsPortMapping(networkMode) ? (pkgWithExtras.port_limit || 0) : 0
         })
 
@@ -1766,6 +1775,34 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
             autoRenew: false
           }
         })
+
+        await tx.provisioningJob.create({
+          data: {
+            instanceId: instance.id,
+            status: 'preparing',
+            phase: 'preparing',
+            payload: encryptSensitiveData(JSON.stringify({
+              hostId: lockedHost.id, userId: user.id,
+              resources: { cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk },
+              preparation: { displayName: name, sshKey, extraShellCommands },
+              config: {
+                name: incusId, image: actualImageAlias, cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk,
+                networkMode, instanceType: effectiveInstanceType, nested: Boolean(pkg.nested), privileged: Boolean(pkg.privileged),
+                portLimit: instanceQuota.portLimit ?? 0, sshPort: metaData.sshPort, swapEnabled: false, swapSize: instanceQuota.swapSize,
+                autoRemotePort: request.body.autoRemotePort,
+                limitsRead: pkg.io_limit_mode === 'iops' ? null : pkg.limits_read,
+                limitsWrite: pkg.io_limit_mode === 'iops' ? null : pkg.limits_write,
+                limitsReadIops: pkg.io_limit_mode === 'iops' ? pkg.limits_read_iops : null,
+                limitsWriteIops: pkg.io_limit_mode === 'iops' ? pkg.limits_write_iops : null,
+                limitsIngress: planBandwidthLimit || pkg.limits_ingress, limitsEgress: planBandwidthLimit || pkg.limits_egress,
+                limitsProcesses: pkg.limits_processes, limitsCpuPriority: pkg.limits_cpu_priority,
+                bootAutostart: pkg.boot_autostart, bootAutostartPriority: pkg.boot_autostart_priority,
+                bootAutostartDelay: pkg.boot_autostart_delay, bootHostShutdownTimeout: pkg.boot_host_shutdown_timeout
+              }
+            }))
+          }
+        })
+        await tx.provisioningEvent.create({ data: { instanceId: instance.id, phase: 'preparing' } })
 
         // →→→ 第四步：抢占成功后才扣除余额并记录日志 ←←←
         let balanceLogId: number | undefined
@@ -1890,6 +1927,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       })
 
       instanceId = result.instanceId
+      activePreparations.add(instanceId)
       host = result.host
       planBandwidthLimit = result.planBandwidthLimit
 
@@ -1941,6 +1979,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         })()
       }
     } catch (err: any) {
+      if (instanceId) activePreparations.delete(instanceId)
       const errorMessage = err?.message || String(err)
 
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002' && normalPaidIdempotencyKey) {
@@ -2002,6 +2041,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       throw err
     }
 
+    try {
     // 事务成功后，完成 IP 分配和存储池选择（这些不需要在事务中）
 
     // 类型断言：host 在事务成功后一定不为 null
@@ -2187,7 +2227,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     // 根据 ioLimitMode 选择性传入 IO 限制参数
     const ioMode = pkgConfig.io_limit_mode || 'throughput'
 
-    createInstanceAsync(instanceId, host, {
+    await createInstanceAsync(instanceId, host, {
       autoRemotePort: request.body.autoRemotePort,
       name: incusId,
       image: actualImageAlias,
@@ -2225,10 +2265,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       bootAutostartPriority: pkgConfig.boot_autostart_priority,
       bootAutostartDelay: pkgConfig.boot_autostart_delay,
       bootHostShutdownTimeout: pkgConfig.boot_host_shutdown_timeout
-    }, user.id, { cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk }).catch(err => {
-      const errorMessage = err instanceof Error ? err.message : String(err)
-      fastify.log.error({ err: errorMessage }, `实例 ${instanceId} 创建失败`)
-    })
+    }, user.id, { cpu: requestedCpu, memory: requestedMemory, disk: requestedDisk })
 
     reply.code(202).send({
       message: 'Instance creating, please refresh later',
@@ -2242,6 +2279,54 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         rootPassword: metaData.rootPassword
       }
     })
+    } finally {
+      activePreparations.delete(instanceId)
+    }
+  })
+
+  fastify.get<{ Params: { id: string } }>('/:id/provisioning', {
+    onRequest: [fastify.authenticate]
+  }, async (request, reply) => {
+    const instanceId = parsePositiveRouteId(request.params.id)
+    if (!instanceId) return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
+    const instance = await db.getInstanceById(instanceId)
+    if (!instance) return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
+    if (!await checkInstanceOperationPermission(request.user, instance)) return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
+    const job = await prisma.provisioningJob.findUnique({ where: { instanceId }, select: { id: true, status: true, phase: true, error: true, attempts: true, createdAt: true, updatedAt: true } })
+    const events = await prisma.provisioningEvent.findMany({ where: { instanceId }, orderBy: { id: 'desc' }, take: 100 })
+    return { job, events: events.reverse() }
+  })
+
+  fastify.post<{ Params: { id: string } }>('/:id/provisioning/retry', {
+    onRequest: [fastify.authenticate, fastify.requireAdmin]
+  }, async (request, reply) => {
+    const instanceId = parsePositiveRouteId(request.params.id)
+    if (!instanceId) return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
+    const job = await prisma.provisioningJob.findUnique({ where: { instanceId } })
+    if (!job || job.status !== 'review_required') return reply.code(409).send({ error: '交付任務不允許重試' })
+    const payload = decryptSensitiveData(job.payload)
+    if (!payload) return reply.code(409).send({ error: '無法解密交付準備資料' })
+    let preparing: boolean
+    try {
+      const input = JSON.parse(payload)
+      if (!input || !Number.isInteger(input.hostId) || !Number.isInteger(input.userId) || !input.resources || !input.config || typeof input.config.name !== 'string' || typeof input.config.networkMode !== 'string' || ['cpu', 'memory', 'disk'].some(key => !Number.isFinite(input.resources[key]) || input.resources[key] < 0)) {
+        return reply.code(409).send({ error: '交付準備資料不完整，需人工核實' })
+      }
+      preparing = !!input.preparation || input.config.image === undefined
+      if (!preparing && (typeof input.config.image !== 'string' || !input.config.image)) return reply.code(409).send({ error: '交付映像資料不完整' })
+    } catch {
+      return reply.code(409).send({ error: '交付準備資料格式錯誤，需人工核實' })
+    }
+    const claimed = await prisma.$transaction(async tx => {
+      const result = await tx.provisioningJob.updateMany({
+        where: { instanceId, status: 'review_required', updatedAt: job.updatedAt, instance: { status: { in: preparing ? ['creating'] : ['creating', 'running', 'stopped'] } } },
+        data: { status: preparing ? 'preparing' : 'pending', phase: preparing ? 'preparing' : 'queued', attempts: 0, error: null }
+      })
+      if (result.count) await tx.provisioningEvent.create({ data: { instanceId, phase: preparing ? 'preparing' : 'queued' } })
+      return result
+    })
+    if (!claimed.count) return reply.code(409).send({ error: '交付任務不允許重試' })
+    return reply.code(202).send({ success: true, action: 'retry' })
   })
 
   // 获取实例详情
@@ -6429,6 +6514,7 @@ async function compensateFailedInstanceCreation(input: {
   portLimit: number
   instanceName: string
   errorMessage: string
+  preparingUpdatedAt?: Date
 }): Promise<{
   claimed: boolean
   refundStatus: 'refunded' | 'not_required' | 'already_refunded' | 'not_completed' | 'failed' | 'already_handled'
@@ -6445,6 +6531,27 @@ async function compensateFailedInstanceCreation(input: {
     portLimit,
     instanceName: _instanceName
   } = input
+  const persistentJob = await prisma.provisioningJob.findUnique({ where: { instanceId }, select: { id: true } })
+  if (persistentJob) {
+    return prisma.$transaction(async tx => {
+      if (input.preparingUpdatedAt) {
+        if (activePreparations.has(instanceId)) return { claimed: false, refundStatus: 'already_handled' as const, refundAmount: 0 }
+        const timedOut = await tx.provisioningJob.updateMany({ where: { instanceId, status: 'preparing', updatedAt: input.preparingUpdatedAt }, data: { phase: 'compensating' } })
+        if (!timedOut.count) return { claimed: false, refundStatus: 'already_handled' as const, refundAmount: 0 }
+      }
+      const claimed = await tx.instance.updateMany({ where: { id: instanceId, status: 'creating' }, data: { status: 'error' } })
+      if (!claimed.count) return { claimed: false, refundStatus: 'already_handled' as const, refundAmount: 0 }
+      const ports = networkModeAllowsPortMapping(networkMode) ? portLimit : 0
+      await tx.$executeRaw(Prisma.sql`UPDATE hosts SET cpu_used = GREATEST(cpu_used - ${resources.cpu}, 0), memory_used = GREATEST(memory_used - ${resources.memory}, 0), disk_used = GREATEST(disk_used - ${resources.disk}, 0), nat_ports_used_count = GREATEST(nat_ports_used_count - ${ports}, 0) WHERE id = ${host.id}`)
+      if (networkModeNeedsPublicIpv4(networkMode)) await db.releasePublicIpv4ForInstance(tx, instanceId)
+      await tx.ipAddress.deleteMany({ where: { instanceId } })
+      await tx.instance.update({ where: { id: instanceId }, data: { ipv4: null, ipv6: null } })
+      const compensation = await db.compensateFailedInstancePurchase(instanceId, userId, host.id, tx)
+      await tx.provisioningJob.update({ where: { instanceId }, data: { status: 'failed', phase: 'compensated', payload: '', error: '交付失敗，已完成資源及帳務補償' } })
+      await tx.provisioningEvent.create({ data: { instanceId, phase: 'compensated' } })
+      return { claimed: true, refundStatus: compensation.refunded ? 'refunded' as const : 'not_required' as const, refundAmount: compensation.refundAmount, refundReason: compensation.reason }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 15000 })
+  }
   const updateResult = await prisma.instance.updateMany({
     where: {
       id: instanceId,
@@ -6510,7 +6617,116 @@ async function compensateFailedInstanceCreation(input: {
 /**
  * 异步创建实例
  */
-async function createInstanceAsync(
+async function createInstanceAsync(...args: Parameters<typeof executeInstanceProvisioning>): Promise<void> {
+  const [instanceId, host, config, userId, resources] = args
+  await prisma.$transaction(async tx => {
+    const queued = await tx.provisioningJob.updateMany({
+      where: { instanceId, status: 'preparing', instance: { status: 'creating' } },
+      data: { status: 'pending', phase: 'queued', payload: encryptSensitiveData(JSON.stringify({ hostId: host.id, config, userId, resources })), error: null }
+    })
+    if (queued.count !== 1) throw new Error('交付準備已取消，請查詢實例交付狀態')
+    await tx.provisioningEvent.create({ data: { instanceId, phase: 'queued' } })
+  })
+}
+
+let provisioningActive = false
+
+async function provisioningPhase(instanceId: number, phase: string): Promise<void> {
+  await prisma.$transaction([
+    prisma.provisioningJob.update({ where: { instanceId }, data: { phase } }),
+    prisma.provisioningEvent.create({ data: { instanceId, phase } })
+  ])
+}
+
+export async function processProvisioningJobs(): Promise<void> {
+  if (provisioningActive) return
+  provisioningActive = true
+  try {
+    const jobs = await prisma.provisioningJob.findMany({ where: {
+      instanceId: { notIn: [...activePreparations] },
+      instance: { host: {
+        maintenanceSources: { none: { status: { in: ['running', 'recovering', 'review_required', 'completed'] } } },
+        maintenanceTargets: { none: { status: { in: ['running', 'recovering', 'review_required', 'completed'] } } }
+      } },
+      OR: [
+      { status: 'pending', phase: { not: 'retry_wait' } },
+      { status: 'pending', phase: 'retry_wait', updatedAt: { lt: new Date(Date.now() - 30000) } },
+      { status: 'processing', updatedAt: { lt: new Date(Date.now() - 30000) } },
+      { status: 'preparing', phase: 'compensation_pending' },
+      { status: 'preparing', phase: 'preparing' },
+      { status: 'preparing', phase: 'retry_wait', updatedAt: { lt: new Date(Date.now() - 30000) } },
+      { status: 'preparing', updatedAt: { lt: new Date(Date.now() - 10 * 60000) } }
+    ] }, orderBy: { id: 'asc' }, take: 10 })
+    for (const job of jobs) {
+      try {
+        if (activePreparations.has(job.instanceId)) continue
+        const payload = decryptSensitiveData(job.payload)
+        if (!payload) throw new Error('Cannot decrypt provisioning payload')
+        const input = JSON.parse(payload) as DurableProvisionInput
+        if (!input || !Number.isSafeInteger(input.hostId) || !Number.isSafeInteger(input.userId) || !input.config || typeof input.config.name !== 'string' || !input.resources || [input.resources.cpu, input.resources.memory, input.resources.disk].some(value => !Number.isFinite(value) || value < 0)) throw new Error('交付任務資料不完整，保留等待核實')
+        const host = await db.getHostById(input.hostId)
+        if (!host) throw new Error('Provisioning host unavailable')
+        const instance = await prisma.instance.findUnique({ where: { id: job.instanceId } })
+        if (!instance || !['creating', 'running', 'stopped'].includes(instance.status)) {
+          const phase = 'review_required'
+          await prisma.$transaction([
+            prisma.provisioningJob.update({ where: { id: job.id }, data: { status: phase, phase, error: '實例狀態與交付任務不一致，保留資料等待核實' } }),
+            prisma.provisioningEvent.create({ data: { instanceId: job.instanceId, phase } })
+          ])
+          continue
+        }
+        if (instance.hostId !== input.hostId || instance.userId !== input.userId || instance.incusId !== input.config.name) throw new Error('交付任務與實例歸屬不符')
+        if (await prisma.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'recovering', 'review_required', 'completed'] }, OR: [{ sourceHostId: host.id }, { targetHostId: host.id }] }, select: { id: true } })) continue
+        if (job.status === 'preparing') {
+          const client = await getIncusClient(host)
+          const names = await client.request<string[]>('GET', '/1.0/instances')
+          if (names.includes(`/1.0/instances/${encodeURIComponent(input.config.name)}`)) throw new Error('準備階段發現同名遠端資源，保留容量與帳務等待核實')
+          if (input.preparation) {
+            await prepareDurableInstance(job.instanceId, host, input)
+            continue
+          }
+          await compensateFailedInstanceCreation({ instanceId: job.instanceId, host, userId: input.userId, resources: input.resources, networkMode: input.config.networkMode, portLimit: input.config.portLimit || 0, instanceName: input.config.name, preparingUpdatedAt: job.updatedAt, errorMessage: '準備交付時程序中斷，已取消並補償' })
+          continue
+        }
+        const claimed = await prisma.provisioningJob.updateMany({ where: { id: job.id, status: job.status, updatedAt: job.updatedAt }, data: { status: 'processing', attempts: { increment: 1 } } })
+        if (!claimed.count) continue
+        if (instance.status === 'creating') await executeInstanceProvisioning(job.instanceId, host, input.config, input.userId, input.resources)
+        else {
+          const client = await getIncusClient(host)
+          const remote = await getInstance(client, input.config.name) as { config?: Record<string, string> }
+          if (remote.config?.['user.xpayincus.instance_id'] !== String(job.instanceId)) throw new Error('提交後遠端資源歸屬不符，保留等待核實')
+          await finishInstanceProvisioning(job.instanceId, host, input.config, input.userId)
+        }
+        const result = await prisma.instance.findUnique({ where: { id: job.instanceId }, select: { status: true } })
+        const phase = result && ['running', 'stopped'].includes(result.status) ? 'completed' : 'failed'
+        await prisma.$transaction(async tx => {
+          const completed = await tx.provisioningJob.updateMany({ where: { id: job.id, status: 'processing' }, data: { status: phase, phase, payload: '', error: phase === 'completed' ? null : '交付失敗' } })
+          if (completed.count) await tx.provisioningEvent.create({ data: { instanceId: job.instanceId, phase } })
+        })
+      } catch (error) {
+        const latest = await prisma.provisioningJob.findUnique({ where: { id: job.id } })
+        if (!latest || !['preparing', 'pending', 'processing'].includes(latest.status)) continue
+        if (job.status === 'preparing' && (latest.status !== 'preparing' || latest.updatedAt.getTime() !== job.updatedAt.getTime())) continue
+        const attempts = Math.max(job.attempts + 1, latest.attempts)
+        const phase = attempts >= 10 ? 'review_required' : 'retry_wait'
+        await prisma.$transaction(async tx => {
+          const claimed = await tx.provisioningJob.updateMany({
+            where: { id: job.id, status: latest.status, updatedAt: latest.updatedAt },
+            data: {
+              status: attempts >= 10 ? 'review_required' : job.status === 'preparing' ? 'preparing' : 'processing',
+              phase, attempts, error: error instanceof Error ? error.message : String(error)
+            }
+          })
+          if (claimed.count) await tx.provisioningEvent.create({ data: { instanceId: job.instanceId, phase } })
+        })
+      }
+    }
+  } finally {
+    provisioningActive = false
+  }
+}
+
+async function executeInstanceProvisioning(
   instanceId: number,
   host: Host,
   config: {
@@ -6612,11 +6828,24 @@ async function createInstanceAsync(
     console.log(`[Provisioning] 资源配置: CPU=${config.cpu}, Memory=${config.memory}MB, Disk=${config.disk}MB`)
     console.log(`[Provisioning] Incus 配置已生成，敏感字段已跳过日志输出`)
 
-    await createInstance(client, incusConfig)
+    await provisioningPhase(instanceId, 'checking_resource')
+    incusConfig.config = { ...incusConfig.config, 'user.xpayincus.instance_id': String(instanceId) }
+    const remoteNames = await client.request<string[]>('GET', '/1.0/instances')
+    const exists = remoteNames.includes(`/1.0/instances/${encodeURIComponent(config.name)}`)
+    if (exists) {
+      const existing = await getInstance(client, config.name) as { config?: Record<string, string> }
+      if (existing.config?.['user.xpayincus.instance_id'] !== String(instanceId)) throw new Error('同名 Incus 資源不屬於此交付任務，需人工處理')
+    }
+    if (!exists) {
+      await provisioningPhase(instanceId, 'creating_resource')
+      await createInstance(client, incusConfig)
+    }
+    await provisioningPhase(instanceId, 'starting_resource')
     const instanceTypeLabel = config.instanceType === 'vm' ? '虚拟机' : '容器'
     console.log(`[Provisioning] 实例 ${config.name} ${instanceTypeLabel}创建完成`)
 
-    await startInstance(client, config.name)
+    const currentState = await getInstanceState(client, config.name) as { status?: string }
+    if (currentState.status !== 'Running') await startInstance(client, config.name)
     console.log(`[Provisioning] 实例 ${config.name} 启动命令已发送`)
 
     // KVM 虚拟机需要等待 QEMU 真正完成启动（BIOS→内核→cloud-init→agent）
@@ -6640,7 +6869,7 @@ async function createInstanceAsync(
         } catch { /* 继续等待 */ }
       }
       if (!vmStarted) {
-        console.warn(`[Provisioning] VM ${config.name} 启动等待超时 (180s)，继续流程`)
+        throw new Error('虛擬機啟動逾時，保留資源等待重試核實')
       }
     }
 
@@ -6652,80 +6881,82 @@ async function createInstanceAsync(
 
     // 使用原子操作更新状态，防止与超时清理任务竞争
     // 只有状态仍为 creating 时才更新为 running
-    const updateResult = await prisma.instance.updateMany({
-      where: {
-        id: instanceId,
-        status: 'creating' // 原子条件
-      },
-      data: {
-        status: 'running',
-        ipv4: ipv4 ?? null,
-        ipv6: ipv6 ?? null,
-        storagePoolName: config.storagePool || 'default'
+    await provisioningPhase(instanceId, 'committing')
+    const updateResult = await prisma.$transaction(async tx => {
+      const claimed = await tx.instance.updateMany({
+        where: { id: instanceId, status: 'creating' },
+        data: {
+          status: 'running', ipv4, ipv6,
+          storagePoolName: config.storagePool || 'default'
+        }
+      })
+      if (claimed.count) {
+        await tx.provisioningJob.update({ where: { instanceId }, data: { phase: 'postcommit' } })
+        await tx.provisioningEvent.create({ data: { instanceId, phase: 'postcommit' } })
+        for (const address of [
+          { address: ipv4, type: 'inet4' as const, device: 'eth0' },
+          { address: ipv6, type: 'inet6' as const, device: 'eth1' }
+        ]) {
+          if (!address.address) continue
+          const existing = await tx.ipAddress.findFirst({ where: { instanceId, address: address.address } })
+          if (!existing) await tx.ipAddress.create({ data: {
+            address: address.address, type: address.type, device: address.device,
+            isPrimary: true, instanceId, hostId: host.id
+          } })
+        }
       }
+      return claimed
     })
 
     // 如果状态已被超时清理任务修改（变为 error），需要清理已创建的 Incus 实例
     if (updateResult.count === 0) {
-      console.log(`[Provisioning] 实例 ${instanceId} 已被超时清理任务处理，清理已创建的 Incus 实例`)
-      try {
-        await stopInstance(client, config.name, true)
-        await deleteInstance(client, config.name)
-        console.log(`[Provisioning] Incus 实例 ${config.name} 已清理（因超时）`)
-      } catch (cleanupErr) {
-        console.error(`[Provisioning] 清理超时实例失败:`, cleanupErr)
-      }
-      // 不再继续后续流程（IP 记录、通知等）
-      return
-    }
-
-    // 创建 IP 地址记录 (新双网卡架构: eth0=IPv4, eth1=IPv6)
-    if (ipv4) {
-      try {
-        await db.createIpAddress({
-          address: ipv4,
-          type: 'inet4',
-          isPrimary: true,
-          device: 'eth0',  // 新双网卡架构: IPv4 在 eth0
-          instanceId
-        })
-        console.log(`[Provisioning] 主 IPv4 地址记录已创建: ${ipv4} (device: eth0)`)
-      } catch (err) {
-        console.warn(`[Provisioning] 创建 IPv4 记录失败 (可能已存在):`, err)
-      }
-    }
-
-    if (ipv6) {
-      try {
-        await db.createIpAddress({
-          address: ipv6,
-          type: 'inet6',
-          isPrimary: true,
-          device: 'eth1',  // 新双网卡架构: IPv6 在 eth1
-          instanceId
-        })
-        console.log(`[Provisioning] 主 IPv6 地址记录已创建: ${ipv6} (device: eth1)`)
-      } catch (err) {
-        console.warn(`[Provisioning] 创建 IPv6 记录失败 (可能已存在):`, err)
-      }
+      throw new Error('實例狀態已改變；保留遠端資源並等待核實')
     }
 
     console.log(`[Provisioning] ✔ 实例 ${instanceId} (${config.name}) 创建成功!`)
 
-    // 自动下发远程端口映射（Linux=22/SSH，Windows=3389/RDP）。不计入用户端口配额；
-    // 失败只记日志，不影响实例创建结果。
+    await finishInstanceProvisioning(instanceId, host, config, userId)
+
+  } catch (error) {
+    const current = await prisma.instance.findUnique({ where: { id: instanceId }, select: { status: true } })
+    if (current && ['running', 'stopped'].includes(current.status)) throw error
+    const client = await getIncusClient(host)
+    const names = await client.request<string[]>('GET', '/1.0/instances')
+    if (names.includes(`/1.0/instances/${encodeURIComponent(config.name)}`)) throw error
+    await compensateFailedInstanceCreation({ instanceId, host, userId, resources, networkMode: config.networkMode, portLimit: config.portLimit || 0, instanceName: config.name, errorMessage: error instanceof Error ? error.message : String(error) })
+    throw error
+  }
+}
+
+async function finishInstanceProvisioning(instanceId: number, host: Host, config: Parameters<typeof executeInstanceProvisioning>[2], userId: number): Promise<void> {
+  const ipv4 = config.ipv4Address || null
+  const ipv6 = config.ipv6Address || null
+  const completed = new Set((await prisma.provisioningEvent.findMany({ where: { instanceId, phase: { in: ['ports_completed', 'notification_completed', 'email_completed', 'log_completed'] } }, select: { phase: true } })).map(event => event.phase))
+  try {
+    if (!completed.has('ports_completed')) {
+    const lockKey = getInstancePortMappingLockKey(instanceId)
+    const lock = await acquireLock(lockKey, PORT_MAPPING_LOCK_OPTIONS)
+    if (!lock.success || !lock.ownerId) throw new Error('端口映射操作忙碌中')
+    try {
     await provisionAutoRemotePort({
       instanceId,
       image: config.image,
       networkMode: config.networkMode,
-      autoRemotePort: config.autoRemotePort
+      autoRemotePort: config.autoRemotePort,
+      strict: true
     })
+    await provisioningPhase(instanceId, 'ports_completed')
+    } finally { await releaseLock(lockKey, lock.ownerId) }
+    }
 
     const instance = await db.getInstanceById(instanceId)
+    if (!instance) throw new Error('交付實例紀錄不存在')
     if (instance) {
       // 发送通知
       const { sendNotification } = await import('../lib/notifier.js')
-      await sendNotification(userId, 'instance_created', {
+      if (!completed.has('notification_completed')) {
+      const notified = await sendNotification(userId, 'instance_created', {
+        instanceId,
         instanceName: instance.name,
         status: 'running',
         hostName: host.name,
@@ -6737,11 +6968,17 @@ async function createInstanceAsync(
         networkMode: config.networkMode,
         ipv4: ipv4 || undefined,
         ipv6: ipv6 || undefined
-      })
+      }, { provisioningInstanceId: instanceId })
 
+      if (notified.failed) throw new Error('交付通知尚未全部發送成功')
+      const inbox = await prisma.inboxMessage.findFirst({ where: { userId, eventType: 'instance_created', data: { path: ['instanceId'], equals: instanceId } } })
+      if (!inbox) throw new Error('交付站內通知尚未寫入')
+      await provisioningPhase(instanceId, 'notification_completed')
+      }
       // 发送实例创建成功邮件通知
+      if (!completed.has('email_completed')) {
       try {
-        const { sendInstanceCreatedEmail } = await import('../lib/mailer.js')
+        const { sendInstanceCreatedEmail, sendAdminInstanceCreatedEmail } = await import('../lib/mailer.js')
         const user = await db.findUserById(userId)
         if (user && user.email) {
           // 获取计费信息
@@ -6751,12 +6988,24 @@ async function createInstanceAsync(
               packagePlanId: true,
               billingPrice: true,
               expiresAt: true,
+              snapshottedSpecs: true,
+              package: { select: { name: true } },
+              billingRecords: { where: { type: 'newPurchase' }, orderBy: { id: 'asc' }, take: 1, select: { amount: true } },
               packagePlan: { select: { name: true } }
             }
           })
-          const isPaid = instanceWithBilling?.packagePlanId !== null
+          const isPaid = instanceWithBilling?.packagePlanId != null
+          const snapshot = instanceWithBilling?.snapshottedSpecs as { adminGift?: boolean; hostOwnerGift?: boolean; chargedFirstMonth?: boolean; giftDays?: number; giftByType?: 'admin' | 'host_owner' } | null
 
-          await sendInstanceCreatedEmail(user.email, {
+          const mailed = snapshot?.adminGift || snapshot?.hostOwnerGift ? await sendAdminInstanceCreatedEmail(user.email, {
+            username: user.username, instanceName: instance.name, hostName: host.name,
+            packageName: instanceWithBilling?.package?.name || '', planName: instanceWithBilling?.packagePlan?.name,
+            cpu: config.cpu, memory: config.memory, disk: config.disk, isPaid,
+            charged: snapshot.chargedFirstMonth === true,
+            amount: Number(instanceWithBilling?.billingRecords[0]?.amount ?? 0),
+            expiresAt: instanceWithBilling?.expiresAt ?? undefined, giftDays: snapshot.giftDays,
+            creatorType: snapshot.giftByType || (snapshot.hostOwnerGift ? 'host_owner' : 'admin')
+          }) : await sendInstanceCreatedEmail(user.email, {
             username: user.username,
             instanceName: instance.name,
             hostName: host.name,
@@ -6771,75 +7020,27 @@ async function createInstanceAsync(
             amount: isPaid ? Number(instanceWithBilling?.billingPrice) : undefined,
             expiresAt: instanceWithBilling?.expiresAt ?? undefined
           })
+          if (!mailed.success && mailed.error !== 'SMTP not configured') throw new Error('交付郵件發送失敗')
         }
       } catch (emailErr) {
-        console.warn(`[Provisioning] 发送实例创建成功邮件失败:`, emailErr)
+        throw emailErr
+      }
+      await provisioningPhase(instanceId, 'email_completed')
       }
 
       // 注意：不再检查实例配额使用率警告，因为不再限制用户的实例配额
 
-      await createLog(
-        userId,
-        'instance',
-        'instance.create',
-        `Created instance "${instance.name}" [host: ${host.name}, image: ${config.image}, CPU: ${config.cpu}%, Memory: ${config.memory}MB, Disk: ${config.disk}MB, IPv4: ${ipv4 || 'N/A'}, IPv6: ${ipv6 || 'N/A'}, network: ${config.networkMode}]`,
-        'success',
-        { instanceId }
-      )
-    }
-
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    console.error(`[Provisioning] ✘ 实例 ${instanceId} 创建失败:`, errorMessage)
-
-    try {
-      await compensateFailedInstanceCreation({
-        instanceId,
-        host,
-        userId,
-        resources,
-        networkMode: config.networkMode,
-        portLimit: config.portLimit || 0,
-        instanceName: config.name,
-        errorMessage
+      if (!completed.has('log_completed')) {
+      await prisma.$transaction(async tx => {
+        await tx.log.create({ data: {
+          userId, instanceId, module: 'instance', action: 'instance.create', result: 'success',
+          content: `Created instance "${instance.name}" [host: ${host.name}, image: ${config.image}, CPU: ${config.cpu}%, Memory: ${config.memory}MB, Disk: ${config.disk}MB, IPv4: ${ipv4 || 'N/A'}, IPv6: ${ipv6 || 'N/A'}, network: ${config.networkMode}]`
+        } })
+        await tx.provisioningEvent.create({ data: { instanceId, phase: 'log_completed' } })
       })
-    } catch (compensationError) {
-      console.error(`[Provisioning] 实例 ${instanceId} 创建失败补偿流程异常:`, compensationError)
-    }
-
-    try {
-      const client = await getIncusClient(host)
-      await deleteInstance(client, config.name)
-      console.log(`[Provisioning] 残留容器 ${config.name} 已清理`)
-    } catch (cleanupErr) {
-      const errorMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
-      console.log(`[Provisioning] 清理残留容器失败 (可能不存在):`, errorMessage)
-    }
-
-    const instance = await db.getInstanceById(instanceId)
-    if (instance) {
-      // 发送失败通知给用户
-      try {
-        const { sendNotification } = await import('../lib/notifier.js')
-        await sendNotification(userId, 'instance_create_failed', {
-          instanceName: instance.name,
-          hostName: host.name,
-          error: errorMessage
-        })
-      } catch (notifyErr) {
-        console.error(`[Provisioning] 发送失败通知失败:`, notifyErr)
       }
-
-      await createLog(
-        userId,
-        'instance',
-        'instance.create',
-        `Failed to create instance "${instance.name}": ${errorMessage}`,
-        'failed',
-        { instanceId }
-      )
     }
-
+  } catch (error) {
     throw error
   }
 }
