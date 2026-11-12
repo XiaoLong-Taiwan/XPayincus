@@ -478,7 +478,7 @@ class PanelCommandTests(unittest.TestCase):
                 self.fail('menu tty fixture timeout')
         finally:
             os.close(descriptor)
-        self.assertIn(b'Compose', output)
+        self.assertIn(b'XPAYINCUS', output)
 
 
 if __name__ == '__main__':
