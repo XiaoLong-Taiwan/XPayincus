@@ -1922,7 +1922,7 @@ zfs_storage_available() {
 
 ensure_incus_storage() {
     local profile root_device root_pool pools selected="${INCUS_STORAGE_POOL:-}"
-    local driver="${INCUS_STORAGE_DRIVER:-auto}" size="${INCUS_STORAGE_SIZE:-10GiB}"
+    local driver="${INCUS_STORAGE_DRIVER:-auto}" size="${INCUS_STORAGE_SIZE:-}" auto_driver=false
     profile=$(incus query /1.0/profiles/default) || return 1
     profile=$(printf '%s' "$profile" | python3 -c '
 import json,sys
@@ -1992,24 +1992,43 @@ except (ValueError, KeyError, TypeError):
         fi
         [[ "$selected" =~ ^[A-Za-z][A-Za-z0-9_-]{0,62}$ ]] || { error "储存池名称无效"; return 1; }
         if [[ "$driver" == auto ]]; then
+            auto_driver=true
             if zfs_storage_available; then driver=zfs; else driver=dir; fi
             info "自动选择储存 driver: ${driver}"
         fi
         case "$driver" in
             zfs)
                 zfs_storage_available || { error "ZFS 工具、模块或 /dev/zfs 不可用"; return 1; }
-                if [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
-                    read -r -p "ZFS loop 大小 [10GiB]: " size
-                    size="${size:-10GiB}"
-                fi
-                local bytes available
-                bytes=$(parse_binary_size "$size") || { error "loop 大小无效"; return 1; }
-                available=$(df -B1 --output=avail /var/lib/incus | awk 'NR==2 {print $1}')
+                local bytes available default_gib
+                available=$(df -B1 --output=avail /var/lib/incus | awk 'NR==2 {print $1}') || return 1
                 [[ "$available" =~ ^[0-9]{1,18}$ ]] || return 1
-                if (( bytes < 1073741824 || bytes > available / 2 )); then
-                    error "ZFS loop 至少 1GiB，且不得超过 Incus 数据磁盘剩余空间的一半；请指定较小大小或 dir"; return 1
+                available=$((10#$available))
+                default_gib=$((available / 2 / 1073741824))
+                if (( default_gib < 1 )); then
+                    if [[ "$auto_driver" == true && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
+                        info "剩余空间的一半不足 1GiB，自动改用 dir 储存池"
+                        driver=dir
+                    else
+                        error "ZFS loop 至少 1GiB，且不得超过 Incus 数据磁盘剩余空间的一半；请使用 dir"; return 1
+                    fi
                 fi
-                incus storage create "$selected" zfs "size=${bytes}" || return 1
+                if [[ "$driver" == dir ]]; then
+                    incus storage create "$selected" dir || return 1
+                else
+                    if (( default_gib > 10 )); then default_gib=10; fi
+                    while true; do
+                        if [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
+                            read -r -p "ZFS loop 大小 [${default_gib}GiB]: " size || return 1
+                        fi
+                        size="${size:-${default_gib}GiB}"
+                        if bytes=$(parse_binary_size "$size") && (( bytes >= 1073741824 && bytes <= available / 2 )); then
+                            break
+                        fi
+                        error "ZFS loop 至少 1GiB，且不得超过 Incus 数据磁盘剩余空间的一半；请指定较小大小或 dir"
+                        [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]] || return 1
+                    done
+                    incus storage create "$selected" zfs "size=${bytes}" || return 1
+                fi
                 ;;
             dir) incus storage create "$selected" dir || return 1 ;;
             *) error "只允许 auto/zfs/dir；不接受磁盘或 source 参数"; return 1 ;;

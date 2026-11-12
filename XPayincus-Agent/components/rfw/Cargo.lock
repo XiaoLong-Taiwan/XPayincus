@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "rfw"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "anyhow",
  "aya",
@@ -1012,14 +1012,14 @@ dependencies = [
 
 [[package]]
 name = "rfw-common"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "aya",
 ]
 
 [[package]]
 name = "rfw-ebpf"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",

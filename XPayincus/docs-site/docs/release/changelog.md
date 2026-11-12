@@ -5,9 +5,19 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準。v1.0.11 已正式發布，本輪來源目標為 **v1.0.12（尚未發布）**；歷史 OTA proof 不代表本版驗收結果。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前版本為 **v1.0.13**。
 
-## v1.0.12 新增功能
+## v1.0.13 修正與版本同步
+
+- ZFS loop 預設大小依 `/var/lib/incus` 所在磁碟剩餘空間的一半向下取整至 GiB，上限 10GiB；有效大小至少 1GiB，且不得超過剩餘空間的一半。
+- 互動輸入格式錯誤、過小或超出容量時重新提示，空白採動態預設，輸入結束時停止；明確指定的無效 `INCUS_STORAGE_SIZE` 直接失敗。
+- 自動 driver 且未指定大小時，若剩餘空間的一半不足 1GiB，改用 `dir`；明確指定 ZFS 或大小時報錯，不靜默切換。容量查詢失敗或資料無效時，在建立儲存池前停止。
+- 同步三份 VERSION、四份 package.json、RFW 自家 crate 與 Cargo.lock、Agent 預設版本、Compose 標籤及 fixture／現行文件；完整集合維持 30 件，最低 updater 維持 `v0.0.3`。
+- 完整說明位於 `docs-site/release-notes/v1.0.13.md`。
+
+## v1.0.12 新增功能（已正式發布；歷史準備紀錄）
+
+發布狀態依維護者於 2026-11-13 提供的資訊更新；以下保留當時準備與驗證紀錄。
 
 - Agent schemaVersion 2 提供宿主／實例監控、PSI、實例排行及 RFW／ZFS 狀態事件，含 avg／min／max／count／coverage 與累計計數器差值／重設辨識；缺值不補零。最多保留 30 天，單一 Agent 樣本上限 8192 筆或 1536 KiB、事件上限 512 筆或 256 KiB，容量達限會提早截斷；兩端 state 須持久保存，API 仍限單一 Node 程序。
 - 商品網路探測保存瀏覽器 HTTPS 與人工本機 TCP／ICMP 紀錄，全部 `verified: false`；人工提交須承認未驗證，Agent 不執行遠端探測。最多保留 30 天，每位 owner 100 筆、全域 10000 筆；須交付 `20261111050000_network_probe_records` migration。
@@ -27,7 +37,7 @@
 ## 版本号规则 / Versioning Rule
 
 - 唯一版本來源為統一倉庫根 `VERSION`，格式為 canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]`，依根 `RELEASE.md` 契約維護。
-- Patch 不限個位數；本輪由已正式發布的 `v1.0.11` 遞增為 `v1.0.12`。
+- Patch 不限個位數；本輪由已正式發布的 `v1.0.12` 遞增為 `v1.0.13`。
 - 核心數字與純數字預發行識別碼不得有前導零；版本檔不得有 BOM、空白或額外行，僅允許可選的一個 LF／CRLF 結尾。
 - 歷史 tag、交接與發行說明保留原樣，第三方相依及實際 ZFS 模組版本不跟隨產品升版。
 

@@ -269,7 +269,7 @@ const shellFunction = (name: string) => {
   return match[0]
 }
 const runShell = (script: string, expected = 0) => {
-  const result = spawnSync(bash, ['--noprofile', '--norc', '-s'], { input: script, encoding: 'utf8' })
+  const result = spawnSync(bash, ['--noprofile', '--norc', '-s'], { input: script, encoding: 'utf8', timeout: 15_000 })
   assert.equal(result.status, expected, `isolated shell check failed: ${result.error ?? ''}\n${result.stdout}\n${result.stderr}`)
   return result.stdout
 }
@@ -388,6 +388,79 @@ df() { printf 'Avail\\n42949672960\\n'; }
 INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=2GiB ensure_incus_storage
 if INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=30GiB ensure_incus_storage; then exit 1; fi
 `)
+const zfsStorageHarness = `${storageHarness}
+zfs_storage_available() { return 0; }
+df() { printf 'Avail\\n%s\\n' "$AVAILABLE"; }
+`
+for (const driver of ['auto', 'zfs']) {
+  for (const [available, gib] of [
+    [40 * 2 ** 30, 10], [20 * 2 ** 30, 10], [19 * 2 ** 30, 9],
+    [5 * 2 ** 30, 2], [2 * 2 ** 30, 1]
+  ]) {
+    assert.equal(runShell(`${zfsStorageHarness}
+AVAILABLE=${available} INCUS_STORAGE_DRIVER=${driver} ensure_incus_storage
+`), `storage create default zfs size=${gib * 2 ** 30}\nprofile device add default root disk path=/ pool=default\n`,
+    `${driver} default must fit half the free disk and stay capped at 10GiB`)
+  }
+}
+for (const available of [0, 512 * 2 ** 20, 2 ** 30, 2 * 2 ** 30 - 1]) {
+  assert.equal(runShell(`${zfsStorageHarness}
+AVAILABLE=${available} ensure_incus_storage
+`), 'storage create default dir\nprofile device add default root disk path=/ pool=default\n',
+  'auto must use dir when half-free capacity cannot fit a 1GiB loop')
+  for (const options of ['INCUS_STORAGE_DRIVER=zfs', 'INCUS_STORAGE_SIZE=1GiB']) {
+    assert.equal(runShell(`${zfsStorageHarness}
+if AVAILABLE=${available} ${options} ensure_incus_storage; then exit 92; fi
+`), '', 'explicit ZFS or size must fail without mutation when capacity is insufficient')
+  }
+}
+for (const size of ['bad', '0', '512MiB', '3GiB', '999999999999999999999999']) {
+  assert.equal(runShell(`${zfsStorageHarness}
+if AVAILABLE=4294967296 INCUS_STORAGE_SIZE=${size} ensure_incus_storage; then exit 92; fi
+`), '', 'invalid explicit sizes must fail without mutation or prompting')
+}
+assert.equal(runShell(`${zfsStorageHarness}
+AVAILABLE=5368709120 INCUS_STORAGE_SIZE=2560MiB ensure_incus_storage
+`), 'storage create default zfs size=2684354560\nprofile device add default root disk path=/ pool=default\n',
+'an explicit size exactly equal to half-free capacity must remain valid')
+for (const available of ['', 'bad', '-1', '9999999999999999999']) {
+  assert.equal(runShell(`${zfsStorageHarness}
+if AVAILABLE='${available}' ensure_incus_storage; then exit 92; fi
+`), '', 'invalid disk capacity must fail without mutation')
+}
+assert.equal(runShell(`${zfsStorageHarness}
+df() { printf 'Avail\\n42949672960\\n'; return 1; }
+if ensure_incus_storage; then exit 92; fi
+`), '', 'df failure must propagate even if its output looks valid')
+const interactiveStorageHarness = zfsStorageHarness.replaceAll('[[ -t 0', '[[ 1 == 1') + `
+INCUS_STORAGE_POOL=default
+INCUS_STORAGE_DRIVER=zfs
+AVAILABLE=5368709120
+READS=0
+read() {
+  [[ "$3" == 'ZFS loop 大小 [2GiB]: ' ]] || return 91
+  READS=$((READS + 1))
+  case "$READS" in
+    1) size=bad ;;
+    2) size=512MiB ;;
+    3) size=3GiB ;;
+    4) size="$FINAL_SIZE" ;;
+    *) return 92 ;;
+  esac
+}
+`
+for (const [input, bytes] of [['', 2147483648], ['1536MiB', 1610612736]] as const) {
+  assert.equal(runShell(`${interactiveStorageHarness}
+FINAL_SIZE='${input}'
+ensure_incus_storage
+[[ "$READS" == 4 ]]
+`), `storage create default zfs size=${bytes}\nprofile device add default root disk path=/ pool=default\n`,
+  'interactive invalid syntax, undersized and oversized input must retry before accepting valid input or the default')
+}
+assert.equal(runShell(`${interactiveStorageHarness}
+read() { return 1; }
+if ensure_incus_storage; then exit 92; fi
+`), '', 'interactive EOF must fail without mutation or infinite retries')
 runShell(`set -euo pipefail
 ${shellFunction('do_uninstall')}
 info() { :; }

@@ -5,9 +5,19 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. v1.0.11 has been officially released; the current source targets **v1.0.12 (unreleased)**. Historical OTA proof does not validate this release.
+Root `VERSION` and `RELEASE.md` define the unified release. The current version is **v1.0.13**.
 
-## v1.0.12 New Capabilities
+## v1.0.13 Fixes and Version Synchronization
+
+- Calculate the default ZFS loop size from half the free space on the filesystem containing `/var/lib/incus`, rounded down to whole GiB and capped at 10GiB. Valid sizes must be at least 1GiB and no more than half the free space.
+- Prompt again for malformed, undersized, or oversized interactive input. Empty input uses the dynamic default, and EOF stops the operation. An invalid explicit `INCUS_STORAGE_SIZE` fails directly.
+- With automatic driver selection and no explicit size, fall back to `dir` when half the free space cannot fit 1GiB. An explicit ZFS driver or size fails instead of silently switching. Failed capacity queries or invalid capacity data stop pool creation.
+- Synchronize three VERSION files, four package.json files, the RFW first-party crates and Cargo.lock, the Agent default, Compose tags, fixtures, and current documentation. Retain the 30-asset set and minimum updater `v0.0.3`.
+- Full details are in `docs-site/release-notes/v1.0.13.md`.
+
+## v1.0.12 New Capabilities (Released; Historical Preparation)
+
+Publication status follows the maintainer's confirmation on 2026-11-13; the preparation and validation record below is preserved.
 
 - Agent schemaVersion 2 adds host/instance history, Linux PSI, instance rankings, and RFW/ZFS state events, with avg/min/max/count/coverage and cumulative counter deltas/reset detection. Missing values are not zero. Retention is at most 30 days; each Agent is capped at 8192 samples or 1536 KiB and 512 events or 256 KiB, so capacity can truncate history sooner. Persist state at both ends and run one Node API process.
 - Product network probes retain browser HTTPS and manually submitted local TCP/ICMP records, always marked `verified: false`. Manual submissions require acknowledgement; the Agent does not execute remote probes. Retention is at most 30 days, with 100 records per owner and 10000 globally. Ship migration `20261111050000_network_probe_records`.
@@ -27,7 +37,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.11` to `v1.0.12`.
+- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.12` to `v1.0.13`.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 
