@@ -5,6 +5,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useToast } from '@/stores/toast'
 import api from '@/api'
 import FlagIcon from '@/components/FlagIcon.vue'
+import AgentMonitoringPanel from './AgentMonitoringPanel.vue'
 import type { HostAgentStatus } from '@/types/api'
 
 const { t } = useI18n()
@@ -1024,8 +1025,8 @@ const xAxisLabels = computed(() => {
       <p v-if="agentHistoryLoading" class="text-sm text-themed-muted">{{ t('common.loading') }}</p>
       <p v-else-if="agentHistorySamples.length === 0" class="text-sm text-themed-muted">{{ t('admin.hosts.agentHistoryEmpty') }}</p>
       <div v-else class="max-h-64 overflow-y-auto divide-y divide-themed">
-        <div v-for="(sample, index) in agentHistorySamples" :key="String(sample.sampleId || sample.reportedAt || index)" class="grid grid-cols-2 gap-2 py-2 text-xs sm:grid-cols-4">
-          <span>{{ String(sample.reportedAt || sample.createdAt || '-') }}</span>
+        <div v-for="sample in agentHistorySamples" :key="String(sample.id)" class="grid grid-cols-2 gap-2 py-2 text-xs sm:grid-cols-4">
+          <span>{{ String(sample.sampledAt || '-') }}</span>
           <span>CPU {{ String((sample.resources as Record<string, unknown> | undefined)?.cpuUsagePercent ?? '-') }}%</span>
           <span>{{ t('admin.hosts.agentMemoryUsage') }} {{ String((sample.resources as Record<string, unknown> | undefined)?.memoryUsagePercent ?? '-') }}%</span>
           <span>{{ t('admin.hosts.agentDiskUsage') }} {{ String((sample.resources as Record<string, unknown> | undefined)?.diskUsagePercent ?? '-') }}%</span>
@@ -1033,6 +1034,8 @@ const xAxisLabels = computed(() => {
       </div>
     </section>
   </div>
+
+  <AgentMonitoringPanel :host-id="host.id" />
 
   <div class="card p-5 mt-4">
     <h2 class="mb-4 text-sm font-semibold text-themed">{{ t('admin.hosts.maintenanceTitle') }}</h2>

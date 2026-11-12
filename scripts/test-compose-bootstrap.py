@@ -14,7 +14,9 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / 'XPayincus/deploy/compose'
-BASH = os.environ.get('BOOTSTRAP_TEST_BASH', 'bash')
+BASH = os.environ.get('BOOTSTRAP_TEST_BASH') or shutil.which('bash') or 'bash'
+if os.name == 'nt' and Path('C:/Program Files/Git/bin/bash.exe').is_file():
+    BASH = os.environ.get('BOOTSTRAP_TEST_BASH') or 'C:/Program Files/Git/bin/bash.exe'
 VERSION = 'v1.0.5'
 
 
@@ -262,7 +264,7 @@ class PanelCommandTests(unittest.TestCase):
             target.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n', newline='\n')
             target.chmod(0o755)
 
-    def run_panel(self, pull_exit, mode=None, profile='', pull_match='pull', recreate=False):
+    def run_panel(self, pull_exit, mode=None, profile='', pull_match='pull', recreate=False, command='up'):
         self.log.write_text('')
         bin_path = self.bin.as_posix()
         if os.name == 'nt':
@@ -270,11 +272,25 @@ class PanelCommandTests(unittest.TestCase):
         env = dict(os.environ, DOCKER_LOG=self.log.as_posix(), PULL_EXIT=str(pull_exit),
                    COMPOSE_PROFILES=profile, PULL_MATCH=pull_match)
         result = subprocess.run([BASH, '-c', 'export PATH="$1:$PATH"; shift; bash "$@"',
-                                 'test', bin_path, (self.base / 'panel.sh').as_posix(), 'up',
+                                 'test', bin_path, (self.base / 'panel.sh').as_posix(), command,
                                  *([mode] if mode else []), *(['--force-recreate'] if recreate else [])],
-                                env=env, capture_output=True, text=True)
+                                env=env, capture_output=True, text=True, encoding='utf-8')
         commands = self.log.read_text().splitlines()
         return result, commands
+
+    def test_pull_only_never_transitions_services(self):
+        (self.base / 'compose.release.yaml').unlink()
+        for status in [0, 42]:
+            result, commands = self.run_panel(status, command='pull')
+            self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+            self.assertTrue(any(' pull --policy always' in line for line in commands))
+            self.assertFalse(any(' stop ' in line or ' up ' in line or ' down' in line for line in commands))
+
+    def test_kill_targets_compose_project_without_removing_data(self):
+        result, commands = self.run_panel(0, command='kill')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any('--profile nginx --profile cloudflare kill' in line for line in commands))
+        self.assertFalse(any(' down' in line or '--volumes' in line for line in commands))
 
     @unittest.skipIf(os.name == 'nt', '官方映像解析需要 Linux fd 繼承')
     def test_pull_failure_does_not_stop_services(self):
@@ -402,7 +418,7 @@ class PanelCommandTests(unittest.TestCase):
         result = subprocess.run([BASH, '-c',
             'export PATH="$1:$PATH"; bash "$2" install "$3" v1.0.5 "$4"', 'test',
             bin_path, (COMPOSE / 'download.sh').as_posix(),
-            (self.base / 'new').as_posix(), '0' * 64], env=env, capture_output=True, text=True)
+            (self.base / 'new').as_posix(), '0' * 64], env=env, capture_output=True, text=True, encoding='utf-8')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('下載校驗失敗', result.stderr)
         self.assertFalse(marker.exists())
@@ -420,14 +436,16 @@ class PanelCommandTests(unittest.TestCase):
         if os.name == 'nt':
             directory = '/' + directory[0].lower() + directory[2:]
         script = 'set -Eeuo pipefail\ndeployment_check() { return 0; }\ndocker_check() { return 0; }\ndashboard_menu() {\n' + code + '\n}\ndashboard_menu "$1"'
-        result = subprocess.run([BASH, '-c', script, 'test', directory],
-                                input=b'3\nyes\n4\n5\n2\n0\n',
+        entry = self.base / 'menu-test.sh'
+        entry.write_text(script, encoding='utf-8', newline='\n')
+        result = subprocess.run([BASH, entry.as_posix(), directory],
+                                input=b'2\nyes\n4\n1\n0\n6\n0\n',
                                 env=dict(os.environ, MENU_LOG=log.as_posix()), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('<update>', log.read_text())
-        self.assertIn('<up><pull>', log.read_text())
+        self.assertIn('<pull>', log.read_text())
         self.assertIn('<status>', log.read_text())
-        self.assertIn('<wizard>', log.read_text())
+        self.assertIn('<logs>', log.read_text())
         self.assertIn('更新失敗'.encode(), result.stderr)
         self.assertFalse((ROOT / 'forbidden').exists())
 
@@ -448,7 +466,7 @@ class PanelCommandTests(unittest.TestCase):
                         output += os.read(descriptor, 65536)
                     except OSError:
                         break
-                    if b'Compose' in output:
+                    if b'XPAYINCUS' in output:
                         os.write(descriptor, b'0\n')
                 ended, status = os.waitpid(pid, os.WNOHANG)
                 if ended:

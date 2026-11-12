@@ -31,6 +31,14 @@ function read<T>(key: string): T | null {
   return JSON.parse(readFileSync(path, 'utf8')) as T
 }
 
+export function readAgentMonitoringJournal<T>(agentId: string): T | null {
+  return read<T>(`monitoring-v2:${agentId}`)
+}
+
+export function writeAgentMonitoringJournal(agentId: string, value: unknown): void {
+  write(`monitoring-v2:${agentId}`, value)
+}
+
 function write(key: string, value: unknown): void {
   const path = filename(key)
   const body = JSON.stringify(value)

@@ -19,14 +19,15 @@ import (
 const heartbeatPath = "/api/agent/heartbeat"
 
 type Client struct {
-	panelURL    string
-	agentID     string
-	agentSecret string
-	httpClient  *http.Client
-	spoolDir string
-	spoolMaxBytes int64
+	panelURL       string
+	agentID        string
+	agentSecret    string
+	httpClient     *http.Client
+	spoolDir       string
+	spoolMaxBytes  int64
 	spoolRetention time.Duration
 	pendingSamples map[string]string
+	monitoring     *Client
 }
 
 type HeartbeatResult struct {
@@ -38,7 +39,7 @@ type HeartbeatResult struct {
 }
 
 type UpgradeInstruction struct {
-	OperationID string `json:"operationId,omitempty"`
+	OperationID           string  `json:"operationId,omitempty"`
 	SchemaVersion         *int    `json:"schemaVersion,omitempty"`
 	MinimumUpdaterVersion *string `json:"minimumUpdaterVersion,omitempty"`
 	Platform              string  `json:"platform,omitempty"`
@@ -54,6 +55,10 @@ type UpgradeInstruction struct {
 
 type heartbeatResponse struct {
 	AcceptedSampleIDs []string `json:"acceptedSampleIds"`
+	MonitoringAck     *struct {
+		SchemaVersion     int      `json:"schemaVersion"`
+		AcceptedSampleIDs []string `json:"acceptedSampleIds"`
+	} `json:"monitoringAck"`
 	Upgrade *UpgradeInstruction `json:"upgrade"`
 }
 
@@ -77,16 +82,23 @@ func (instruction *UpgradeInstruction) UnmarshalJSON(data []byte) error {
 }
 
 func New(cfg config.Config) *Client {
-	if cfg.StateDir == "" { cfg.StateDir = "/var/lib/incudal-agent" }
-	if cfg.SpoolMaxBytes <= 0 { cfg.SpoolMaxBytes = 16 * 1024 * 1024 }
-	if cfg.SpoolRetentionHours <= 0 { cfg.SpoolRetentionHours = 72 }
+	if cfg.StateDir == "" {
+		cfg.StateDir = "/var/lib/incudal-agent"
+	}
+	if cfg.SpoolMaxBytes <= 0 {
+		cfg.SpoolMaxBytes = 16 * 1024 * 1024
+	}
+	if cfg.SpoolRetentionHours <= 0 {
+		cfg.SpoolRetentionHours = 72
+	}
 	return &Client{
-		spoolDir: filepath.Join(cfg.StateDir, "history"),
-		spoolMaxBytes: int64(cfg.SpoolMaxBytes),
-		spoolRetention: time.Duration(cfg.SpoolRetentionHours)*time.Hour,
-		panelURL:    strings.TrimRight(cfg.PanelURL, "/"),
-		agentID:     cfg.AgentID,
-		agentSecret: cfg.AgentSecret,
+		monitoring:     &Client{spoolDir: filepath.Join(cfg.StateDir, "monitoring-v2"), spoolMaxBytes: int64(cfg.SpoolMaxBytes), spoolRetention: time.Duration(cfg.SpoolRetentionHours) * time.Hour},
+		spoolDir:       filepath.Join(cfg.StateDir, "history"),
+		spoolMaxBytes:  int64(cfg.SpoolMaxBytes),
+		spoolRetention: time.Duration(cfg.SpoolRetentionHours) * time.Hour,
+		panelURL:       strings.TrimRight(cfg.PanelURL, "/"),
+		agentID:        cfg.AgentID,
+		agentSecret:    cfg.AgentSecret,
 		httpClient: &http.Client{
 			Timeout: cfg.RequestTimeout,
 		},
@@ -99,6 +111,13 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 		payload["history"] = map[string]any{"schemaVersion": 1, "samples": samples}
 	} else {
 		payload["historyStatus"] = "spool-unavailable"
+	}
+	if client.monitoring != nil {
+		if samples, err := client.monitoring.queueMonitoring(payload); err == nil {
+			payload["monitoring"] = map[string]any{"schemaVersion": 2, "samples": samples}
+		} else {
+			payload["monitoringStatus"] = "spool-unavailable"
+		}
 	}
 	body, err := protocol.CanonicalJSON(payload)
 	if err != nil {
@@ -155,6 +174,13 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 	for _, id := range parsedResponse.AcceptedSampleIDs {
 		if path, ok := client.pendingSamples[id]; ok {
 			_ = os.Remove(path)
+		}
+	}
+	if client.monitoring != nil && parsedResponse.MonitoringAck != nil && parsedResponse.MonitoringAck.SchemaVersion == 2 {
+		for _, id := range parsedResponse.MonitoringAck.AcceptedSampleIDs {
+			if path, ok := client.monitoring.pendingSamples[id]; ok {
+				_ = os.Remove(path)
+			}
 		}
 	}
 

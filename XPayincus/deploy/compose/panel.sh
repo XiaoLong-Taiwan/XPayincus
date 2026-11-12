@@ -24,7 +24,8 @@ usage() {
     'bash deploy/compose/panel.sh install [directory]  (預設目前目錄，必須為空目錄)' \
     'bash deploy/compose/panel.sh init https://pay.domain https://admin.domain admin@domain [nginx|cloudflare|external]' \
     'bash deploy/compose/panel.sh up [pull|build] [--force-recreate]  (保留資料，重建需明確指定)' \
-    'bash deploy/compose/panel.sh down|status' \
+    'bash deploy/compose/panel.sh down|status|kill  (kill 立即強制停止此 Compose 專案容器)' \
+    'bash deploy/compose/panel.sh pull  (只拉取所需映像，不停止或啟動服務)' \
     'bash deploy/compose/panel.sh logs [init|db|api|user|admin|nginx|tunnel-origin|cloudflared]' \
     'bash deploy/compose/panel.sh export [/absolute/path/panel.dump]  (預設 ./backups)' \
     'bash deploy/compose/panel.sh import /absolute/path/panel.dump --confirm-replace-incudal' \
@@ -65,11 +66,11 @@ case "$command_name" in
     if [[ "$command_name" == update-plan ]]; then exec python3 "$base/update.py" "$base" --plan; fi
     exec python3 "$base/update.py" "$base"
     ;;
-  install|init|wizard|up|down|status|logs|export|import) ;;
+  install|init|wizard|up|pull|down|status|kill|logs|export|import) ;;
   *) usage; exit 2 ;;
 esac
 case "$command_name" in
-  wizard|up|down|status|logs|export|import) bash "$base/download.sh" docker-check || die 'Docker 前置檢查未通過。' ;;
+  wizard|up|pull|down|status|kill|logs|export|import) bash "$base/download.sh" docker-check || die 'Docker 前置檢查未通過。' ;;
 esac
 
 source_root="$(cd -- "$base/../.." && pwd -P)"
@@ -344,7 +345,7 @@ compose_entry="$base/docker-compose.yml"
 if [[ ! -e "$compose_entry" && ! -L "$compose_entry" ]]; then compose_entry="$base/compose.yaml"; fi
 if [[ -f "$base/compose.release.yaml" ]]; then compose_entry="$base/compose.yaml"; fi
 if [[ "$command_name" == up && "${1:-pull}" == build ]]; then compose_entry="$base/compose.yaml"; fi
-if [[ "$command_name" == up && "${1:-pull}" != build && -f "$base/compose.release.yaml" ]]; then
+if [[ ( "$command_name" == up && "${1:-pull}" != build ) || "$command_name" == pull ]] && [[ -f "$base/compose.release.yaml" ]]; then
   command -v python3 >/dev/null || die '需要 Python 3。'
   [[ ! -L "$base/.state" ]] || die '操作狀態目錄不可為符號連結。'
   mkdir -p -- "$base/.state"
@@ -466,6 +467,40 @@ case "$command_name" in
     "${compose[@]}" up -d --no-build --pull never --wait --wait-timeout 300 "${recreate[@]}"
     printf '%s\n' '面板已依 COMPOSE_PROFILES 啟動；請依 README 完成 HTTPS 與來源 IP 驗收。'
     ;;
+  pull)
+    (($# == 0)) || die 'pull 不接受額外參數。'
+    check_secrets
+    "${compose[@]}" config --quiet
+    configured_profiles="$(awk -F= '$1 == "COMPOSE_PROFILES" { print substr($0, index($0, "=") + 1) }' "$base/.env" | tr -d '\r')"
+    configured_profiles="${COMPOSE_PROFILES-$configured_profiles}"
+    case "$configured_profiles" in
+      nginx)
+        for tls_file in user/fullchain.pem user/privkey.pem admin/fullchain.pem admin/privkey.pem; do
+          [[ -r "$base/tls/$tls_file" && -s "$base/tls/$tls_file" ]] || die "缺少或無法讀取 TLS 檔案：tls/$tls_file。"
+        done
+        ;;
+      cloudflare)
+        [[ -f "$base/secrets/cloudflare_tunnel_token" && -r "$base/secrets/cloudflare_tunnel_token" && -s "$base/secrets/cloudflare_tunnel_token" && ! -L "$base/secrets/cloudflare_tunnel_token" ]] || die '請先安全建立非空的 secrets/cloudflare_tunnel_token 一般檔案。'
+        ;;
+      '') ;;
+      *) die 'COMPOSE_PROFILES 僅接受 nginx、cloudflare 或空值；不可同時啟用兩種入口。' ;;
+    esac
+    if [[ -f "$base/compose.release.yaml" ]]; then
+      python3 "$base/update.py" resolve-images "$base" "$compose_entry" || die '無法解析官方映像 digest；未開始拉取。'
+      if [[ -s "$base/.state/pull-required" ]]; then
+        "${compose[@]}" pull --policy always api user admin
+        rm -f -- "$base/.state/pull-required"
+      fi
+      "${compose[@]}" pull --policy missing --ignore-buildable db init
+      case "$configured_profiles" in
+        nginx) "${compose[@]}" pull --policy missing nginx ;;
+        cloudflare) "${compose[@]}" pull --policy missing tunnel-origin cloudflared ;;
+      esac
+    else
+      "${compose[@]}" pull --policy always
+    fi
+    printf '%s\n' '必要映像已拉取並驗證；服務未停止或重啟。'
+    ;;
   down)
     (($# == 0)) || die 'down 不接受額外參數。'
     "${compose[@]}" --profile nginx --profile cloudflare down
@@ -473,6 +508,11 @@ case "$command_name" in
   status)
     (($# == 0)) || die 'status 不接受額外參數。'
     "${compose[@]}" --profile nginx --profile cloudflare ps --all
+    ;;
+  kill)
+    (($# == 0)) || die 'kill 不接受額外參數。'
+    printf '%s\n' '立即強制停止此 Compose 專案的所有容器。'
+    "${compose[@]}" --profile nginx --profile cloudflare kill
     ;;
   logs)
     (($# <= 1)) || die 'logs 最多接受一個服務名稱。'

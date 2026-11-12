@@ -37,6 +37,7 @@ import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } 
 import { agentVersionStatus } from '../lib/agent-upgrade.js'
 import { DurableAgentUpgradeRequests, ingestAgentHistory, readAgentHistory, serializeAgentHeartbeat } from '../services/agent-durable-state.js'
 import { readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
+import { ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceName, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric } from '../services/agent-monitoring.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -64,6 +65,7 @@ interface AgentHeartbeatBody {
   components?: Record<string, unknown>
   upgradeStatus?: Record<string, unknown>
   history?: Record<string, unknown>
+  monitoring?: Record<string, unknown>
 }
 
 interface AgentBinaryParams {
@@ -1261,6 +1263,48 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       samples: agent ? readAgentHistory(agent.agentId, from, to, limit, resolutionSeconds * 1000) : [] }
   })
 
+  for (const view of ['history', 'instances/top', 'instances/history', 'events'] as const) {
+    fastify.get<{ Params: AgentCredentialsParams; Querystring: { name?: string; from?: string; to?: string; limit?: string; resolutionSeconds?: string; metric?: string; orderBy?: string; top?: string } }>(`/hosts/:hostId/monitoring/${view}`, {
+      onRequest: [fastify.authenticate]
+    }, async (request, reply) => {
+      const hostId = parsePositiveId(request.params.hostId)
+      if (!hostId) return reply.code(400).send({ error: 'Invalid host ID', code: 'INVALID_HOST_ID' })
+      const host = await prisma.host.findUnique({ where: { id: hostId }, select: { userId: true } })
+      if (!host) return reply.code(404).send({ error: 'Host not found', code: 'HOST_NOT_FOUND' })
+      if (host.userId !== request.user.id && request.user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
+      const now = Date.now()
+      const from = request.query.from === undefined ? now - 86400000 : Date.parse(request.query.from)
+      const to = request.query.to === undefined ? now : Date.parse(request.query.to)
+      const limit = Number(request.query.limit ?? 1000)
+      const resolutionSeconds = Number(request.query.resolutionSeconds ?? 60)
+      const top = Number(request.query.top ?? 10)
+      const metric = request.query.metric ?? 'cpuUsagePercent'
+      const orderBy = request.query.orderBy ?? 'avg'
+      const name = request.query.name
+      if (view === 'instances/history' && !isMonitoringInstanceName(name)) {
+        return reply.code(400).send({ error: 'Valid instance name is required', code: 'AGENT_MONITORING_INVALID_NAME' })
+      }
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to || from < now - 30 * 86400000 || to > now ||
+        !Number.isInteger(limit) || limit < 1 || limit > 2000 || !Number.isInteger(resolutionSeconds) || resolutionSeconds < 30 || resolutionSeconds > 86400 ||
+        !Number.isInteger(top) || top < 1 || top > 100 || !instanceMonitoringKeys.includes(metric as InstanceMonitoringMetric) || !['avg', 'max'].includes(orderBy)) {
+        return reply.code(400).send({ error: 'Invalid monitoring query', code: 'AGENT_MONITORING_INVALID_QUERY' })
+      }
+      const agent = await agentModel.findUnique({ where: { hostId } })
+      const agentId = agent?.agentId ?? null
+      const range = { from, to, limit, resolutionSeconds }
+      try {
+        reply.header('Cache-Control', 'no-store')
+        if (view === 'instances/history') return { hostId, ...readAgentInstanceHistory(agentId, range, name!, now) }
+        if (view === 'instances/top') return { hostId, ...readAgentInstanceTop(agentId, range, metric as InstanceMonitoringMetric, orderBy as 'avg' | 'max', top, now) }
+        if (view === 'events') return { hostId, ...readAgentComponentEvents(agentId, range, now) }
+        return { hostId, ...readAgentMonitoring(agentId, range, now) }
+      } catch (error) {
+        request.log.warn({ error, hostId }, 'Agent monitoring journal unavailable')
+        return reply.code(503).send({ error: 'Monitoring storage unavailable', code: 'AGENT_MONITORING_UNAVAILABLE' })
+      }
+    })
+  }
+
   fastify.post<{ Params: AgentCredentialsParams; Body: { confirm: boolean; targetVersion: string } }>('/hosts/:hostId/upgrade', {
     onRequest: [fastify.authenticate],
     preValidation: async (request, reply) => {
@@ -1603,7 +1647,8 @@ export default async function agentRoutes(fastify: FastifyInstance) {
           metrics: { type: 'object', additionalProperties: true },
           components: { type: 'object', additionalProperties: true },
           upgradeStatus: { type: 'object', additionalProperties: true },
-          history: { type: 'object', additionalProperties: true }
+          history: { type: 'object', additionalProperties: true },
+          monitoring: { type: 'object', additionalProperties: true }
         }
       }
     }
@@ -1665,6 +1710,12 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       request.log.warn({ error, agentId: agent.agentId }, 'Agent history persistence unavailable; samples retained by Agent')
     }
     let upgrade: AgentUpgradeInstruction = { available: false }
+    let acceptedMonitoringSampleIds: string[] = []
+    try {
+      acceptedMonitoringSampleIds = ingestAgentMonitoring(agent.agentId, request.body.monitoring, now.getTime())
+    } catch (error) {
+      request.log.warn({ error, agentId: agent.agentId }, 'Agent monitoring persistence unavailable; samples retained by Agent')
+    }
     try {
       upgrade = agentUpgradeRequests.heartbeat(agent.agentId, request.body.version, request.body.runtime ?? {}, now.getTime(), request.body.upgradeStatus, normalizeCapabilities(request.body.capabilities))
     } catch (error) {
@@ -1673,6 +1724,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     return {
       ok: true,
       acceptedSampleIds,
+      monitoringAck: { schemaVersion: 2, acceptedSampleIds: acceptedMonitoringSampleIds },
       serverTime: now.toISOString(),
       taskPollIntervalSeconds: 15,
       instanceReport,

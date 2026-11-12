@@ -27,7 +27,7 @@ var instanceCursor string
 var instanceCollectionMu sync.Mutex
 
 type deadlineTransport struct {
-	ctx context.Context
+	ctx  context.Context
 	base http.RoundTripper
 }
 
@@ -49,28 +49,6 @@ type incusInstanceSummary struct {
 	Status     string `json:"status"`
 	StatusCode int    `json:"status_code"`
 	Type       string `json:"type"`
-}
-
-type incusInstanceState struct {
-	Status  string                        `json:"status"`
-	Network map[string]incusNetworkDevice `json:"network"`
-}
-
-type incusNetworkDevice struct {
-	Addresses []incusNetworkAddress `json:"addresses"`
-	Hwaddr    string                `json:"hwaddr"`
-	Counters  incusNetworkCounters  `json:"counters"`
-	State     string                `json:"state"`
-}
-
-type incusNetworkAddress struct {
-	Family  string `json:"family"`
-	Address string `json:"address"`
-}
-
-type incusNetworkCounters struct {
-	BytesReceived json.Number `json:"bytes_received"`
-	BytesSent     json.Number `json:"bytes_sent"`
 }
 
 type trafficCounters struct {
@@ -144,7 +122,9 @@ sendJobs:
 
 	trafficAvailable := false
 	for _, item := range items {
-		if item != nil && item["traffic"] != nil { trafficAvailable = true }
+		if item != nil && item["traffic"] != nil {
+			trafficAvailable = true
+		}
 	}
 	normalizedItems := make([]any, 0, len(items))
 	for _, item := range items {
@@ -154,23 +134,27 @@ sendJobs:
 	}
 
 	return map[string]any{
-		"available":  true,
-		"reportedAt": reportedAt,
-		"total":      len(instances),
-		"truncated": len(instances) > len(normalizedItems),
+		"available":        true,
+		"reportedAt":       reportedAt,
+		"total":            len(instances),
+		"truncated":        len(instances) > len(normalizedItems),
 		"trafficAvailable": trafficAvailable,
 		"deadlineExceeded": ctx.Err() != nil,
-		"cursor": instanceCursor,
-		"status": "ready",
-		"items":      normalizedItems,
+		"cursor":           instanceCursor,
+		"status":           "ready",
+		"items":            normalizedItems,
 	}
 }
 
 func instancePage(instances []incusInstanceSummary, start int) []incusInstanceSummary {
 	count := len(instances)
-	if count > maxReportedIncusInstances { count = maxReportedIncusInstances }
+	if count > maxReportedIncusInstances {
+		count = maxReportedIncusInstances
+	}
 	page := make([]incusInstanceSummary, count)
-	for i := range page { page[i] = instances[(start+i)%len(instances)] }
+	for i := range page {
+		page[i] = instances[(start+i)%len(instances)]
+	}
 	return page
 }
 
@@ -245,6 +229,9 @@ func buildIncusInstanceReportItem(client *http.Client, instance incusInstanceSum
 	}
 
 	if instance.Name == "" || !isRunningIncusStatus(instance.Status, instance.StatusCode) {
+		performanceCache.Lock()
+		delete(performanceCache.items, instance.Name)
+		performanceCache.Unlock()
 		return item
 	}
 
@@ -256,6 +243,9 @@ func buildIncusInstanceReportItem(client *http.Client, instance incusInstanceSum
 	if state.Status != "" {
 		item["status"] = state.Status
 	}
+	sampledAt := time.Now()
+	item["performance"] = performanceMetrics(instance.Name, state, sampledAt)
+	item["sampledAt"] = sampledAt.UTC().Format(time.RFC3339Nano)
 
 	counters := getTrafficCountersFromIncusState(instance.Name, state)
 	item["traffic"] = map[string]any{

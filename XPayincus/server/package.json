@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "XPayincus backend service",
   "type": "module",
   "main": "dist/app.js",
@@ -28,6 +28,7 @@
     "test:accounting-route-id-guards": "node --import tsx scripts/test-accounting-route-id-guards.ts",
     "test:agent-auth": "node --import tsx scripts/test-agent-auth.ts",
     "test:agent-route-id-guards": "node --import tsx scripts/test-agent-route-id-guards.ts",
+    "test:agent-monitoring": "node --import tsx scripts/test-agent-monitoring.ts",
     "test:agent-report-state-guards": "node --import tsx scripts/test-agent-report-state-guards.ts && node --import tsx scripts/test-agent-status-guards.ts",
     "test:agent-status-guards": "node --import tsx scripts/test-agent-status-guards.ts",
     "test:agent-install-command-guards": "node --import tsx scripts/test-agent-install-command-guards.ts && node --import tsx scripts/test-agent-release-cache.ts && node --import tsx scripts/test-agent-upgrade.ts",
@@ -150,6 +151,7 @@
     "test:resource-pool-apply-consistency": "node --import tsx scripts/test-resource-pool-apply-consistency.ts",
     "test:security-config": "node --import tsx scripts/test-security-config.ts",
     "test:network-probe-guards": "node --import tsx scripts/test-network-probe-guards.ts",
+    "test:network-probe-record-guards": "node --import tsx scripts/test-network-probe-record-guards.ts",
     "test:security-headers": "node --import tsx scripts/test-security-headers.ts",
     "test:scheduler-startup-idempotency": "node --import tsx scripts/test-scheduler-startup-idempotency.ts",
     "test:startup-database-safety": "node --import tsx scripts/test-startup-database-safety.ts",

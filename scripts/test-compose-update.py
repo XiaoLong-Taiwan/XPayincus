@@ -503,6 +503,7 @@ class DownloadTests(unittest.TestCase):
         (destination / 'update.py').write_text('fixture')
         with patch.object(update, 'fetch', side_effect=fetch), patch.object(update, 'run') as run:
             update.stage(COMPOSE, 'v1.0.8', self.base, 'target')
+        self.assertEqual(run.call_args.args[0][1], str(COMPOSE / 'download.sh'))
         self.assertEqual(run.call_args.args[0][2], 'install-bundle')
 
 

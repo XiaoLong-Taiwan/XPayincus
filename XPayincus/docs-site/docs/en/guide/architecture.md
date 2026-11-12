@@ -1,6 +1,6 @@
 # Architecture
 
-XPayincus is a control panel for commercial Incus/LXC/KVM delivery. The unified repository contains `XPayincus/client`, `XPayincus/server`, and `XPayincus-Agent`, with RFW/ZFS sources at `XPayincus-Agent/components/rfw` and `XPayincus-Agent/components/zfs`. Root `VERSION` defines the product release, targeting v1.0.11 (publication status is recorded in GitHub Releases). The Go Agent does not directly load eBPF or ZFS kernel modules.
+XPayincus is a control panel for commercial Incus/LXC/KVM delivery. The unified repository contains `XPayincus/client`, `XPayincus/server`, and `XPayincus-Agent`, with RFW/ZFS sources at `XPayincus-Agent/components/rfw` and `XPayincus-Agent/components/zfs`. Root `VERSION` defines the product release, targeting v1.0.12 (publication status is recorded in GitHub Releases). The Go Agent does not directly load eBPF or ZFS kernel modules.
 
 Panel Compose deploys PostgreSQL, one API, and both frontends only. The entry point `deploy/compose/docker-compose.yml` includes `compose.yaml`, supporting Nginx, Cloudflare Tunnel, or an external HTTPS proxy; frontends default to loopback 3000/3001. Incus, Agent, RFW, and ZFS remain host components. The diagram below describes the retained systemd/Nginx host layout; its OTA flow does not apply to Compose, which rebuilds a selected source revision. Run exactly one Node API process, without cluster, multiple workers, container replicas, or old and new backends writing the same database.
 

@@ -19,7 +19,7 @@ func HeartbeatPayload(version string, heartbeatIntervalSeconds int) map[string]a
 	instances := cachedInstances()
 	resources := collectResources()
 	components := componentStatus()
-	capabilities := []any{"heartbeat", "report", "host-history-v1", "upgrade-status-v1"}
+	capabilities := []any{"heartbeat", "report", "host-history-v1", "upgrade-status-v1", "monitoring-v2"}
 	if _, ok := resources["memoryTotalMb"]; ok {
 		capabilities = append(capabilities, "host-metrics")
 	}
@@ -47,9 +47,9 @@ func HeartbeatPayload(version string, heartbeatIntervalSeconds int) map[string]a
 			"status": instances["status"],
 		}},
 		"components": components,
-		"instances": instances,
-		"resources": resources,
-		"metrics":   collectMetrics(heartbeatIntervalSeconds),
+		"instances":  instances,
+		"resources":  resources,
+		"metrics":    collectMetrics(heartbeatIntervalSeconds),
 	}
 }
 
@@ -68,6 +68,9 @@ func collectResources() map[string]any {
 	}
 	if processCount := readProcessCount(); processCount >= 0 {
 		resources["processCount"] = processCount
+	}
+	for key, value := range collectPressure() {
+		resources[key] = value
 	}
 	return resources
 }
@@ -134,6 +137,9 @@ func readCPUUsagePercent() float64 {
 		return -1
 	}
 
+	if after.total < before.total || after.idle < before.idle {
+		return -1
+	}
 	totalDelta := after.total - before.total
 	idleDelta := after.idle - before.idle
 	if totalDelta == 0 || idleDelta > totalDelta {

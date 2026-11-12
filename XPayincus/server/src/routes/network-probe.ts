@@ -4,6 +4,7 @@ import { prisma } from '../db/prisma.js'
 import { invalidateCachedConfigs } from '../lib/config-cache.js'
 import { apiError, ErrorCode } from '../lib/errors.js'
 import { logAdminAction } from '../lib/security.js'
+import { isAllowedProbeRecord, networkProbeRecords, NETWORK_PROBE_RECORD_LIMIT, NETWORK_PROBE_RETENTION_DAYS, type ProbeRecordInput } from '../lib/network-probe-records.js'
 import { checkNetworkProbeRateLimit, getNetworkProbeTargets, NETWORK_PROBE_CONFIG_KEY, parseNetworkProbeTargets, resolvePublicTargetHost, runNetworkProbe } from '../lib/network-probe.js'
 
 const scopeProperties = { packageId: { type: 'integer', minimum: 1, maximum: 2147483647 }, hostId: { type: 'integer', minimum: 1, maximum: 2147483647 } }
@@ -16,6 +17,48 @@ async function canAccessNode(userId: number, packageId: number, hostId: number) 
 }
 
 export default async function networkProbeRoutes(fastify: FastifyInstance) {
+  fastify.get<{ Querystring: { packageId: number; hostId: number } }>('/records', {
+    onRequest: [fastify.authenticateUser],
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    schema: { querystring: { type: 'object', additionalProperties: false, required: ['packageId', 'hostId'], properties: scopeProperties } }
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { packageId, hostId } = request.query
+    if (!(await canAccessNode(request.user.id, packageId, hostId))) return reply.code(404).send({ error: '商品節點不存在或未獲授權' })
+    return { records: await networkProbeRecords.list(request.user.id, packageId, hostId), limit: NETWORK_PROBE_RECORD_LIMIT, retentionDays: NETWORK_PROBE_RETENTION_DAYS }
+  })
+
+  fastify.post<{ Body: ProbeRecordInput }>('/records', {
+    onRequest: [fastify.authenticateUser],
+    bodyLimit: 8192,
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    schema: { body: {
+      type: 'object', additionalProperties: false,
+      required: ['packageId', 'hostId', 'targetId', 'source', 'method', 'measuredAt', 'samples'],
+      properties: {
+        ...scopeProperties,
+        targetId: { type: 'string', pattern: '^[a-z0-9_-]{1,40}$' },
+        source: { type: 'string', enum: ['browser', 'manual-local'] },
+        method: { type: 'string', enum: ['https', 'tcp', 'icmp'] },
+        port: { type: 'integer', minimum: 1, maximum: 65535 },
+        measuredAt: { type: 'string', format: 'date-time', maxLength: 40 },
+        acknowledgedUnverified: { type: 'boolean' },
+        samples: { type: 'array', minItems: 1, maxItems: 10, items: {
+          type: 'object', additionalProperties: false, required: ['durationMs', 'success'],
+          properties: { durationMs: { type: 'number', minimum: 0, maximum: 60000 }, success: { type: 'boolean' } }
+        } }
+      }
+    } }
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    if (!checkNetworkProbeRateLimit(`record:${request.user.id}`)) return reply.code(429).send({ error: '紀錄寫入過於頻繁' })
+    const input = request.body
+    if (!(await canAccessNode(request.user.id, input.packageId, input.hostId))) return reply.code(404).send({ error: '商品節點不存在或未獲授權' })
+    const target = (await getNetworkProbeTargets()).find(item => item.id === input.targetId && item.packageId === input.packageId && item.hostId === input.hostId)
+    if (!target || !isAllowedProbeRecord(input, target) || !(await resolvePublicTargetHost(target.host))) return reply.code(400).send({ error: '目標、方式、時間或未驗證聲明無效' })
+    return reply.code(201).send({ record: await networkProbeRecords.create(request.user.id, input, target) })
+  })
+
   fastify.get<{ Querystring: { packageId: number; hostId: number } }>('/targets', {
     onRequest: [fastify.authenticateUser],
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },

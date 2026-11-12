@@ -5,9 +5,17 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. v1.0.10 has been officially released; the current source targets **v1.0.11 (unreleased)**. Historical OTA proof does not validate this release.
+Root `VERSION` and `RELEASE.md` define the unified release. v1.0.11 has been officially released; the current source targets **v1.0.12 (unreleased)**. Historical OTA proof does not validate this release.
 
-## v1.0.11 New Capabilities
+## v1.0.12 New Capabilities
+
+- Agent schemaVersion 2 adds host/instance history, Linux PSI, instance rankings, and RFW/ZFS state events, with avg/min/max/count/coverage and cumulative counter deltas/reset detection. Missing values are not zero. Retention is at most 30 days; each Agent is capped at 8192 samples or 1536 KiB and 512 events or 256 KiB, so capacity can truncate history sooner. Persist state at both ends and run one Node API process.
+- Product network probes retain browser HTTPS and manually submitted local TCP/ICMP records, always marked `verified: false`. Manual submissions require acknowledgement; the Agent does not execute remote probes. Retention is at most 30 days, with 100 records per owner and 10000 globally. Ship migration `20261111050000_network_probe_records`.
+- Compose updates save deployment files and a nonempty database dump, hash backups, and persist completion in the journal. Resume validates backup integrity. Failures retain backups without automatic database rollback; writes may occur between the live snapshot and migration. Back up keys, configuration, and certificates off-host separately.
+
+This target follows the maintainer-confirmed v1.0.11 release run `42940308896` and authorization after public release review and receipt completion. Root `RELEASE.md` records the full scope and limits. This cycle uses editing and static inspection only: no local tests, type checks, builds, packaging, staging, commits, pushes, publication, or deployment.
+
+## v1.0.11 New Capabilities (Historical Preparation)
 
 - Task center, persistent provisioning progress and retries, purchase drafts, stock subscriptions, and 7/30-day automatic renewal forecasts.
 - Host maintenance plans with restricted IPv4 NAT/shared OVN cold migration; hosting withdrawal payment status, references, proof, and failure refunds.
@@ -19,7 +27,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.10` to `v1.0.11`.
+- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.11` to `v1.0.12`.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 

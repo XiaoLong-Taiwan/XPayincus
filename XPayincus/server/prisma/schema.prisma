@@ -10,6 +10,28 @@ datasource db {
   provider = "postgresql"
 }
 
+model NetworkProbeRecord {
+  id          String   @id
+  ownerId     Int      @map("owner_id")
+  packageId   Int      @map("package_id")
+  hostId      Int      @map("host_id")
+  targetId    String   @map("target_id") @db.VarChar(40)
+  targetHost  String   @map("target_host") @db.VarChar(253)
+  targetLabel String   @map("target_label") @db.VarChar(80)
+  source      String
+  method      String
+  port        Int?
+  measuredAt  DateTime @map("measured_at")
+  recordedAt  DateTime @default(now()) @map("recorded_at")
+  verified    Boolean  @default(false) @map("verified")
+  samples     Json
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, packageId, hostId, recordedAt(sort: Desc)], map: "network_probe_records_owner_scope_time_idx")
+  @@index([recordedAt(sort: Desc)], map: "network_probe_records_recorded_at_idx")
+  @@map("network_probe_records")
+}
+
 // ==================== 枚举类型 ====================
 
 enum UserRole {
@@ -595,6 +617,7 @@ model User {
 
   stockSubscriptions StockSubscription[]
   maintenancePlans HostMaintenancePlan[]
+  networkProbeRecords NetworkProbeRecord[]
 
   @@map("users")
 }

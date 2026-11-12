@@ -1,17 +1,33 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import api from '@/api'
-import type { NetworkProbeTarget } from '@/types/network-probe'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { networkProbeApi } from '@/api/network-probe'
+import type { NetworkProbeRecord, NetworkProbeTarget } from '@/types/network-probe'
+import { networkProbeCopy } from './network-probe-copy'
+import { getLocale } from '@/locales'
 
 const props = defineProps<{ packageId: number; hostId: number }>()
 const targets = ref<NetworkProbeTarget[]>([])
+const records = ref<NetworkProbeRecord[]>([])
 const targetId = ref('')
 const busy = ref(false)
 const error = ref('')
 const result = ref('')
 const commands = ref('')
 const copied = ref(false)
+const manualMethod = ref<'icmp' | 'tcp'>('icmp')
+const manualPort = ref<number | undefined>()
+const manualDuration = ref<number | string>()
+const manualSuccess = ref(false)
+const acknowledgeLocal = ref(false)
+const locale = getLocale()
+const copy = locale.startsWith('zh-CN') ? networkProbeCopy['zh-CN'] : locale.startsWith('en') ? networkProbeCopy.en : networkProbeCopy['zh-TW']
 const target = computed(() => targets.value.find(item => item.id === targetId.value))
+const validManualDuration = computed(() => typeof manualDuration.value === 'number' && Number.isFinite(manualDuration.value) && manualDuration.value >= 0 && manualDuration.value <= 60000)
+watch([target, manualMethod], ([currentTarget, method]) => {
+  if (method === 'tcp' && currentTarget?.tcpPorts.length && !currentTarget.tcpPorts.includes(manualPort.value || 0)) manualPort.value = currentTarget.tcpPorts[0]
+  if (method === 'icmp' && !currentTarget?.icmp && currentTarget?.tcpPorts.length) manualMethod.value = 'tcp'
+  if (method === 'tcp' && !currentTarget?.tcpPorts.length && currentTarget?.icmp) manualMethod.value = 'icmp'
+}, { immediate: true })
 let disposed = false
 let controller: AbortController | undefined
 
@@ -20,16 +36,28 @@ onBeforeUnmount(() => {
   controller?.abort()
 })
 
+async function loadRecords() {
+  const response = await networkProbeApi.records(props.packageId, props.hostId)
+  if (!disposed) records.value = response.records
+}
+
 onMounted(async () => {
   try {
-    const response = await api.networkProbe.targets(props.packageId, props.hostId)
+    const response = await networkProbeApi.targets(props.packageId, props.hostId)
     if (disposed) return
     targets.value = response.targets
     targetId.value = targets.value[0]?.id || ''
+    await loadRecords()
   } catch {
-    if (!disposed) error.value = '無法載入此商品節點的核准測試目標'
+    if (!disposed) error.value = copy.loadError
   }
 })
+
+async function saveRecord(input: Parameters<typeof networkProbeApi.save>[0]) {
+  const response = await networkProbeApi.save(input)
+  if (disposed) return
+  records.value = [response.record, ...records.value].slice(0, 100)
+}
 
 async function prepare(https: boolean) {
   if (!target.value || busy.value) return
@@ -39,7 +67,7 @@ async function prepare(https: boolean) {
   commands.value = ''
   copied.value = false
   try {
-    const prepared = await api.networkProbe.prepare(props.packageId, props.hostId, target.value.id)
+    const prepared = await networkProbeApi.prepare(props.packageId, props.hostId, target.value.id)
     if (disposed) return
     const lines: string[] = []
     if (prepared.target.icmp) lines.push(`ping -c 4 ${prepared.address}`, `ping -n 4 ${prepared.address}`)
@@ -50,18 +78,51 @@ async function prepare(https: boolean) {
     if (!https || !prepared.httpsUrl) return
     controller = new AbortController()
     const timeout = window.setTimeout(() => controller?.abort(), 5000)
+    const measuredAt = new Date().toISOString()
+    const started = performance.now()
+    let durationMs = 0
+    let success = false
     try {
-      const started = performance.now()
       const response = await fetch(`${prepared.httpsUrl}?nonce=${crypto.randomUUID()}`, { method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal })
-      const elapsed = performance.now() - started
+      durationMs = Math.round((performance.now() - started) * 10) / 10
       await response.body?.cancel()
-      if (!response.ok) throw new Error('HTTPS 回應失敗')
-      if (!disposed) result.value = `此瀏覽器 → ${prepared.target.label}：HTTPS 回應標頭耗時 ${elapsed.toFixed(1)} ms（非 TCP／ICMP 延遲）`
+      success = response.ok
+      if (!success) throw new Error('HTTPS response failed')
+      if (!disposed) result.value = copy.httpsResult.replace('{duration}', durationMs.toFixed(1))
+    } catch {
+      durationMs = Math.round((performance.now() - started) * 10) / 10
+      if (!disposed) await saveRecord({ packageId: props.packageId, hostId: props.hostId, targetId: prepared.target.id, source: 'browser', method: 'https', measuredAt, samples: [{ durationMs, success: false }] })
+      throw new Error('HTTPS measurement failed')
     } finally {
       window.clearTimeout(timeout)
     }
+    if (!disposed) await saveRecord({ packageId: props.packageId, hostId: props.hostId, targetId: prepared.target.id, source: 'browser', method: 'https', measuredAt, samples: [{ durationMs, success }] })
   } catch {
-    if (!disposed) error.value = '測試無法完成：可能為未授權、限流、DNS、CORS、憑證、端點或逾時問題；不代表節點離線。'
+    if (!disposed) error.value = copy.saveError
+  } finally {
+    if (!disposed) busy.value = false
+  }
+}
+
+async function saveLocalRecord() {
+  if (busy.value || !target.value || !acknowledgeLocal.value || !validManualDuration.value || typeof manualDuration.value !== 'number') return
+  busy.value = true
+  error.value = ''
+  try {
+    await saveRecord({
+      packageId: props.packageId,
+      hostId: props.hostId,
+      targetId: target.value.id,
+      source: 'manual-local',
+      method: manualMethod.value,
+      ...(manualMethod.value === 'tcp' ? { port: manualPort.value } : {}),
+      measuredAt: new Date().toISOString(),
+      samples: [{ durationMs: manualDuration.value, success: manualSuccess.value }],
+      acknowledgedUnverified: true
+    })
+    acknowledgeLocal.value = false
+  } catch {
+    error.value = copy.localError
   } finally {
     if (!disposed) busy.value = false
   }
@@ -72,30 +133,56 @@ async function copyCommands() {
     await navigator.clipboard.writeText(commands.value)
     copied.value = true
   } catch {
-    error.value = '無法存取剪貼簿，請手動選取指令複製。'
+    error.value = copy.clipboardError
   }
 }
 </script>
 
 <template>
   <section v-if="targets.length || error" class="card space-y-3 p-5 text-sm text-themed">
-    <h3 class="font-semibold">此商品節點網路測試</h3>
-    <p class="text-themed-muted">瀏覽器 HTTPS 包含 DNS、TLS、HTTP 與服務處理時間，受連線重用、代理及快取影響，非 TCP／ICMP ping；若目標使用 CDN，結果只到 CDN。API 不代替客戶測量。</p>
-    <label v-if="targets.length" class="block">核准目標
+    <h3 class="font-semibold">{{ copy.title }}</h3>
+    <p class="text-themed-muted">{{ copy.notice }}</p>
+    <label v-if="targets.length" class="block">{{ copy.target }}
       <select v-model="targetId" class="input mt-1" :disabled="busy" @change="result = ''; commands = ''; copied = false">
         <option v-for="item in targets" :key="item.id" :value="item.id">{{ item.label }} · {{ item.host }}</option>
       </select>
     </label>
     <div class="flex flex-wrap gap-2">
-      <button v-if="target?.https" type="button" class="btn-secondary" :disabled="busy" @click="prepare(true)">{{ busy ? '處理中…' : '從此瀏覽器測試 HTTPS' }}</button>
-      <button v-if="target && (target.icmp || target.tcpPorts.length)" type="button" class="btn-secondary" :disabled="busy" @click="prepare(false)">產生本機 TCP／ICMP 指令</button>
+      <button v-if="target?.https" type="button" class="btn-secondary" :disabled="busy" @click="prepare(true)">{{ busy ? copy.loading : copy.https }}</button>
+      <button v-if="target && (target.icmp || target.tcpPorts.length)" type="button" class="btn-secondary" :disabled="busy" @click="prepare(false)">{{ copy.commands }}</button>
     </div>
     <p v-if="result" role="status">{{ result }}</p>
     <p v-if="error" role="alert" class="text-red-600">{{ error }}</p>
     <div v-if="commands" class="space-y-2">
-      <p class="text-themed-muted">請僅在本機或自己已授權的主機執行。指令固定使用此次核准的公開 IP；ping -c／nc 適用 Linux，ping -n／Test-NetConnection 適用 Windows PowerShell。TCP 指令只檢查連通性，不回報精確 RTT。平台不收集或驗證執行結果，尚未提供 Agent 遠端測量。</p>
+      <p class="text-themed-muted">{{ copy.commandNotice }}</p>
       <pre class="whitespace-pre-wrap break-all rounded border border-themed p-3">{{ commands }}</pre>
-      <button type="button" class="btn-secondary" @click="copyCommands">{{ copied ? '已複製' : '複製指令' }}</button>
+      <button type="button" class="btn-secondary" @click="copyCommands">{{ copied ? copy.copied : copy.copy }}</button>
+    </div>
+    <fieldset v-if="target && (target.icmp || target.tcpPorts.length)" class="space-y-2 border-t border-themed pt-3">
+      <legend class="font-medium">{{ copy.localTitle }}</legend>
+      <div class="flex flex-wrap gap-2">
+        <select v-model="manualMethod" class="input" :disabled="busy">
+          <option v-if="target.icmp" value="icmp">ICMP</option>
+          <option v-if="target.tcpPorts.length" value="tcp">TCP</option>
+        </select>
+        <select v-if="manualMethod === 'tcp'" v-model.number="manualPort" class="input" :disabled="busy">
+          <option v-for="port in target.tcpPorts" :key="port" :value="port">TCP {{ port }}</option>
+        </select>
+        <input v-model.number="manualDuration" class="input w-32" type="number" min="0" max="60000" step="0.1" :placeholder="copy.duration">
+        <label><input v-model="manualSuccess" type="checkbox"> {{ copy.success }}</label>
+      </div>
+      <label class="block"><input v-model="acknowledgeLocal" type="checkbox"> {{ copy.acknowledge }}</label>
+      <button type="button" class="btn-secondary" :disabled="busy || !acknowledgeLocal || !validManualDuration" @click="saveLocalRecord">{{ copy.save }}</button>
+    </fieldset>
+    <div class="space-y-2 border-t border-themed pt-3">
+      <h4 class="font-medium">{{ copy.history }}</h4>
+      <p v-if="records.length === 0" class="text-themed-muted">{{ copy.empty }}</p>
+      <ul v-else class="space-y-2">
+        <li v-for="record in records" :key="record.id" class="break-words">
+          {{ new Date(record.measuredAt).toLocaleString() }} · {{ record.targetLabel }} · {{ record.method === 'https' ? copy.httpsMethod : record.method.toUpperCase() }} · {{ record.source === 'browser' ? copy.browser : copy.manual }} ·
+          <span v-for="(sample, index) in record.samples" :key="index">{{ sample.success ? copy.succeeded : copy.failed }} {{ sample.durationMs }} ms<span v-if="index < record.samples.length - 1">；</span></span>
+        </li>
+      </ul>
     </div>
   </section>
 </template>
