@@ -1200,16 +1200,35 @@ export interface HostAgentUpgradeRequestResponse {
   message: string
 }
 
-export interface HostAgentInstallCommandResponse {
+export interface HostInstallDetails {
+  panelUrl: string
+  installScriptUrl: string
+  installCommand: string
+  installToken: string
+  installTokenExpiresAt?: string
+}
+
+export interface CreateHostResponse {
+  host: Pick<Host, 'id' | 'name' | 'url' | 'status'>
+  message: string
+  panelUrl: string
+  installScriptUrl: string
+  installCommand?: string
+  installToken?: string
+}
+
+export interface RegenerateHostInstallResponse extends HostInstallDetails {
+  success: boolean
+  message: string
+}
+
+export interface HostAgentInstallCommandResponse extends HostInstallDetails {
   host: {
     id: number
     name: string
   }
   agent: HostAgentStatus
-  installToken: string
   installTokenExpiresAt: string
-  installScriptUrl: string
-  installCommand: string
   warning: string
 }
 

@@ -11,6 +11,12 @@
 # 项目地址: https://incudal.com
 # ============================================================================
 set -euo pipefail
+set +x
+umask 077
+
+if [[ ! -t 1 || ! -t 2 || ${NO_COLOR+x} || "${TERM:-dumb}" == dumb ]]; then
+    export SYSTEMD_COLORS=0
+fi
 
 # ========面板动态注入区========
 # 面板在下载时自动注入以下变量，无需手动修改
@@ -117,15 +123,14 @@ zfs_prebuilt_sha256() {
     esac
 }
 
-# ========================== 颜色定义 ==========================
-readonly RED='\033[1;31m'
-readonly GREEN='\033[1;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[1;34m'
-readonly CYAN='\033[1;36m'
-readonly BOLD='\033[1m'
-readonly DIM='\033[2m'
-readonly NC='\033[0m'
+# ========================== 终端显示 ==========================
+RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
+if [[ -t 1 && -t 2 && "${TERM:-dumb}" != dumb && ! ${NO_COLOR+x} ]]; then
+    RED=$'\033[1;31m' GREEN=$'\033[1;32m' YELLOW=$'\033[1;33m'
+    BLUE=$'\033[1;34m' CYAN=$'\033[1;36m' BOLD=$'\033[1m'
+    DIM=$'\033[2m' NC=$'\033[0m'
+fi
+readonly RED GREEN YELLOW BLUE CYAN BOLD DIM NC
 
 # ========================== 运行时变量 ==========================
 MODE=""
@@ -148,11 +153,11 @@ IPV6_SUBNET=""
 IPV6_IFACE=""
 
 # ========================== 工具函数 ==========================
-log()   { echo -e "${GREEN}[✓]${NC} $1"; }
-info()  { echo -e "${BLUE}[i]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-error() { echo -e "${RED}[✗]${NC} $1"; }
-step()  { echo -e "\n${CYAN}[▶]${NC} ${BOLD}$1${NC}"; }
+log()   { printf '  %s[完成]%s %s\n' "$GREEN" "$NC" "$1"; }
+info()  { printf '  %s[提示]%s %s\n' "$BLUE" "$NC" "$1"; }
+warn()  { printf '  %s[警告]%s %s\n' "$YELLOW" "$NC" "$1"; }
+error() { printf '  %s[错误]%s %s\n' "$RED" "$NC" "$1"; }
+step()  { printf '\n%s[步骤]%s %s%s%s\n\n' "$CYAN" "$NC" "$BOLD" "$1" "$NC"; }
 
 # 校验下载到的文件确实是一个 ELF 可执行文件（魔数 7f 45 4c 46）。
 # 下载端点被 CDN/WAF 拦截、Release 资产缺失或链接失效时，拿到的往往是一段 HTML
@@ -216,7 +221,14 @@ backup_resolv_conf_before_incudal() {
 
 # 分隔线
 divider() {
-    echo -e "${DIM}────────────────────────────────────────────────────${NC}"
+    local width="${COLUMNS:-60}" line
+    [[ "$width" =~ ^[0-9]{1,3}$ ]] || width=60
+    width=$((10#$width))
+    (( width > 60 )) && width=60
+    (( width < 3 )) && width=3
+    width=$((width - 2))
+    printf -v line '%*s' "$width" ''
+    printf '  %s%s%s\n' "$DIM" "${line// /-}" "$NC"
 }
 
 pause_return() {
@@ -305,7 +317,7 @@ prompt_agent_heartbeat_interval() {
         return 0
     fi
 
-    echo -ne "  ${BOLD}Agent 上报间隔秒数 [默认 ${default_interval}，范围 30-3600]: ${NC}"
+    printf '  Agent 上报间隔秒数 [默认 %s，范围 30-3600]: ' "$default_interval"
     local agent_interval=""
     read -r agent_interval
 
@@ -326,7 +338,7 @@ show_agent_summary_line() {
     elif [[ -f "$AGENT_CONFIG_FILE" || -x "$AGENT_BIN_PATH" ]]; then
         label="${YELLOW}已安装（未运行）${NC}"
     fi
-    echo -e "  Agent    :  ${label}"
+    printf '  Agent: %s\n' "$label"
 }
 
 # 清理临时文件
@@ -337,17 +349,12 @@ trap cleanup EXIT
 
 # ========================== 显示横幅 ==========================
 show_banner() {
-    clear 2>/dev/null || true
-    echo ""
-    echo -e "${CYAN}  ╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}  ║                                                  ║${NC}"
-    echo -e "${CYAN}  ║            ${BOLD}Incudal 节点安装管理脚本${NC}${CYAN}              ║${NC}"
-    echo -e "${CYAN}  ║            ${DIM}LXC Container Host Setup${NC}${CYAN}              ║${NC}"
-    echo -e "${CYAN}  ║                                                  ║${NC}"
-    echo -e "${CYAN}  ╚══════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  ${DIM}版本: ${SCRIPT_VERSION}  |  面板: ${PANEL_URL}${NC}"
-    echo ""
+    printf '\n'
+    divider
+    printf '  %sIncudal 节点安装管理脚本%s\n' "$BOLD" "$NC"
+    printf '  %s\n' 'LXC Container Host Setup'
+    divider
+    printf '  版本: %s\n  面板: %s\n\n' "$SCRIPT_VERSION" "$PANEL_URL"
 }
 
 # ========================== 系统检测 ==========================
@@ -432,10 +439,8 @@ show_system_info() {
         *)      os_label="$OS_ID" ;;
     esac
 
-    echo -e "  操作系统  :  ${GREEN}${os_label} ${OS_VERSION}${NC} (${OS_CODENAME})"
-    echo -e "  系统架构  :  ${GREEN}${ARCH}${NC}"
-    echo -e "  默认接口  :  ${GREEN}${DEFAULT_IFACE}${NC}"
-    echo -e "  主 机 名  :  ${GREEN}$(hostname)${NC}"
+    printf '  操作系统: %s %s (%s)\n' "$os_label" "$OS_VERSION" "$OS_CODENAME"
+    printf '  系统架构: %s\n  默认接口: %s\n  主机名称: %s\n' "$ARCH" "$DEFAULT_IFACE" "$(hostname)"
 
     if [[ "$IS_PURE_IPV6" == "true" ]]; then
         echo -e "  网络环境  :  ${YELLOW}纯 IPv6 (Pure IPv6) - 将启用 WARP 出站接力${NC}"
@@ -451,14 +456,14 @@ show_system_info() {
         
         # 判断服务端是否能连通
         if ! incus version 2>/dev/null | grep -q -E "Server version: [0-9]"; then
-            echo -e "  Incus     :  ${YELLOW}客户端残留（服务未在运行）${NC} (${incus_ver})"
+            printf '  Incus: 客户端残留（服务未在运行） (%s)\n' "$incus_ver"
         else
-            echo -e "  Incus     :  ${GREEN}已安装并运行${NC} (${incus_ver})"
+            printf '  Incus: 已安装并运行 (%s)\n' "$incus_ver"
         fi
 
         # 检查网桥
         if incus network show "$BRIDGE_NAME" &>/dev/null; then
-            echo -e "  网桥状态  :  ${YELLOW}${BRIDGE_NAME} 已存在${NC}"
+            printf '  网桥状态: %s 已存在\n' "$BRIDGE_NAME"
         else
             echo -e "  网桥状态  :  ${DIM}未初始化${NC}"
         fi
@@ -497,7 +502,7 @@ show_system_info() {
                 fi
                 rfw_rules="${rfw_rules} | ${geo}"
             fi
-            echo -e "  RFW 防火墙:  ${GREEN}运行中${NC} (${rfw_rules})"
+            printf '  RFW 防火墙: 运行中 (%s)\n' "$rfw_rules"
         else
             echo -e "  RFW 防火墙:  ${YELLOW}已安装（未运行）${NC}"
         fi
@@ -513,20 +518,16 @@ show_system_info() {
 
 # ========================== 交互式菜单 ==========================
 show_menu() {
-    echo -e "  ${BOLD}请选择操作：${NC}"
-    echo ""
-    echo -e "    ${CYAN}1)${NC}  安装节点  ${DIM}─  仅 IPv4${NC}"
-    echo -e "    ${CYAN}2)${NC}  安装节点  ${DIM}─  IPv4 + IPv6（自动检测配置）${NC}"
-    echo -e "    ${CYAN}3)${NC}  安装 RFW  ${DIM}─  入站流量屏蔽防火墙${NC}"
-    echo -e "    ${CYAN}4)${NC}  查看系统信息"
-    echo -e "    ${CYAN}7)${NC}  网络模式说明（必看说明）"
-    echo -e "    ${CYAN}8)${NC}  Agent 管理  ${DIM}─  安装 / 更新宿主机 Agent${NC}"
-    echo ""
-    echo -e "    ${RED}5)${NC}  卸载 RFW  ${DIM}─  移除 RFW 防火墙${NC}"
-    echo -e "    ${RED}6)${NC}  卸载节点  ${DIM}─  彻底清理还原系统${NC}"
-    echo -e "    ${CYAN}0)${NC}  退出"
-    echo ""
-    echo -ne "  ${BOLD}请输入选项 [0-8]: ${NC}"
+    printf '  %s请选择操作：%s\n\n' "$BOLD" "$NC"
+    printf '  %s\n' \
+        '[1] 安装节点 - 仅 IPv4' \
+        '[2] 安装节点 - IPv4 + IPv6（自动检测配置）' \
+        '[3] 安装 RFW - 入站流量屏蔽防火墙' \
+        '[4] 查看系统信息' \
+        '[7] 网络模式说明（必看说明）' \
+        '[8] Agent 管理 - 安装 / 更新宿主机 Agent'
+    printf '\n  %s\n' '[5] 卸载 RFW - 移除 RFW 防火墙' '[6] 卸载节点 - 依后续确认处理资料' '[0] 退出'
+    printf '\n  %s请输入选项 [0-8]: %s' "$BOLD" "$NC"
 }
 
 # ========================== 网络模式说明 ==========================
@@ -627,7 +628,7 @@ configure_agent_heartbeat_interval() {
         return 0
     fi
 
-    echo -e "\n${CYAN}==> (可选) Agent 上报间隔${NC}"
+    step '(可选) Agent 上报间隔'
     echo -e "  ${DIM}默认 60 秒；面板宿主机状态卡片会自动跟随此间隔刷新${NC}"
     echo -ne "  ${BOLD}Agent 上报间隔秒数 [默认 60，范围 30-3600]: ${NC}"
     local agent_interval=""
@@ -643,16 +644,33 @@ configure_agent_heartbeat_interval() {
     fi
 }
 
-# 裸數字與 GB 沿用舊版的 GiB 解讀；運算前先檢查範圍。
+# GB/MB 等使用十進位；GiB/G 與裸數字使用二進位。小數不足一 byte 的部分捨去。
 parse_binary_size() {
-    local value="${1^^}" number unit factor
-    [[ "$value" =~ ^([0-9]{1,12})(M|MIB|MB|G|GIB|GB)?$ ]] || return 1
+    local value="${1^^}" number fraction unit factor bytes=0 fractional_bytes=0 limit digit i
+    [[ "$value" =~ ^([0-9]+)(\.([0-9]+))?(K|KIB|KB|M|MIB|MB|G|GIB|GB|T|TIB|TB)?$ ]] || return 1
     number="${BASH_REMATCH[1]}"
-    unit="${BASH_REMATCH[2]}"
-    number=$((10#$number))
-    case "$unit" in M|MIB|MB) factor=1048576 ;; *) factor=1073741824 ;; esac
-    (( number > 0 && number <= 9223372036854775807 / factor )) || return 1
-    printf '%s\n' "$((number * factor))"
+    fraction="${BASH_REMATCH[3]}"
+    unit="${BASH_REMATCH[4]}"
+    case "$unit" in
+        KB) factor=1000 ;; K|KIB) factor=1024 ;;
+        MB) factor=1000000 ;; M|MIB) factor=1048576 ;;
+        GB) factor=1000000000 ;; G|GIB|'') factor=1073741824 ;;
+        TB) factor=1000000000000 ;; T|TIB) factor=1099511627776 ;;
+    esac
+    # 逐位換算小數，每一步均小於 factor * 10，避免浮點與乘法溢位。
+    for ((i=${#fraction}-1; i>=0; i--)); do
+        digit="${fraction:i:1}"
+        fractional_bytes=$(((10#$digit * factor + fractional_bytes) / 10))
+    done
+    limit=$(((9223372036854775807 - fractional_bytes) / factor))
+    for ((i=0; i<${#number}; i++)); do
+        digit="${number:i:1}"
+        (( bytes <= (limit - 10#$digit) / 10 && 10#$digit <= limit )) || return 1
+        bytes=$((bytes * 10 + 10#$digit))
+    done
+    bytes=$((bytes * factor + fractional_bytes))
+    (( bytes > 0 )) || return 1
+    printf '%s\n' "$bytes"
 }
 
 configure_zfs_arc_memory() {
@@ -663,6 +681,7 @@ configure_zfs_arc_memory() {
     [[ "$total_mem_kb" =~ ^[0-9]{1,13}$ ]] || { error "无法读取总 RAM"; return 1; }
     total_bytes=$((10#$total_mem_kb * 1024))
     info "ARC 是缓存限制，并非 ZFS 总内存硬上限；其他 ZFS 分配仍会使用 RAM。"
+    info "容量支持小数；纯数字/G 为 GiB，GB 为十进位，GiB 为二进位（如 1.5GB、1.5GiB）。"
     if [[ -z "$maximum" && -z "$minimum" ]]; then
         if [[ ! -t 0 ]]; then
             info "未明确设置 ARC，保留 /etc/modprobe.d/99-zfs-arc.conf 或系统默认值"
@@ -758,19 +777,17 @@ confirm_install() {
     divider
     echo -e "  ${BOLD}安装确认${NC}"
     divider
-    echo -e "  操作系统  :  ${GREEN}${os_label}${NC} (${OS_CODENAME})"
-    echo -e "  网络模式  :  ${GREEN}${mode_label}${NC}"
-    echo -e "  网桥子网  :  ${GREEN}${BRIDGE_SUBNET}${NC}"
+    printf '  操作系统: %s (%s)\n' "$os_label" "$OS_CODENAME"
+    printf '  网络模式: %s\n  网桥子网: %s\n' "$mode_label" "$BRIDGE_SUBNET"
     if [[ -n "${IPV6_SUBNET:-}" ]]; then
-        echo -e "  IPv6 子网 :  ${GREEN}${IPV6_SUBNET}${NC} (${IPV6_IFACE:-auto})"
+        printf '  IPv6 子网: %s (%s)\n' "$IPV6_SUBNET" "${IPV6_IFACE:-auto}"
     fi
-    echo -e "  通信端口  :  ${GREEN}[::]:${LISTEN_PORT}${NC}"
-    echo -e "  Token     :  ${GREEN}${token_masked}${NC}"
+    printf '  通信端口: [::]:%s\n  Token: %s\n' "$LISTEN_PORT" "$token_masked"
     if [[ "$AGENT_ENABLED" == "true" && ( -n "$AGENT_INSTALL_TOKEN" || ( -n "$AGENT_ID" && -n "$AGENT_SECRET" ) ) ]]; then
-        echo -e "  Agent     :  ${GREEN}${AGENT_HEARTBEAT_INTERVAL_SECONDS} 秒上报${NC}"
+        printf '  Agent: %s 秒上报\n' "$AGENT_HEARTBEAT_INTERVAL_SECONDS"
     fi
     if [[ -n "$ZFS_ARC_MAX_BYTES" ]]; then
-        echo -e "  ZFS ARC   :  ${GREEN}最大 ${ZFS_ARC_MAX_BYTES} bytes / 最小 ${ZFS_ARC_MIN_BYTES} bytes${NC}"
+        printf '  ZFS ARC: 最大 %s bytes / 最小 %s bytes\n' "$ZFS_ARC_MAX_BYTES" "$ZFS_ARC_MIN_BYTES"
     else
         echo -e "  ZFS ARC   :  ${DIM}保留现有配置或系统默认${NC}"
     fi
@@ -785,12 +802,13 @@ confirm_install() {
     
     divider
     echo ""
-    if [[ ! -t 0 ]]; then
+    if [[ "${INSTALL_ASSUME_YES:-false}" == true ]]; then
         info "非交互安装：使用明确参数与以上保留策略"
         return 0
     fi
-    echo -ne "  ${YELLOW}确认开始安装？${NC}[y/N]: "
-    read -r confirm
+    [[ -r /dev/tty && -w /dev/tty ]] || { error '請使用終端確認或明確指定 --yes'; exit 1; }
+    printf '  確認開始安裝？[y/N]: ' >/dev/tty
+    read -r confirm </dev/tty
     if [[ ! "$confirm" =~ ^[yY]$ ]]; then
         info "已取消安装"
         exit 0
@@ -863,7 +881,7 @@ probe_ipv6_subnet() {
         return 1
     fi
 
-    echo -e "  ${CYAN}▶ 第 1 步：远距探测（验证完整 /64 是否可用）...${NC}"
+    info 'IPv6 探测 1/3：远距探测（验证完整 /64 是否可用）...'
 
     # ---- 第 1 级：远距探测 ----
     # 生成一个距离宿主机 IP 尽可能远的同 /64 地址
@@ -902,8 +920,8 @@ print(str(net))
         return 0
     fi
 
-    echo -e "  ${YELLOW}✗ 远距探测未通过，非完整 /64${NC}"
-    echo -e "  ${CYAN}▶ 第 2 步：近距探测（验证是否有额外可用 IP）...${NC}"
+    warn '远距探测未通过，非完整 /64'
+    info 'IPv6 探测 2/3：近距探测（验证是否有额外可用 IP）...'
 
     # ---- 第 2 级：近距探测 ----
     local near_ip
@@ -925,8 +943,8 @@ print(str(addr + 2))
         return 0
     fi
 
-    echo -e "  ${GREEN}✓ 近距探测通过，存在额外可用 IP${NC}"
-    echo -e "  ${CYAN}▶ 第 3 步：边界收敛（精确定位可用范围）...${NC}"
+    log '近距探测通过，存在额外可用 IP'
+    info 'IPv6 探测 3/3：边界收敛（精确定位可用范围）...'
 
     # ---- 第 3 级：指数探测 + 二分收敛 ----
     local last_pass=2
@@ -1041,7 +1059,7 @@ else:
     cidr_count=$(echo "$cidr_prefix" | cut -d'|' -f2)
     PROBE_COUNT="$cidr_count"
 
-    echo -e "  ${GREEN}✓ 检测完成：实际可用约 ${usable_count} 个 IP，安全上报为 ${PROBE_CIDR}（${cidr_count} 个）${NC}"
+    log "检测完成：实际可用约 ${usable_count} 个 IP，安全上报为 ${PROBE_CIDR}（${cidr_count} 个）"
     return 0
 }
 
@@ -1193,7 +1211,7 @@ setup_warp_v4() {
 #!/bin/bash
 if [[ "$1" == "on" ]]; then
     systemctl start wg-quick@wg0 2>/dev/null
-    echo "🌍 [ON] WARP IPv4 抢救通道已激活。容器支持出海更新包下载。"
+    printf '%s\n' '  [ON] WARP IPv4 抢救通道已激活。容器支持出海更新包下载。'
 elif [[ "$1" == "off" ]]; then
     systemctl stop wg-quick@wg0 2>/dev/null
     # 核心修复二：使用强落地的环境备份读取真实原生网关，拒绝 fe80::1
@@ -1226,13 +1244,13 @@ nameserver 2a00:1098:2b::1
 nameserver 2a01:4f8:c2c:123f::1
 nameserver 2001:67c:2b0::4
 DNSEOF
-    echo "🧊 [OFF] WARP IPv4 通道已切断，原生真实 IPv6 路由结构已接管。"
+    printf '%s\n' '  [OFF] WARP IPv4 通道已切断，原生真实 IPv6 路由结构已接管。'
 else
-    echo -e "用法: \033[1;36mincus-warp [on/off]\033[0m"
+    printf '%s\n' '  用法: incus-warp [on/off]'
     if systemctl is-active wg-quick@wg0 >/dev/null 2>&1; then
-        echo -e "当前出站分流状态: \033[1;32m[ON] IPv6 原生 + IPv4 WARP 接驳\033[0m"
+        printf '%s\n' '  当前出站分流状态: [ON] IPv6 原生 + IPv4 WARP 接驳'
     else
-        echo -e "当前出站分流状态: \033[1;31m[OFF] 100% 绝对纯净 IPv6 环境回落\033[0m"
+        printf '%s\n' '  当前出站分流状态: [OFF] 100% 绝对纯净 IPv6 环境回落'
     fi
 fi
 EOF
@@ -1922,7 +1940,7 @@ zfs_storage_available() {
 
 ensure_incus_storage() {
     local profile root_device root_pool pools selected="${INCUS_STORAGE_POOL:-}"
-    local driver="${INCUS_STORAGE_DRIVER:-auto}" size="${INCUS_STORAGE_SIZE:-}" auto_driver=false
+    local driver="${INCUS_STORAGE_DRIVER:-auto}" size="${INCUS_STORAGE_SIZE:-}"
     profile=$(incus query /1.0/profiles/default) || return 1
     profile=$(printf '%s' "$profile" | python3 -c '
 import json,sys
@@ -1992,43 +2010,26 @@ except (ValueError, KeyError, TypeError):
         fi
         [[ "$selected" =~ ^[A-Za-z][A-Za-z0-9_-]{0,62}$ ]] || { error "储存池名称无效"; return 1; }
         if [[ "$driver" == auto ]]; then
-            auto_driver=true
             if zfs_storage_available; then driver=zfs; else driver=dir; fi
             info "自动选择储存 driver: ${driver}"
         fi
         case "$driver" in
             zfs)
                 zfs_storage_available || { error "ZFS 工具、模块或 /dev/zfs 不可用"; return 1; }
-                local bytes available default_gib
-                available=$(df -B1 --output=avail /var/lib/incus | awk 'NR==2 {print $1}') || return 1
-                [[ "$available" =~ ^[0-9]{1,18}$ ]] || return 1
-                available=$((10#$available))
-                default_gib=$((available / 2 / 1073741824))
-                if (( default_gib < 1 )); then
-                    if [[ "$auto_driver" == true && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
-                        info "剩余空间的一半不足 1GiB，自动改用 dir 储存池"
-                        driver=dir
-                    else
-                        error "ZFS loop 至少 1GiB，且不得超过 Incus 数据磁盘剩余空间的一半；请使用 dir"; return 1
+                local bytes
+                info "容量支持小数；纯数字/G 为 GiB，GB 为十进位，GiB 为二进位；默认 10GiB。"
+                while true; do
+                    if [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
+                        read -r -p "ZFS loop 大小 [10GiB]: " size || return 1
                     fi
-                fi
-                if [[ "$driver" == dir ]]; then
-                    incus storage create "$selected" dir || return 1
-                else
-                    if (( default_gib > 10 )); then default_gib=10; fi
-                    while true; do
-                        if [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]]; then
-                            read -r -p "ZFS loop 大小 [${default_gib}GiB]: " size || return 1
-                        fi
-                        size="${size:-${default_gib}GiB}"
-                        if bytes=$(parse_binary_size "$size") && (( bytes >= 1073741824 && bytes <= available / 2 )); then
-                            break
-                        fi
-                        error "ZFS loop 至少 1GiB，且不得超过 Incus 数据磁盘剩余空间的一半；请指定较小大小或 dir"
-                        [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]] || return 1
-                    done
-                    incus storage create "$selected" zfs "size=${bytes}" || return 1
-                fi
+                    size="${size:-10GiB}"
+                    if bytes=$(parse_binary_size "$size"); then
+                        break
+                    fi
+                    error "ZFS loop 大小无效；请输入正数容量，如 512MiB、1.5GB 或 10GiB"
+                    [[ -t 0 && -z "${INCUS_STORAGE_SIZE:-}" ]] || return 1
+                done
+                incus storage create "$selected" zfs "size=${bytes}" || return 1
                 ;;
             dir) incus storage create "$selected" dir || return 1 ;;
             *) error "只允许 auto/zfs/dir；不接受磁盘或 source 参数"; return 1 ;;
@@ -2288,7 +2289,8 @@ import_cert() {
     local cert_file=""
     cert_file=$(mktemp /tmp/incudal-panel-cert.XXXXXX.crt)
 
-    if ! curl -sSf "$cert_url" -o "$cert_file"; then
+    if ! printf 'url = "%s"\n' "$cert_url" | curl -q -fsS --proto '=http,https' \
+        --connect-timeout 10 --max-time 60 --config - -o "$cert_file" 2>/dev/null; then
         rm -f "$cert_file"
         error "证书导入失败！请检查："
         error "  1. Token 是否正确"
@@ -2360,12 +2362,13 @@ install_incudal_agent() {
         INCUDAL_AGENT_BINARY_URL="$AGENT_BINARY_URL" \
         INCUDAL_AGENT_BINARY_SHA256="$AGENT_BINARY_SHA256" \
         INCUDAL_HEARTBEAT_INTERVAL_SECONDS="$AGENT_HEARTBEAT_INTERVAL_SECONDS" \
-        bash; then
+        bash -s -- --host-ready --yes; then
         AGENT_INSTALL_STATUS="已安装"
         log "宿主机 Agent 安装完成"
     else
         AGENT_INSTALL_STATUS="安装失败"
         warn "宿主机 Agent 安装失败，Incus 节点初始化已完成，可稍后在面板重新生成 Agent 安装命令"
+        return 1
     fi
 
     return 0
@@ -2436,18 +2439,16 @@ show_incudal_agent_status() {
     heartbeat_interval=$(normalize_agent_interval "${heartbeat_interval:-60}")
 
     if [[ -f "$AGENT_CONFIG_FILE" ]]; then
-        echo -e "  配置文件  :  ${GREEN}${AGENT_CONFIG_FILE}${NC}"
-        echo -e "  面板地址  :  ${GREEN}${panel_url:-未知}${NC}"
-        echo -e "  Agent ID :  ${GREEN}$(mask_value "$agent_id")${NC}"
-        echo -e "  上报间隔  :  ${GREEN}${heartbeat_interval} 秒${NC}"
+        printf '  配置文件: %s\n  面板地址: %s\n' "$AGENT_CONFIG_FILE" "${panel_url:-未知}"
+        printf '  Agent ID: %s\n  上报间隔: %s 秒\n' "$(mask_value "$agent_id")" "$heartbeat_interval"
     else
-        echo -e "  配置文件  :  ${DIM}未找到 (${AGENT_CONFIG_FILE})${NC}"
+        printf '  配置文件: 未找到 (%s)\n' "$AGENT_CONFIG_FILE"
     fi
 
     if [[ -x "$AGENT_BIN_PATH" ]]; then
-        echo -e "  二进制    :  ${GREEN}${AGENT_BIN_PATH}${NC}"
+        printf '  二进制: %s\n' "$AGENT_BIN_PATH"
     else
-        echo -e "  二进制    :  ${DIM}未安装 (${AGENT_BIN_PATH})${NC}"
+        printf '  二进制: 未安装 (%s)\n' "$AGENT_BIN_PATH"
     fi
 
     if command -v systemctl &>/dev/null; then
@@ -2471,7 +2472,7 @@ prompt_agent_panel_url() {
 
     if [[ -t 0 ]]; then
         if [[ -n "$default_panel_url" ]]; then
-            echo -ne "  ${BOLD}面板地址 [默认 ${default_panel_url}]: ${NC}" >&2
+            printf '  面板地址 [默认 %s]: ' "$default_panel_url" >&2
         else
             echo -ne "  ${BOLD}面板地址 (例如 https://panel.example.com): ${NC}" >&2
         fi
@@ -2481,11 +2482,11 @@ prompt_agent_panel_url() {
     panel_url="${panel_url:-$default_panel_url}"
     panel_url="${panel_url%/}"
     if [[ -z "$panel_url" ]]; then
-        echo -e "${RED}[✗]${NC} 无法确定面板地址，请输入完整 https:// 地址" >&2
+        printf '  %s[错误]%s %s\n' "$RED" "$NC" '无法确定面板地址，请输入完整 https:// 地址' >&2
         return 1
     fi
     if ! is_http_url "$panel_url"; then
-        echo -e "${RED}[✗]${NC} 面板地址格式无效: ${panel_url}" >&2
+        printf '  %s[错误]%s 面板地址格式无效: %s\n' "$RED" "$NC" "$panel_url" >&2
         return 1
     fi
 
@@ -2574,14 +2575,12 @@ show_incudal_agent_logs() {
 manage_incudal_agent() {
     while true; do
         show_incudal_agent_status
-        echo -e "  ${BOLD}请选择 Agent 操作：${NC}"
-        echo ""
-        echo -e "    ${CYAN}1)${NC}  更新 / 重装已安装 Agent  ${DIM}─  使用本机配置${NC}"
-        echo -e "    ${CYAN}2)${NC}  使用一次性 token 补装 / 重装 Agent"
-        echo -e "    ${CYAN}3)${NC}  查看 Agent 日志"
-        echo -e "    ${CYAN}0)${NC}  返回主菜单"
-        echo ""
-        echo -ne "  ${BOLD}请输入选项 [0-3]: ${NC}"
+        printf '  %s请选择 Agent 操作：%s\n\n' "$BOLD" "$NC"
+        printf '  %s\n' \
+            '[1] 更新 / 重装已安装 Agent - 使用本机配置' \
+            '[2] 使用一次性 token 补装 / 重装 Agent' \
+            '[3] 查看 Agent 日志' '[0] 返回主菜单'
+        printf '\n  %s请输入选项 [0-3]: %s' "$BOLD" "$NC"
         local choice=""
         read -r choice
         echo ""
@@ -2623,19 +2622,14 @@ SHORTCUT
     chown root:root /usr/local/bin/incudal
     chmod 0755 /usr/local/bin/incudal
 
-    echo ""
-    echo -e "${GREEN}  ╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}  ║                                                  ║${NC}"
-    echo -e "${GREEN}  ║           ✓  安装完成                            ║${NC}"
-    echo -e "${GREEN}  ║                                                  ║${NC}"
-    echo -e "${GREEN}  ╚══════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "  网桥名称  :  ${GREEN}${BRIDGE_NAME}${NC}"
-    echo -e "  网桥子网  :  ${GREEN}${BRIDGE_SUBNET}${NC}"
-    echo -e "  API 监听  :  ${GREEN}[::]:${LISTEN_PORT}${NC}"
-    echo -e "  网络模式  :  ${GREEN}${mode_label}${NC}"
-    echo -e "  Agent     :  ${GREEN}${AGENT_INSTALL_STATUS}${NC}"
-    echo -e "  快捷命令  :  ${GREEN}incudal${NC}"
+    printf '\n'
+    divider
+    printf '  %s[完成] 安装完成%s\n' "$GREEN" "$NC"
+    divider
+    printf '\n'
+    printf '  网桥名称: %s\n  网桥子网: %s\n' "$BRIDGE_NAME" "$BRIDGE_SUBNET"
+    printf '  API 监听: [::]:%s\n  网络模式: %s\n' "$LISTEN_PORT" "$mode_label"
+    printf '  Agent: %s\n  快捷命令: incudal\n' "$AGENT_INSTALL_STATUS"
     echo ""
     divider
     echo -e "  ${BOLD}下一步：${NC}请返回 Incudal 面板，点击「验证并连接」按钮完成注册"
@@ -2741,18 +2735,15 @@ configure_rfw_rules() {
     echo ""
 
     # 1. 协议屏蔽多选
-    echo -e "  ┌─ 协议屏蔽（可多选，输入编号用空格分隔）──────────"
-    echo -e "  │"
-    echo -e "  │   1) 屏蔽邮件发送       ─  SMTP 25/587/465/2525"
-    echo -e "  │   2) 屏蔽 HTTP 入站     ─  明文 HTTP 协议探测"
-    echo -e "  │   3) 屏蔽 SOCKS5 入站   ─  代理协议探测"
-    echo -e "  │   4) 屏蔽全加密流量     ─  SS/V2Ray（严格模式）"
-    echo -e "  │   5) 屏蔽 WireGuard     ─  VPN 协议探测"
-    echo -e "  │   6) 屏蔽 QUIC/HTTP3    ─  QUIC 协议"
-    echo -e "  │   7) 屏蔽所有入站       ─  最激进模式"
-    echo -e "  │"
-    echo -e "  │   A) 全选(1-6)  D) 默认(1-5)  C) 清空"
-    echo -e "  └──────────────────────────────────────────────────"
+    printf '  %s\n' '协议屏蔽（可多选，输入编号用空格分隔）' \
+        '[1] 屏蔽邮件发送 - SMTP 25/587/465/2525' \
+        '[2] 屏蔽 HTTP 入站 - 明文 HTTP 协议探测' \
+        '[3] 屏蔽 SOCKS5 入站 - 代理协议探测' \
+        '[4] 屏蔽全加密流量 - SS/V2Ray（严格模式）' \
+        '[5] 屏蔽 WireGuard - VPN 协议探测' \
+        '[6] 屏蔽 QUIC/HTTP3 - QUIC 协议' \
+        '[7] 屏蔽所有入站 - 最激进模式' \
+        '[A] 全选(1-6)  [D] 默认(1-5)  [C] 清空'
     echo ""
     echo -ne "  ${BOLD}请选择 [默认 D]: ${NC}"
     read -r rule_choice || true
@@ -2796,13 +2787,10 @@ configure_rfw_rules() {
 
     # 2. GeoIP 模式
     echo ""
-    echo -e "  ┌─ GeoIP 过滤模式 ──────────────────────────────────"
-    echo -e "  │"
-    echo -e "  │   1) 黑名单模式  ─  屏蔽指定国家（推荐）"
-    echo -e "  │   2) 白名单模式  ─  仅允许指定国家"
-    echo -e "  │   3) 不使用 GeoIP ─  全局协议过滤"
-    echo -e "  │"
-    echo -e "  └──────────────────────────────────────────────────"
+    printf '  %s\n' 'GeoIP 过滤模式' \
+        '[1] 黑名单模式 - 屏蔽指定国家（推荐）' \
+        '[2] 白名单模式 - 仅允许指定国家' \
+        '[3] 不使用 GeoIP - 全局协议过滤'
     echo ""
     echo -ne "  ${BOLD}请选择 [默认 1]: ${NC}"
     read -r geo_choice || true
@@ -2835,9 +2823,8 @@ configure_rfw_rules() {
 
     # 3. 端口日志
     echo ""
-    echo -e "  ┌─ 其他选项 ──────────────────────────────────────"
-    echo -e "  │"
-    echo -ne "  │   启用端口访问日志？[y/N]: ${NC}"
+    printf '  %s\n' '其他选项'
+    printf '  %s' '启用端口访问日志？[y/N]: '
     read -r log_choice || true
     if [[ "${log_choice:-}" =~ ^[yY]$ ]]; then
         RFW_ARGS+=" --log-port-access"
@@ -2846,13 +2833,10 @@ configure_rfw_rules() {
 
     # 4. 配置确认
     echo ""
-    echo -e "  ┌─ 配置确认 ──────────────────────────────────────"
-    echo -e "  │  屏蔽规则  :  ${GREEN}${RFW_SUMMARY_RULES}${NC}"
-    echo -e "  │  GeoIP     :  ${GREEN}${RFW_SUMMARY_GEO}${NC}"
-    echo -e "  │  端口日志  :  ${GREEN}${RFW_SUMMARY_LOG}${NC}"
-    echo -e "  │  "
-    echo -e "  │  运行参数  :  ${DIM}${RFW_ARGS}${NC}"
-    echo -e "  └──────────────────────────────────────────────────"
+    printf '  %s\n' '配置确认'
+    printf '  屏蔽规则: %s\n  GeoIP: %s\n  端口日志: %s\n' "$RFW_SUMMARY_RULES" "$RFW_SUMMARY_GEO" "$RFW_SUMMARY_LOG"
+    printf '  运行参数: %s\n' "$RFW_ARGS"
+    divider
     echo ""
     echo -ne "  ${YELLOW}确认安装此配置？${NC}[Y/n]: "
     read -r confirm || true
@@ -2955,9 +2939,9 @@ install_rfw() {
             local iface_ip
             iface_ip=$(ip -4 addr show "${interfaces[$i]}" 2>/dev/null | awk '/inet / {print $2}' | head -n1 || echo "")
             if [[ -n "$iface_ip" ]]; then
-                echo -e "    ${CYAN}${num})${NC}  ${interfaces[$i]}  ${DIM}(${iface_ip})${NC}"
+                printf '  [%s] %s (%s)\n' "$num" "${interfaces[$i]}" "$iface_ip"
             else
-                echo -e "    ${CYAN}${num})${NC}  ${interfaces[$i]}"
+                printf '  [%s] %s\n' "$num" "${interfaces[$i]}"
             fi
         done
         echo ""
@@ -3095,13 +3079,10 @@ install_rfw() {
         # 在 skip-confirm 模式下也打印一份确认摘要给用户复核
         echo ""
         divider
-        echo -e "  ${BOLD}RFW CLI 可控安装配置${NC}（RFW_VERSION=${RFW_VERSION}）"
+        printf '  RFW CLI 可控安装配置（RFW_VERSION=%s）\n' "$RFW_VERSION"
         divider
-        echo -e "  网卡      :  ${GREEN}${selected_interface}${NC}"
-        echo -e "  屏蔽规则  :  ${GREEN}${RFW_SUMMARY_RULES}${NC}"
-        echo -e "  GeoIP     :  ${GREEN}${RFW_SUMMARY_GEO}${NC}"
-        echo -e "  端口日志  :  ${GREEN}${RFW_SUMMARY_LOG}${NC}"
-        echo -e "  运行参数  :  ${DIM}${RFW_ARGS}${NC}"
+        printf '  网卡: %s\n  屏蔽规则: %s\n' "$selected_interface" "$RFW_SUMMARY_RULES"
+        printf '  GeoIP: %s\n  端口日志: %s\n  运行参数: %s\n' "$RFW_SUMMARY_GEO" "$RFW_SUMMARY_LOG" "$RFW_ARGS"
         divider
         if [[ "$RFW_CLI_SKIP_CONFIRM" != "true" ]]; then
             echo ""
@@ -3231,24 +3212,19 @@ EOF
     rm -f "$binary_backup" "$service_backup" 2>/dev/null || true
 
     if systemctl is-enabled --quiet rfw 2>/dev/null && systemctl is-active --quiet rfw 2>/dev/null; then
-        echo ""
-        echo -e "${GREEN}  ╔══════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}  ║                                                  ║${NC}"
-        echo -e "${GREEN}  ║           ✓  RFW 防火墙安装完成                  ║${NC}"
-        echo -e "${GREEN}  ║                                                  ║${NC}"
-        echo -e "${GREEN}  ╚══════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "  监听网卡  :  ${GREEN}${selected_interface}${NC}"
-        echo -e "  服务状态  :  ${GREEN}运行中${NC}"
-        echo -e "  屏蔽规则  :  ${GREEN}${RFW_SUMMARY_RULES}${NC}"
-        echo -e "  GeoIP配置 :  ${GREEN}${RFW_SUMMARY_GEO}${NC}"
-        echo -e "  端口日志  :  ${GREEN}${RFW_SUMMARY_LOG}${NC}"
+        printf '\n'
+        divider
+        printf '  %s[完成] RFW 防火墙安装完成%s\n' "$GREEN" "$NC"
+        divider
+        printf '\n'
+        printf '  监听网卡: %s\n  服务状态: 运行中\n' "$selected_interface"
+        printf '  屏蔽规则: %s\n  GeoIP配置: %s\n  端口日志: %s\n' "$RFW_SUMMARY_RULES" "$RFW_SUMMARY_GEO" "$RFW_SUMMARY_LOG"
         echo ""
         divider
         echo -e "  ${DIM}查看日志: journalctl -u rfw -f${NC}"
         echo -e "  ${DIM}查看状态: systemctl status rfw${NC}"
         if [[ "$RFW_SUMMARY_LOG" == "开启" ]]; then
-            echo -e "  ${DIM}查看拦截: ${RFW_INSTALL_DIR}/rfw stats${NC}"
+            printf '  查看拦截: %s/rfw stats\n' "$RFW_INSTALL_DIR"
         fi
         divider
         echo ""
@@ -3275,7 +3251,7 @@ uninstall_rfw() {
     divider
     echo ""
     echo -e "  ${RED}将删除以下内容：${NC}"
-    echo -e "    ${RED}•${NC}  RFW 二进制文件 (${RFW_INSTALL_DIR}/)"
+    printf '    - RFW 二进制文件 (%s/)\n' "$RFW_INSTALL_DIR"
     echo -e "    ${RED}•${NC}  RFW systemd 服务文件"
     echo ""
     echo -ne "  ${BOLD}确认卸载 RFW？${NC}[y/N]: "
@@ -3311,17 +3287,17 @@ do_rfw_cleanup() {
 
 # 卸载确认（双重确认，防止误操作）
 confirm_uninstall() {
-    echo ""
-    echo -e "  ${RED}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${RED}${BOLD}║              ⚠  卸载警告                        ║${NC}"
-    echo -e "  ${RED}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
-    echo ""
+    printf '\n'
+    divider
+    printf '  %s[警告] 卸载警告%s\n' "$RED" "$NC"
+    divider
+    printf '\n'
     echo -e "  ${RED}此操作将彻底删除以下内容：${NC}"
     echo ""
     echo -e "    ${RED}•${NC}  所有 LXC 容器及其数据（不可恢复）"
     echo -e "    ${RED}•${NC}  所有容器镜像和快照"
     echo -e "    ${RED}•${NC}  所有存储池及数据"
-    echo -e "    ${RED}•${NC}  网桥 ${BRIDGE_NAME} 及网络配置"
+    printf '    - 网桥 %s 及网络配置\n' "$BRIDGE_NAME"
     echo -e "    ${RED}•${NC}  Incus 软件包及配置"
     echo -e "    ${RED}•${NC}  Zabbly APT 源和 GPG 密钥"
     echo -e "    ${RED}•${NC}  本脚本添加的内核参数"
@@ -3659,11 +3635,9 @@ do_uninstall() {
 
     # ---- 卸载完成 ----
     echo ""
-    echo -e "${GREEN}  ╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}  ║                                                  ║${NC}"
-    echo -e "${GREEN}  ║           ✓  卸载完成                            ║${NC}"
-    echo -e "${GREEN}  ║                                                  ║${NC}"
-    echo -e "${GREEN}  ╚══════════════════════════════════════════════════╝${NC}"
+    divider
+    log '卸载完成'
+    divider
     echo ""
     echo -e "  已清理的内容："
     echo -e "    ${GREEN}✓${NC}  所有 LXC 容器和镜像"
@@ -3795,12 +3769,13 @@ main() {
     # Root 权限检查
     if [[ "$EUID" -ne 0 ]]; then
         error "请以 root 权限运行此脚本"
-        echo -e "  ${DIM}用法: sudo bash $0${NC}"
+        printf '  用法: sudo bash %s\n' "$0"
         exit 1
     fi
 
     # ---- 解析命令行参数（兼容非交互模式）----
     local ACTION="install"   # 默认动作为安装
+    INSTALL_ASSUME_YES=false
     # RFW 独立可控安装的专用暂存变量（CLI 参数先放这里，install_rfw 会按需读取）
     RFW_CLI_IFACE=""
     RFW_CLI_ARGS=""
@@ -3824,6 +3799,9 @@ main() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --yes) INSTALL_ASSUME_YES=true; shift ;;
+            --prepare-agent-host) ACTION="prepare_agent_host"; shift ;;
+            --refresh-agent-trust) ACTION="refresh_agent_trust"; shift ;;
             --mode)
                 if [[ $# -lt 2 ]]; then error "--mode 缺少参数值"; exit 1; fi
                 MODE="$2"; shift 2 ;;
@@ -3904,7 +3882,8 @@ main() {
                 echo "  --uninstall             停用节点服务并保留全部资料与套件"
                 echo "  --uninstall-keep-data   同 --uninstall，明确保留资料"
                 echo "  --delete-data           仅配合 --uninstall：进入旧完整清除流程，仍需双重确认"
-                echo "环境变量：ZFS_ARC_MAX/MIN=512MiB/2GiB（裸整数及旧 *_GB 为 GiB）；留空保留 ARC"
+                printf '%s\n' '环境变量：ZFS_ARC_MAX/MIN=512MiB/2GiB（旧 *_GB 为 GiB）；留空保留 ARC' \
+                    '容量支持小数；纯数字/G 为 GiB，GB 为十进位，GiB 为二进位（如 1.5GB、1.5GiB）。'
                 echo "储存：INCUS_STORAGE_POOL、INCUS_STORAGE_DRIVER=auto|zfs|dir、INCUS_STORAGE_SIZE=10GiB"
                 echo "自动优先沿用 profile root、现有 default、名称排序首池；仅无池时新建，不清理磁盘"
                 echo "  --agent                 打开 Agent 安装 / 更新菜单"
@@ -3988,12 +3967,25 @@ main() {
     # 检测系统环境（只读探测；所有 CLI 入参已在此之前校验完毕）
     detect_system
 
-    if [[ "$ACTION" == "install" || "$ACTION" == "agent" ]] && [[ -f "$AGENT_CONFIG_FILE" ]]; then
-        if ! refresh_panel_trust; then
-            warn "面板信任更新失败，保留现有信任；可修复认证后重试"
-        elif ! update_incudal_agent_from_config true; then
-            warn "Agent 自动更新失败，保留现有安装及复原备份"
+    if [[ "$ACTION" == refresh_agent_trust ]]; then
+        refresh_panel_trust
+        return $?
+    fi
+    if [[ "$ACTION" == prepare_agent_host ]]; then
+        MODE="${INCUDAL_HOST_MODE:-nat}"
+        [[ "$MODE" == nat || "$MODE" == nat_ipv6 ]] || { error '無效的宿主網路模式'; return 1; }
+        LISTEN_PORT="${LISTEN_PORT:-8443}"
+        export INCUS_STORAGE_DRIVER="${INCUS_STORAGE_DRIVER:-zfs}"
+        configure_zfs_arc_memory
+        confirm_install
+        setup_kernel || return 1
+        install_deps || return 1
+        apply_zfs_arc_config || return 1
+        if ! command -v incus >/dev/null 2>&1; then
+            install_incus || return 1
         fi
+        init_incus || return 1
+        return 0
     fi
 
     # 如果通过命令行指定了卸载，直接执行
@@ -4070,20 +4062,20 @@ main() {
                     echo ""
                     echo -e "  ${CYAN}==> IPv6 实例附加子网配置${NC}"
                     if [[ -n "$detect_ip" ]]; then
-                        echo -e "  检测到当前服务器分配的 IPv6 全段为: ${GREEN}${detect_ip}${NC}，网卡: ${GREEN}${detect_iface}${NC}。"
+                        printf '  检测到当前服务器分配的 IPv6 全段为: %s，网卡: %s。\n' "$detect_ip" "$detect_iface"
                     else
                         echo -e "  ${YELLOW}未检测到公网 IPv6 地址${NC}"
                     fi
                     echo -e "  ${DIM}若要开启真实 IPv6 入站/出站路由分配，请直接回车采用默认值即可，或手动输入。${NC}"
                     echo -e "  ${DIM}格式须带有网络前缀长度（例如 2a01:4f9.../64），若不需要额外分发 IPv6 请留空跳过。${NC}"
-                    echo -ne "  ${BOLD}请输入分配给虚拟机的 IPv6 子网 [回车默认: ${detect_ip:-留空}]: ${NC}"
+                    printf '  请输入分配给虚拟机的 IPv6 子网 [回车默认: %s]: ' "${detect_ip:-留空}"
                     read -r IPV6_SUBNET
                     if [[ -z "$IPV6_SUBNET" ]]; then
                         IPV6_SUBNET="$detect_ip"
                     fi
 
                     if [[ -n "$IPV6_SUBNET" ]]; then
-                        echo -ne "  ${BOLD}请输入此 IPv6 使用的物理网卡名 [回车默认: ${detect_iface:-无}]: ${NC}"
+                        printf '  请输入此 IPv6 使用的物理网卡名 [回车默认: %s]: ' "${detect_iface:-无}"
                         read -r IPV6_IFACE
                         if [[ -z "$IPV6_IFACE" ]]; then
                             IPV6_IFACE="$detect_iface"
@@ -4165,6 +4157,14 @@ main() {
 
     # 安装前确认
     confirm_install
+
+    if [[ -f "$AGENT_CONFIG_FILE" ]]; then
+        if ! refresh_panel_trust; then
+            warn "面板信任更新失败，保留现有信任；可修复认证后重试"
+        elif ! update_incudal_agent_from_config true; then
+            warn "Agent 自动更新失败，保留现有安装及复原备份"
+        fi
+    fi
 
     # ---- 执行安装 ----
     echo ""

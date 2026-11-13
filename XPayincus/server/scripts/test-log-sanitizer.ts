@@ -2,13 +2,22 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { sanitizeObject, sanitizeTokensInString, isSensitiveField } from '../src/lib/log-sanitizer.js'
+import { sanitizeObject, sanitizeTokensInString, isSensitiveField, logSerializers } from '../src/lib/log-sanitizer.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 const redacted = '[REDACTED]'
 const redactedJwt = '[REDACTED_JWT]'
+
+for (const path of ['/api/hosts/cert/', '/api/hosts/install.sh/', '/api/agent/install-config/']) {
+  const url = `${path}private-install-token?x=1`
+  assert.equal(logSerializers.req({ method: 'GET', url }).url, `${path}${redacted}?x=1`)
+  assert.equal(sanitizeTokensInString(`GET https://panel.example.org${url}`), `GET https://panel.example.org${path}${redacted}?x=1`)
+  const error = logSerializers.err(new Error(url))
+  assert.ok(!error.message.includes('private-install-token') && !error.stack.includes('private-install-token'))
+}
+assert.equal(logSerializers.req({ method: 'GET', url: '/api/hosts?x=1' }).url, '/api/hosts?x=1')
 
 const sanitized = sanitizeObject({
   username: 'alice',

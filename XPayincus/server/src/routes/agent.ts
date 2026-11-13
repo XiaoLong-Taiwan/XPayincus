@@ -354,13 +354,11 @@ function shellEscape(value: string): string {
 
 function buildAgentInstallCommand(input: {
   panelUrl: string
-  installToken: string
   binaryUrl?: string | null
   binarySha256?: string | null
 }): string {
   const envParts = [
-    `INCUDAL_PANEL_URL=${shellEscape(input.panelUrl)}`,
-    `INCUDAL_AGENT_INSTALL_TOKEN=${shellEscape(input.installToken)}`
+    `INCUDAL_PANEL_URL=${shellEscape(input.panelUrl)}`
   ]
 
   const binaryUrl = input.binaryUrl?.trim()
@@ -1448,8 +1446,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       throw error
     }
     const installCommand = buildAgentInstallCommand({
-      panelUrl,
-      installToken: result.installToken
+      panelUrl
     })
 
     await createLog(
@@ -1462,12 +1459,13 @@ export default async function agentRoutes(fastify: FastifyInstance) {
 
     return reply.code(201).send({
       host: result.host,
+      panelUrl,
       agent: await serializeAgentStatus(result.agent),
       installToken: result.installToken,
       installTokenExpiresAt: result.installTokenExpiresAt.toISOString(),
       installScriptUrl: `${panelUrl}/api/agent/install.sh`,
       installCommand,
-      warning: 'installCommand 内包含一次性 Agent 安装 token，30 分钟内有效且只能使用一次。'
+      warning: '請另外輸入一次性 Agent 安裝 TOKEN；30 分鐘內有效且只能使用一次，確認摘要後才使用。'
     })
   })
 
@@ -1604,7 +1602,6 @@ export default async function agentRoutes(fastify: FastifyInstance) {
 
     const installCommand = buildAgentInstallCommand({
       panelUrl,
-      installToken: result.installToken,
       binaryUrl,
       binarySha256: request.body?.binarySha256
     })
@@ -1619,12 +1616,13 @@ export default async function agentRoutes(fastify: FastifyInstance) {
 
     return reply.code(201).send({
       host: result.host,
+      panelUrl,
       agent: await serializeAgent(result.agent),
       installToken: result.installToken,
       installTokenExpiresAt: result.installTokenExpiresAt.toISOString(),
       installScriptUrl: `${panelUrl}/api/agent/install.sh`,
       installCommand,
-      warning: 'installCommand 内包含一次性 Agent 安装 token，30 分钟内有效且只能使用一次。'
+      warning: '請另外輸入一次性 Agent 安裝 TOKEN；30 分鐘內有效且只能使用一次，確認摘要後才使用。'
     })
   })
 

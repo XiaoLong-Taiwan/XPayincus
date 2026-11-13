@@ -3,6 +3,10 @@ set +x
 set -euo pipefail
 umask 077
 
+if [[ ! -t 1 || ! -t 2 || ${NO_COLOR+x} || "${TERM:-dumb}" == dumb ]]; then
+  export SYSTEMD_COLORS=0
+fi
+
 SERVICE_NAME="incudal-agent"
 CONFIG_DIR="${INCUDAL_CONFIG_DIR:-/etc/incudal-agent}"
 CONFIG_FILE="${INCUDAL_CONFIG_FILE:-${CONFIG_DIR}/config.yaml}"
@@ -17,15 +21,19 @@ REINSTALL="0"
 LOCAL_BINARY=""
 TOKEN_FILE=""
 TARGET_VERSION="latest"
+ASSUME_YES="0"
+HOST_READY="0"
+HOST_SCRIPT=""
 
 usage() {
-  printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--reinstall] [--version latest|vSemVer] [--binary FILE --sha256 HEX]' \
+  printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--yes] [--reinstall] [--version latest|vSemVer] [--binary FILE --sha256 HEX]' \
     'Without credentials, prompts on /dev/tty for panel URL and hidden one-time TOKEN.' \
+    'UUID initializes the host then Agent; ait_ initializes Incus/ZFS before Agent TOKEN exchange. New pools default to zfs; existing pools are preserved.' \
     '--reinstall preserves the existing config; do not supply a new URL or TOKEN.'
 }
 
 fail() {
-  echo "error: $*" >&2
+  printf '  [错误] %s\n' "$*" >&2
   exit 1
 }
 
@@ -33,6 +41,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --reinstall) REINSTALL="1"; shift ;;
+    --yes) ASSUME_YES="1"; shift ;;
+    --host-ready) HOST_READY="1"; shift ;;
     --panel-url|--token-file|--binary|--sha256|--version)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail "option requires a value"
       case "$1" in
@@ -51,11 +61,12 @@ done
 prompt_value() {
   local name="$1" label="$2" hidden="${3:-0}"
   [ -r /dev/tty ] && [ -w /dev/tty ] || fail "non-interactive input requires --panel-url and --token-file (or existing credential environment)"
+  printf '  %s' "${label}" >/dev/tty
   if [ "${hidden}" = "1" ]; then
-    IFS= read -r -s -p "${label}" "${name}" </dev/tty || fail "input cancelled"
+    IFS= read -r -s "${name}" </dev/tty || fail "input cancelled"
     printf '\n' >/dev/tty
   else
-    IFS= read -r -p "${label}" "${name}" </dev/tty || fail "input cancelled"
+    IFS= read -r "${name}" </dev/tty || fail "input cancelled"
   fi
 }
 
@@ -79,7 +90,7 @@ prepare_inputs() {
   [[ "${INCUDAL_PANEL_URL:-}" =~ ^https?://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]{1,5})?/?$ ]] || fail "panel URL must be an HTTP(S) origin without credentials, query, or path"
   INCUDAL_PANEL_URL="${INCUDAL_PANEL_URL%/}"
   if [ -n "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
-    [[ "${INCUDAL_AGENT_INSTALL_TOKEN}" =~ ^ait_[A-Za-z0-9_-]{32,128}$ ]] || fail "invalid Agent install TOKEN format"
+    [[ "${INCUDAL_AGENT_INSTALL_TOKEN}" =~ ^ait_[A-Za-z0-9_-]{32,128}$ || "${INCUDAL_AGENT_INSTALL_TOKEN}" =~ ^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]] || fail "invalid install TOKEN format"
   fi
   if [ -n "${LOCAL_BINARY}" ]; then
     [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ] || fail "--binary cannot be combined with a binary URL"
@@ -208,7 +219,7 @@ write_file() {
   local tmp
 
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ write ${path} mode=${mode} owner=${owner}"
+    printf '  + write %s mode=%s owner=%s\n' "${path}" "${mode}" "${owner}"
     if [ "${path}" = "${CONFIG_FILE}" ] || [ "${path}" = "${STAGED_CONFIG:-}" ]; then
       sed -E 's/^([[:space:]]*agent_secret:).*/\1 "<redacted>"/; s/^/| /'
     else
@@ -232,9 +243,9 @@ download_binary_once() {
   binary_path="${binary_path%%#*}"
 
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ download ${binary_url} -> ${target}"
+    printf '  + download %s -> %s\n' "${binary_url}" "${target}"
     if [ -n "${expected_sha256}" ]; then
-      echo "+ verify sha256 ${expected_sha256} ${target}.download"
+      printf '  + verify sha256 %s %s.download\n' "${expected_sha256}" "${target}"
     fi
     return 0
   fi
@@ -292,7 +303,7 @@ download_binary() {
   fi
 
   if [ -n "${fallback_url}" ]; then
-    echo "warning: failed to download ${binary_url}, fallback to ${fallback_url}" >&2
+    printf '  [警告] failed to download %s, fallback to %s\n' "${binary_url}" "${fallback_url}" >&2
     download_binary_once "${fallback_url}" "${target}" "${expected_sha256}"
     return $?
   fi
@@ -335,7 +346,7 @@ verify_sha256() {
 
   actual="$(sha256_file "${path}")"
   if [ "${actual}" != "${expected}" ]; then
-    echo "warning: sha256 mismatch for ${path}: expected=${expected} actual=${actual}" >&2
+    printf '  [警告] sha256 mismatch for %s: expected=%s actual=%s\n' "${path}" "${expected}" "${actual}" >&2
     return 1
   fi
 }
@@ -345,7 +356,7 @@ download_manifest() {
   local target="$2"
 
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ download ${manifest_url} -> ${target}"
+    printf '  + download %s -> %s\n' "${manifest_url}" "${target}"
     return 0
   fi
 
@@ -385,7 +396,7 @@ install_binary_atomically() {
   local next="${target}.new"
 
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ install ${source} -> ${target} (atomic replace)"
+    printf '  + install %s -> %s (atomic replace)\n' "${source}" "${target}"
     return 0
   fi
 
@@ -400,7 +411,7 @@ preflight_target_parent() {
   parent="$(dirname "${path}")"
 
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ preflight writable directory ${parent}"
+    printf '  + preflight writable directory %s\n' "${parent}"
     return 0
   fi
 
@@ -412,7 +423,7 @@ preflight_target_parent() {
 
 preflight_environment() {
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ preflight root, systemd, curl, and target directories"
+    printf '  + %s\n' 'preflight root, systemd, curl, and target directories'
   else
     [ "$(id -u)" -eq 0 ] || fail "must run as root"
     command -v systemctl >/dev/null 2>&1 || fail "systemctl is required"
@@ -471,7 +482,7 @@ fetch_agent_install_config() {
 
   local config_url="${PANEL_BASE_URL}/api/agent/install-config/${install_token}"
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "+ fetch ${PANEL_BASE_URL}/api/agent/install-config/<redacted-install-token>"
+    printf '  + fetch %s/api/agent/install-config/<redacted-install-token>\n' "${PANEL_BASE_URL}"
     INCUDAL_AGENT_ID="${INCUDAL_AGENT_ID:-agt_from_install_token}"
     INCUDAL_AGENT_SECRET="${INCUDAL_AGENT_SECRET:-ias_from_install_token}"
     return 0
@@ -500,8 +511,29 @@ fetch_agent_install_config() {
   unset INCUDAL_AGENT_INSTALL_TOKEN
 }
 
+confirm_plan() {
+  printf '\n  安裝摘要\n  面板: %s\n  Agent 版本: %s\n' "${INCUDAL_PANEL_URL}" "${TARGET_VERSION}"
+  if [ "${REINSTALL}" = 1 ]; then
+    printf '  流程: 重裝 Agent，保留設定\n'
+  else
+    printf '  流程: Incus / ZFS 初始化 → Agent\n  儲存: %s；沿用既有 pool，不轉換 driver\n  TOKEN: 已提供（隱藏）\n' "${INCUS_STORAGE_DRIVER:-zfs}"
+  fi
+  if [ "${ASSUME_YES}" != 1 ]; then
+    local answer=""
+    prompt_value answer '確認開始安裝？[y/N]: '
+    [[ "${answer}" =~ ^[yY]$ ]] || { printf '  已取消安裝\n'; exit 0; }
+  fi
+}
+
+prepare_host_script() {
+  HOST_SCRIPT="$(mktemp)"
+  fetch_public "${PANEL_BASE_URL}/api/hosts/install.sh" -o "${HOST_SCRIPT}"
+}
+
+printf '\n%s\n\n' '[步骤 1/4] 检查 Agent 安装输入与环境'
 prepare_inputs
 need_env INCUDAL_PANEL_URL
+confirm_plan
 HEARTBEAT_INTERVAL="$(normalize_heartbeat_interval "${HEARTBEAT_INTERVAL}")"
 
 PANEL_BASE_URL="${INCUDAL_PANEL_URL%/}"
@@ -536,8 +568,23 @@ cleanup() {
   if [ -n "${MANIFEST_PATH:-}" ]; then
     rm -f "${MANIFEST_PATH}"
   fi
+  [ -z "${HOST_SCRIPT:-}" ] || rm -f "${HOST_SCRIPT}"
 }
 trap cleanup EXIT
+
+if [[ "${INCUDAL_AGENT_INSTALL_TOKEN:-}" =~ ^[a-fA-F0-9]{8}- ]]; then
+  [ "${REINSTALL}" != 1 ] && [ "${HOST_READY}" != 1 ] || fail 'UUID requires host initialization'
+  if [ "${DRY_RUN}" = 1 ]; then
+    printf '  + initialize host with hidden UUID, then Agent\n'
+    exit 0
+  fi
+  HOST_SCRIPT="$(mktemp)"
+  printf 'url = "%s/api/hosts/install.sh/%s"\n' "${PANEL_BASE_URL}" "${INCUDAL_AGENT_INSTALL_TOKEN}" | \
+    curl -q -fsS --proto '=http,https' --connect-timeout 10 --max-time 60 --config - -o "${HOST_SCRIPT}" 2>/dev/null || fail 'host installer download failed'
+  unset INCUDAL_AGENT_INSTALL_TOKEN
+  INCUS_STORAGE_DRIVER="${INCUS_STORAGE_DRIVER:-zfs}" bash "${HOST_SCRIPT}" --mode "${INCUDAL_HOST_MODE:-nat}" --yes </dev/null
+  exit $?
+fi
 
 preflight_environment
 
@@ -548,7 +595,14 @@ if [ "${REINSTALL}" != "1" ] && [ -z "${INCUDAL_AGENT_INSTALL_TOKEN:-}" ]; then
   validate_credentials
 fi
 
+printf '\n%s\n\n' '[步骤 2/4] 准备并校验 Agent binary'
 if [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ]; then
+  if [ "${DRY_RUN}" != 1 ] && [[ "${INCUDAL_AGENT_INSTALL_TOKEN:-}" == ait_* ]] && ! command -v python3 >/dev/null 2>&1; then
+    command -v apt-get >/dev/null 2>&1 || fail 'apt-get is required to bootstrap python3'
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq || fail 'python3 package index update failed'
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 || fail 'python3 installation failed'
+    command -v python3 >/dev/null 2>&1 || fail 'python3 is still unavailable'
+  fi
   # Cloudflare 等边缘缓存可能缓存旧二进制；默认面板下载强制按安装批次换 URL。
   BINARY_CACHE_BUSTER="${INCUDAL_AGENT_BINARY_CACHE_BUSTER:-$(date +%s)}"
   MANIFEST_URL="$(append_query_param "${MANIFEST_URL}" "cache_bust" "${BINARY_CACHE_BUSTER}")"
@@ -566,9 +620,9 @@ if [ -z "${INCUDAL_AGENT_BINARY_URL:-}" ]; then
     BINARY_NAME="${SELECTED[1]}"
     BINARY_EXPECTED_SHA256="${SELECTED[2]}"
     BINARY_EXPECTED_SIZE="${SELECTED[3]}"
-    echo "Agent target: ${SELECTED_VERSION}; source: ${SELECTED[4]}"
+    printf '  版本: %s\n  来源: %s\n' "${SELECTED_VERSION}" "${SELECTED[4]}"
     if [ "${SELECTED[4]}" = cache ]; then
-      echo 'warning: using verified cached version; latest release could not be confirmed' >&2
+      printf '  [警告] %s\n' 'using verified cached version; latest release could not be confirmed' >&2
     fi
     if [ -z "${BINARY_NAME}" ] || [ -z "${BINARY_EXPECTED_SHA256}" ]; then
       fail "agent manifest does not contain ${OS}-${ARCH} binary metadata"
@@ -594,6 +648,11 @@ fi
 # 实际下载和校验在消费一次性 token 之前完成，下载失败时同一条命令仍可重试。
 download_binary "${BINARY_URL}" "${STAGED_BIN}" "${BINARY_FALLBACK_URL}" "${BINARY_EXPECTED_SHA256}"
 
+if [ "${REINSTALL}" != 1 ] && [ "${HOST_READY}" != 1 ] && [ "${DRY_RUN}" != 1 ] && [[ "${INCUDAL_AGENT_INSTALL_TOKEN:-}" == ait_* ]]; then
+  prepare_host_script
+  INCUS_STORAGE_DRIVER="${INCUS_STORAGE_DRIVER:-zfs}" bash "${HOST_SCRIPT}" --prepare-agent-host --yes </dev/null
+fi
+
 fetch_agent_install_config
 if [ "${REINSTALL}" != "1" ]; then
   need_env INCUDAL_AGENT_ID
@@ -603,11 +662,15 @@ if [ "${REINSTALL}" != "1" ]; then
   fi
 fi
 
-echo "Installing Incudal Agent"
-echo "  panel: ${INCUDAL_PANEL_URL}"
-echo "  mode: $([ "${REINSTALL}" = "1" ] && echo 'Agent reinstall (preserve config)' || echo 'Agent install')"
+printf '\n%s\n\n' '[步骤 3/4] 暂存 Agent 配置与服务'
+printf '  面板: %s\n' "${INCUDAL_PANEL_URL}"
+if [ "${REINSTALL}" = "1" ]; then
+  printf '  模式: %s\n' 'Agent reinstall (preserve config)'
+else
+  printf '  模式: %s\n' 'Agent install'
+fi
 if [ -n "${BINARY_EXPECTED_SHA256}" ]; then
-  echo "  sha256: ${BINARY_EXPECTED_SHA256}"
+  printf '  SHA-256: %s\n' "${BINARY_EXPECTED_SHA256}"
 fi
 
 # 先生成 0600 临时配置并用暂存二进制冒烟，正式文件此时尚未被替换。
@@ -663,10 +726,11 @@ WantedBy=multi-user.target
 EOF_SERVICE
 
 if [ "${DRY_RUN}" = "1" ]; then
-  echo "Dry run completed."
+  printf '\n  [完成] %s\n\n' 'Dry run completed.'
   exit 0
 fi
 
+printf '\n%s\n\n' '[步骤 4/4] 验证、安装并启动 Agent'
 if ! "${STAGED_BIN}" -config "${STAGED_CONFIG}" -once; then
   fail "staged Agent smoke test failed; existing installation was not changed"
 fi
@@ -717,7 +781,7 @@ if [ "${COMMIT_OK}" = "1" ]; then
 fi
 
 if [ "${COMMIT_OK}" != "1" ]; then
-  echo "error: new Agent failed post-install validation; rolling back" >&2
+  printf '  [错误] %s\n' 'new Agent failed post-install validation; rolling back' >&2
   if rollback_agent_install; then
     fail "new Agent failed; previous binary, config, service, and runtime state were restored"
   fi
@@ -725,6 +789,10 @@ if [ "${COMMIT_OK}" != "1" ]; then
 fi
 
 rm -f "${BACKUP_BIN}" "${BACKUP_CONFIG}" "${BACKUP_SERVICE}"
+if [ -n "${HOST_SCRIPT}" ]; then
+  INCUDAL_AGENT_CONFIG_FILE="${CONFIG_FILE}" bash "${HOST_SCRIPT}" --refresh-agent-trust || fail 'Agent installed; authenticated Incus trust refresh failed'
+fi
 systemctl status "${SERVICE_NAME}" --no-pager --lines=20 || true
 
-echo "Incudal Agent installed or upgraded and started."
+printf '\n  [完成] %s\n' 'Incudal Agent installed or upgraded and started.'
+printf '  %s\n\n' '查看状态: systemctl status incudal-agent' '查看日志: journalctl -u incudal-agent -n 100 --no-pager'

@@ -210,12 +210,13 @@ assert.ok(
     installScriptSource.includes('^agt_[A-Za-z0-9_-]{24,64}$') &&
     installScriptSource.includes('^ias_[A-Za-z0-9_-]{32,96}$') &&
     installScriptSource.indexOf('\n  validate_credentials\n') < installScriptSource.indexOf('\ndownload_binary "${BINARY_URL}"') &&
-    installScriptSource.slice(installScriptSource.indexOf('\nfetch_agent_install_config\n'), installScriptSource.indexOf('echo "Installing Incudal Agent"')).includes('validate_credentials'),
+    installScriptSource.slice(installScriptSource.indexOf('\nfetch_agent_install_config\n'), installScriptSource.indexOf('[步骤 3/4] 暂存 Agent 配置与服务')).includes('validate_credentials'),
   'static credentials must reject YAML injection before downloading and exchanged credentials must validate before writing config'
 )
 assert.ok(
   installScriptSource.includes('--panel-url|--token-file|--binary|--sha256') &&
-    installScriptSource.includes('read -r -s -p') &&
+    installScriptSource.includes('IFS= read -r -s "${name}" </dev/tty') &&
+    installScriptSource.includes("printf '  %s' \"${label}\" >/dev/tty") &&
     installScriptSource.includes('set +x'),
   'Agent standalone installer must accept independent URL and protected TOKEN input without tracing secrets'
 )
@@ -239,5 +240,19 @@ assert.ok(
   /'\/install-config\/:token', \{\s*logLevel: 'silent'/.test(agentRouteSource),
   'Agent TOKEN exchange must suppress request URL logging while retaining the separate audit record'
 )
+
+const commandBuilder = agentRouteSource.slice(agentRouteSource.indexOf('function buildAgentInstallCommand('), agentRouteSource.indexOf('function buildAgentInstallConfig('))
+assert.ok(!commandBuilder.includes('installToken') && !commandBuilder.includes('INSTALL_TOKEN'), 'generic command must not contain TOKEN values')
+const buildCommand = new Function('input', 'shellEscape', commandBuilder.slice(commandBuilder.indexOf('  const envParts'), commandBuilder.lastIndexOf('}'))) as (input: object, escape: (value: string) => string) => string
+const escapeShell = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
+assert.equal(buildCommand({ panelUrl: 'https://panel.example.org' }, escapeShell), "curl -fsSL 'https://panel.example.org/api/agent/install.sh' | sudo env INCUDAL_PANEL_URL='https://panel.example.org' bash")
+assert.ok(buildCommand({ panelUrl: 'https://panel.example.org', binaryUrl: 'https://binary.example.org/agent', binarySha256: 'a'.repeat(64) }, escapeShell).includes("INCUDAL_AGENT_BINARY_SHA256='" + 'a'.repeat(64) + "'"), 'custom binaries must retain their checksum without embedding TOKEN')
+assert.equal((agentRouteSource.match(/\n      panelUrl,\n      agent:/g) ?? []).length, 2, 'both Agent install responses must include panelUrl')
+assert.ok(installScriptSource.indexOf('\nconfirm_plan\n') < installScriptSource.indexOf('\npreflight_environment\n'), 'summary confirmation must precede host mutations')
+assert.ok(installScriptSource.includes('--prepare-agent-host') && installScriptSource.includes('--refresh-agent-trust'), 'ait TOKEN flow must initialize the host and authenticate Incus trust')
+assert.ok(installScriptSource.includes('api/hosts/install.sh/%s') && installScriptSource.includes('unset INCUDAL_AGENT_INSTALL_TOKEN'), 'UUID must delegate to host initialization without leaking TOKEN into nested Agent install')
+const pythonBootstrap = installScriptSource.indexOf('apt-get install -y -qq python3')
+assert.ok(pythonBootstrap > installScriptSource.indexOf('\nconfirm_plan\n') && pythonBootstrap < installScriptSource.indexOf('MANIFEST_SELECTION="$(select_manifest)"'), 'missing Python must bootstrap after confirmation and before manifest validation')
+assert.match(installScriptSource, /if \[ "\$\{REINSTALL\}" != 1 \][^\n]*\[\[ "\$\{INCUDAL_AGENT_INSTALL_TOKEN:-\}" == ait_\* \]\]; then\n  prepare_host_script/, 'static credential updates must never enter host preparation')
 
 console.log('agent install command guard tests passed')

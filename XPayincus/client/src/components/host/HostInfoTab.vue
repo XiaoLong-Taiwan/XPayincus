@@ -7,6 +7,8 @@ import api from '@/api'
 import FlagIcon from '@/components/FlagIcon.vue'
 import AgentMonitoringPanel from './AgentMonitoringPanel.vue'
 import type { HostAgentStatus } from '@/types/api'
+import HostInstallFields from './HostInstallFields.vue'
+import { useHostInstallDetails } from '@/composables/useHostInstallDetails'
 
 const { t } = useI18n()
 const themeStore = useThemeStore()
@@ -86,8 +88,7 @@ const agentStatusLoading = ref(true)
 const agentStatusRefreshing = ref(false)
 const agentUpgradeRequesting = ref(false)
 const agentInstallCommandLoading = ref(false)
-const agentInstallCommand = ref('')
-const agentInstallTokenExpiresAt = ref('')
+const { installDetails, clearInstallDetails, loadInstallDetails } = useHostInstallDetails()
 const agentStatusError = ref('')
 const agentHistoryLoading = ref(false)
 const agentHistorySamples = ref<Array<Record<string, unknown>>>([])
@@ -337,8 +338,7 @@ const canRequestAgentUpgrade = computed(() => agentStatus.value?.versionStatus =
   agentStatus.value.enabled && agentStatus.value.status === 'online' && !agentUpgradeActive.value)
 
 watch(() => props.host.id, () => {
-  agentInstallCommand.value = ''
-  agentInstallTokenExpiresAt.value = ''
+  clearInstallDetails()
   loadInstanceStats()
   loadTrafficHistory()
   loadAgentStatus()
@@ -447,10 +447,10 @@ async function generateAgentInstallCommand() {
   if (agentInstallCommandLoading.value) return
   if (!window.confirm(t('admin.hosts.agentInstallCommandConfirm'))) return
   agentInstallCommandLoading.value = true
+  const hostId = props.host.id
   try {
-    const result = await api.hosts.generateAgentInstallCommand(props.host.id)
-    agentInstallCommand.value = result.installCommand
-    agentInstallTokenExpiresAt.value = result.installTokenExpiresAt
+    const result = await loadInstallDetails(() => api.hosts.generateAgentInstallCommand(hostId))
+    if (!result || !installDetails.value) return
     agentStatus.value = result.agent
     toast.success(t('admin.hosts.agentInstallCommandSuccess'))
   } catch (err: any) {
@@ -460,11 +460,6 @@ async function generateAgentInstallCommand() {
   }
 }
 
-function copyAgentInstallCommand() {
-  if (!agentInstallCommand.value) return
-  navigator.clipboard.writeText(agentInstallCommand.value)
-  toast.success(t('admin.hosts.agentInstallCommandCopied'))
-}
 
 // 资源校对
 const recalculating = ref(false)
@@ -779,7 +774,7 @@ const xAxisLabels = computed(() => {
     </div>
 
     <div
-      v-if="agentInstallCommand"
+      v-if="installDetails"
       class="rounded-lg p-3 mb-4"
       :class="themeStore.isDark ? 'bg-gray-900/70 border border-gray-800' : 'bg-gray-50 border border-gray-200'"
     >
@@ -790,16 +785,13 @@ const xAxisLabels = computed(() => {
           </p>
           <p class="text-xs mt-0.5" :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">
             {{ t('admin.hosts.agentInstallCommandHint') }}
-            <span v-if="agentInstallTokenExpiresAt">
-              {{ t('admin.hosts.agentInstallTokenExpiresAt', { time: formatDate(agentInstallTokenExpiresAt) }) }}
-            </span>
           </p>
         </div>
-        <button class="btn-secondary btn-xs" @click="copyAgentInstallCommand">
-          {{ t('admin.hosts.copyCommand') }}
+        <button class="btn-secondary btn-xs" @click="clearInstallDetails">
+          {{ t('common.close') }}
         </button>
       </div>
-      <pre class="rounded-md p-3 overflow-x-auto text-xs font-mono whitespace-pre-wrap break-all" :class="themeStore.isDark ? 'bg-black/40 text-green-300' : 'bg-gray-900 text-green-300'">{{ agentInstallCommand }}</pre>
+      <HostInstallFields :details="installDetails" />
     </div>
 
     <div v-if="agentStatusLoading" class="animate-pulse grid grid-cols-1 sm:grid-cols-2 gap-3">

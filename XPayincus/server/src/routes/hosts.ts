@@ -755,10 +755,9 @@ function injectInstallVariable(script: string, name: string, value: string): str
   )
 }
 
-function buildHostInstallCommand(panelUrl: string, installToken: string): string {
-  // -f: HTTP 错误（例如被 CDN/WAF 以 403 挑战页拦截）时让 curl 直接失败，
-  // 避免把挑战页 HTML 存成 incudal.sh 再交给 bash 执行（会报 syntax error near unexpected token '<'）。
-  return `curl -fsSL ${panelUrl}/api/hosts/install.sh/${installToken} -o incudal.sh && sudo bash incudal.sh`
+function buildHostInstallCommand(panelUrl: string): string {
+  const scriptUrl = `'${`${panelUrl}/api/agent/install.sh`.replace(/'/g, `'\\''`)}'`
+  return `curl -fsSL ${scriptUrl} | sudo bash`
 }
 
 export default async function hostRoutes(fastify: FastifyInstance) {
@@ -1361,9 +1360,9 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     // 如果需要初始化，生成安装命令（面板地址和 token 自动注入脚本）
     let installCommand: string | undefined
+    const panelUrl = derivePanelUrl(request)
     if (needsInitialization && installToken) {
-      const panelUrl = derivePanelUrl(request)
-      installCommand = buildHostInstallCommand(panelUrl, installToken)
+      installCommand = buildHostInstallCommand(panelUrl)
     }
 
     reply.code(201).send({
@@ -1380,6 +1379,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         resources: resourceInfo
       },
       installCommand: installCommand || undefined,
+      panelUrl,
+      installScriptUrl: `${panelUrl}/api/agent/install.sh`,
       installToken: installToken || undefined
     })
   })
@@ -1411,7 +1412,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
   })
 
   // 安装脚本下载接口（基于 installToken 鉴权，保留给老版本兼容）
-  fastify.get<{ Params: { token: string } }>('/install.sh/:token', async (request, reply) => {
+  fastify.get<{ Params: { token: string } }>('/install.sh/:token', { logLevel: 'silent' }, async (request, reply) => {
     const { token } = request.params
 
     if (!token || token.length < 10) {
@@ -1524,7 +1525,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
   })
 
   // 证书下载接口（基于 installToken 鉴权）
-  fastify.get<{ Params: { token: string } }>('/cert/:token', async (request, reply) => {
+  fastify.get<{ Params: { token: string } }>('/cert/:token', { logLevel: 'silent' }, async (request, reply) => {
     const { token } = request.params
 
     if (!token || token.length < 10) {
@@ -1856,7 +1857,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     // 生成安装命令（面板地址和 token 自动注入脚本）
     const panelUrl = derivePanelUrl(request)
-    const installCommand = buildHostInstallCommand(panelUrl, installToken)
+    const installCommand = buildHostInstallCommand(panelUrl)
 
     await createLog(
       user.id,
@@ -1868,6 +1869,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     return {
       success: true,
+      panelUrl,
+      installScriptUrl: `${panelUrl}/api/agent/install.sh`,
       installCommand,
       installToken,
       message: '安装命令已重新生成，请在24小时内完成安装'

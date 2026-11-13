@@ -5,7 +5,16 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current version is **v1.0.13**.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.14**; v1.0.13 has been officially released.
+
+## v1.0.14 Installation Details and Flow Fixes (Release Target)
+
+- Display the installation command, panel address, and TOKEN separately with independent copy actions, success/failure feedback, and Agent TOKEN expiration. Commands do not embed the TOKEN.
+- Clear frontend installation details before reloading, on closing, host changes, deactivation, and unmount; ignore stale responses. This does not revoke issued TOKENs or clear the clipboard.
+- Show and confirm the plan before installation, handling UUID host and `ait_` Agent TOKENs through their respective flows. Fresh installs prepare Incus/ZFS before Agent installation, default new pools to ZFS, and preserve existing pools; reinstalls retain configuration. Update host trust after confirmation and refresh Incus trust after Agent installation.
+- Improve step output, terminal menus, and color suppression. Accept decimal capacities with distinct GB/GiB units. Disable framework request logs on the legacy host script route containing TOKENs; external proxies still need URL redaction.
+- Synchronize product versions, Compose tags, fixtures, and current documentation, retaining third-party and historical versions, 30 assets, and minimum updater `v0.0.3`.
+- On 2026-11-13, GitHub confirmed v1.0.13 as a non-draft, non-prerelease release published at `2026-11-12T16:51:03Z`. This cycle uses editing and static inspection only, without tests, builds, commits, or publication. Full details are in `docs-site/release-notes/v1.0.14.md`.
 
 ## v1.0.13 Fixes and Version Synchronization
 
@@ -37,7 +46,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.12` to `v1.0.13`.
+- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.13` to `v1.0.14`.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 

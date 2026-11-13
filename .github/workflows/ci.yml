@@ -61,6 +61,7 @@ jobs:
       - run: pnpm rebuild esbuild
       - run: pnpm --filter server exec prisma generate
       - run: pnpm test
+      - run: pnpm --filter client test:host-install-ui-guards
       - run: pnpm --filter server test:panel-backup-guards
       - run: pnpm --filter server test:update-manifest-contract
       - run: pnpm --filter server test:native-panel-download

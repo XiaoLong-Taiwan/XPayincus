@@ -2,6 +2,7 @@ import axios, { type AxiosInstance } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { buildApiUrl } from '@/utils/api-url'
 import { API_BASE_URL } from '@/utils/runtime-config'
+import type { CreateHostResponse, RegenerateHostInstallResponse } from '@/types/api'
 import type { LoginRequest, LoginResponse, UpdateUserResponse, GenerateInviteRequest, InviteListResponse, User, BadgeCatalogItem, BadgeSeriesItem, UserQuota, UpdateUserRequest, Instance, InstanceWithDetails, InstanceStats, CreateInstanceRequest, CreateInstanceResponse, UpdateInstanceRequest, ChangeHostOptionsResponse, PortMapping, CreatePortMappingRequest, IpAddress, Ipv6Subnet, HostAgentStatusResponse, HostAgentInstallCommandResponse, HostAgentUpgradeRequestResponse, Snapshot, Backup, CreateSnapshotRequest, CreateBackupRequest, SnapshotPolicy, BackupPolicy, UpdateSnapshotPolicyRequest, UpdateBackupPolicyRequest, Host, HostWithDetails, AvailableHost, CreateHostRequest, UpdateHostRequest, Package, CreatePackageRequest, UpdatePackageRequest, SshKey, CreateSshKeyRequest, NotificationChannel, CreateNotificationChannelRequest, UpdateNotificationChannelRequest, OAuthConfig, UserOAuthBinding, UpdateOAuthConfigRequest, OAuthClientApp, AdminOAuthAuthorization, UpsertOAuthClientAppRequest, HelpArticle, CreateHelpArticleRequest, UpdateHelpArticleRequest, HostImagePolicy, SystemImage, CreateSystemImageRequest, UpdateSystemImageRequest, Log, PaginatedResponse, Ticket, TicketMessage, TicketStatus, TicketObjectLink, TicketObjectLinkType, TicketSupportContext, TicketInternalNote, CreateTicketRequest, PaginatedTickets, PaginatedTicketMessages, TerminalSavedCommand, CreateTerminalSavedCommandRequest, UpdateTerminalSavedCommandRequest, TelegramBindingStatus, TelegramBindTokenResponse, TelegramAdminBindingsResponse, TelegramWebhookDeleteResponse, TelegramWebhookInfoResponse, TelegramWebhookSetupResponse, VersionMetadata, SystemUpdateCheckResult, SystemUpdateTask, PublicApiScopeMetadata, CreateGiftCardBatchRequest, CreateGiftCardRequest, GiftCardListResponse, GiftCardRecord, GiftCardStats } from '@/types/api.js'
 
 export type VipRuleType = 'user' | 'hosting'
@@ -1273,7 +1274,7 @@ const api = {
     getImagePolicy: (id: number): Promise<HostImagePolicy> => http.get(`/hosts/${id}/images`),
     updateImagePolicy: (id: number, data: { useDefault: boolean; imageIds?: number[] }): Promise<HostImagePolicy & { message: string }> =>
       http.put(`/hosts/${id}/images`, data),
-    create: (data: CreateHostRequest): Promise<Host> => http.post('/hosts', data),
+    create: (data: CreateHostRequest): Promise<CreateHostResponse> => http.post('/hosts', data),
     update: (id: number, data: UpdateHostRequest): Promise<Host> =>
       http.patch(`/hosts/${id}`, data),
     delete: (id: number): Promise<void> => http.delete(`/hosts/${id}`),
@@ -1297,7 +1298,7 @@ const api = {
     }> => http.post(`/hosts/${id}/takeover-official`, {}),
     verify: (id: number): Promise<{ success: boolean; message?: string; resources?: { cpuTotal: number; memoryTotalGB: number; diskTotalGB: number } }> =>
       http.post(`/hosts/${id}/verify`, {}, { timeout: TIMEOUT.MEDIUM }),
-    regenerateInstall: (id: number): Promise<{ success: boolean; installCommand: string; installToken?: string; message: string }> =>
+    regenerateInstall: (id: number): Promise<RegenerateHostInstallResponse> =>
       http.post(`/hosts/${id}/regenerate-install`, {}),
     getAgentStatus: (id: number): Promise<HostAgentStatusResponse> =>
       http.get(`/agent/hosts/${id}/status`),

@@ -11,6 +11,8 @@ import { availableFlagCountryCodes, getLocalizedCountryName } from '@/utils/coun
 import { buildHostApiUrl, validateIdentifier, validateName, validateHostAddress, validateIpAddress } from '@/utils/validation'
 import FlagIcon from '@/components/FlagIcon.vue'
 import { hostsPath } from '@/utils/app-paths'
+import HostInstallFields from '@/components/host/HostInstallFields.vue'
+import { useHostInstallDetails } from '@/composables/useHostInstallDetails'
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -25,7 +27,7 @@ const hostNamePrefix = computed(() => `PEER${authStore.user?.id}-`)
 
 const saving = ref(false)
 const showInstallScript = ref(false)
-const installCommand = ref('')
+const { installDetails, clearInstallDetails, loadInstallDetails } = useHostInstallDetails()
 
 
 const hostId = ref<number>(0)
@@ -245,13 +247,11 @@ async function createHost() {
       } : undefined
     }
 
-    const response = await api.hosts.create(formData)
-    const command = (response as any).installCommand
-
-    hostId.value = (response as any).host?.id
+    const response = await loadInstallDetails(() => api.hosts.create(formData))
+    if (!response) return
+    hostId.value = response.host.id
     toast.success(t('admin.hosts.hostAdded'))
-    if (command) {
-      installCommand.value = command
+    if (installDetails.value) {
       showInstallScript.value = true
       installStatus.value = 'waiting'
     } else {
@@ -267,13 +267,9 @@ async function createHost() {
   }
 }
 
-function copyCommand() {
-  navigator.clipboard.writeText(installCommand.value)
-  toast.success(t('common.copied'))
-}
-
 function closeAndGoBack() {
   showInstallScript.value = false
+  clearInstallDetails()
   router.push(hostsPath())
 }
 </script>
@@ -511,9 +507,9 @@ function closeAndGoBack() {
     <!-- 安装脚本弹窗 -->
     <Teleport to="body">
       <Transition name="modal">
-        <div v-if="showInstallScript" class="modal-overlay">
+        <div v-if="showInstallScript && installDetails" class="modal-overlay">
           <div class="modal-backdrop" @click="closeAndGoBack"></div>
-          <div class="modal-content" style="max-width: 40rem; width: 95%;">
+          <div class="modal-content" style="max-width: 72rem; width: 95%;">
             <div class="modal-header">
               <h3 class="modal-title">{{ t('admin.hosts.installScript') }}</h3>
               <button class="text-themed-muted transition-colors hover:text-themed" @click="closeAndGoBack">
@@ -528,15 +524,7 @@ function closeAndGoBack() {
                   <span class="text-sm font-medium text-themed">{{ t('admin.hosts.step1RunScript') }}</span>
                 </div>
                 <p class="text-xs text-themed-muted ml-8">{{ t('admin.hosts.runOnHost') }}</p>
-                <div class="ml-8 rounded-lg border border-themed bg-themed-secondary p-3 overflow-x-auto">
-                  <code class="block break-all whitespace-pre-wrap font-mono text-xs text-themed">{{ installCommand }}</code>
-                </div>
-                <div class="ml-8">
-                  <button class="btn-secondary btn-sm gap-1.5" @click="copyCommand">
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                    {{ t('admin.hosts.copyCommand') }}
-                  </button>
-                </div>
+                <HostInstallFields v-if="installDetails" :details="installDetails" class="ml-8" />
               </div>
 
               <!-- 步骤 2：验证并连接 -->

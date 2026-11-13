@@ -50,17 +50,19 @@ class AgentInstallerTests(unittest.TestCase):
         target.write_text('#!/usr/bin/env bash\nset -eu\n' + body + '\n', newline='\n')
         target.chmod(0o755)
 
-    def run_installer(self, *args, success=True):
+    def run_installer(self, *args, success=True, confirmed=True, host_ready=True, input=None):
         self.env['TEST_TOOLS'] = self.path(self.bin)
+        options = (['--yes'] if confirmed else []) + (['--host-ready'] if host_ready else [])
         result = subprocess.run([BASH, '-c', 'export PATH="$TEST_TOOLS:$PATH"; exec bash "$@"',
-                                 'test', self.path(self.script), *args], env=self.env, capture_output=True, text=True)
+                                 'test', self.path(self.script), *options, *args], env=self.env, capture_output=True, text=True, input=input)
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode == 0, success, output)
         self.assertNotIn(TOKEN, output)
         self.assertNotIn(SECRET, output)
+        self.assertNotIn('\x1b', output)
         events = (self.base / 'events').read_text() if (self.base / 'events').exists() else ''
         for command in ['incus', 'rfw', 'zfs', 'modprobe', 'dkms']:
-            self.assertNotIn(command, events)
+            self.assertNotRegex(events, rf'(?m)^{command}(?:\s|$)')
         return output, events
 
     def local_args(self):
@@ -71,7 +73,11 @@ class AgentInstallerTests(unittest.TestCase):
 
     def test_local_reinstall_preserves_config(self):
         before = self.config.read_bytes()
-        _, events = self.run_installer('--reinstall', *self.local_args())
+        self.env['NO_COLOR'] = ''
+        output, events = self.run_installer('--reinstall', *self.local_args())
+        for step in range(1, 5):
+            self.assertIn(f'[步骤 {step}/4]', output)
+        self.assertIn('[完成] Incudal Agent installed or upgraded and started.', output)
         self.assertEqual(self.config.read_bytes(), before)
         self.assertEqual((self.base / 'agent').read_bytes(), self.binary.read_bytes())
         self.assertIn('restart incudal-agent', events)
@@ -101,6 +107,79 @@ class AgentInstallerTests(unittest.TestCase):
         self.assertEqual(events.count('curl'), 1)
         self.assertIn(TOKEN, (self.base / 'request').read_text())
         self.assertIn(SECRET, self.config.read_text())
+
+    def test_confirmation_required_before_download_or_exchange(self):
+        self.credentials()
+        output, events = self.run_installer(*self.local_args(), confirmed=False, success=False)
+        self.assertIn('安裝摘要', output)
+        self.assertNotIn('curl', events)
+        self.assertFalse((self.base / 'request').exists())
+
+    def test_declined_summary_does_not_initialize_or_consume_token(self):
+        self.credentials()
+        source = self.script.read_text().replace("prompt_value answer '確認開始安裝？[y/N]: '", "answer=n")
+        self.script.write_text(source, newline='\n')
+        output, events = self.run_installer(*self.local_args(), confirmed=False, host_ready=False)
+        self.assertIn('已取消安裝', output)
+        self.assertEqual(events, '')
+        self.assertEqual((self.base / 'agent').read_text(), 'old binary')
+
+    def host_fixture(self):
+        (self.base / 'host-installer').write_text('if [[ "$1" != --refresh-agent-trust ]] && IFS= read -r unexpected; then exit 91; fi\nprintf "host %s driver=%s\\n" "$*" "$INCUS_STORAGE_DRIVER" >> "$TEST_BASE/events"\nexit "${HOST_EXIT:-0}"\n', newline='\n')
+        self.shim('curl', 'input=""; out=""; url=""; while (($#)); do case "$1" in --config) input="$(cat)"; shift 2;; -o) out="$2"; shift 2;; *) url="$1"; shift;; esac; done\nif [[ "$url" == */api/hosts/install.sh || "$input" == *api/hosts/install.sh/* ]]; then cp "$TEST_BASE/host-installer" "$out"; else printf "exchange\\n" >> "$TEST_BASE/events"; cp "$TEST_BASE/response" "$out"; fi')
+
+    def test_ait_initializes_host_before_exchange_and_refreshes_trust(self):
+        self.credentials()
+        self.host_fixture()
+        _, events = self.run_installer(*self.local_args(), host_ready=False, input='unexpected input\n')
+        self.assertLess(events.index('host --prepare-agent-host --yes driver=zfs'), events.index('exchange'))
+        self.assertIn('host --refresh-agent-trust', events)
+        self.assertEqual(events.count('exchange'), 1)
+
+    def test_host_failure_preserves_token(self):
+        self.credentials()
+        self.host_fixture()
+        self.env['HOST_EXIT'] = '1'
+        _, events = self.run_installer(*self.local_args(), host_ready=False, success=False)
+        self.assertNotIn('exchange', events)
+        self.assertEqual((self.base / 'agent').read_text(), 'old binary')
+
+    def test_static_credentials_update_does_not_prepare_host(self):
+        self.env.update(INCUDAL_PANEL_URL='https://panel.example.org',
+                        INCUDAL_AGENT_ID='agt_' + 'a' * 32, INCUDAL_AGENT_SECRET=SECRET)
+        _, events = self.run_installer(*self.local_args(), host_ready=False)
+        self.assertNotIn('curl', events)
+        self.assertFalse((self.base / 'request').exists())
+        self.assertIn('restart incudal-agent', events)
+
+    def test_python_bootstrap_precedes_manifest_and_propagates_failure(self):
+        source = SOURCE.read_text()
+        bootstrap = re.search(r'^  if \[ "\$\{DRY_RUN\}" != 1 \].*?^  fi', source, re.M | re.S).group()
+        harness = self.base / 'bootstrap.sh'
+        harness.write_text('set -euo pipefail\nfail() { exit 1; }\n'
+                           'command() { if [[ "$*" == "-v python3" ]]; then [[ -f "$TEST_BASE/python-ready" ]]; else builtin command "$@"; fi; }\n'
+                           'apt-get() { printf "%s\\n" "$*" >> "$TEST_BASE/events"; [[ "$*" != *"$FAIL_APT"* ]] || return 1; if [[ "$1" == install ]]; then : > "$TEST_BASE/python-ready"; fi; }\n'
+                           + bootstrap + '\nprintf "select_manifest\\n" >> "$TEST_BASE/events"\n', newline='\n')
+        self.env.update(DRY_RUN='0', INCUDAL_AGENT_INSTALL_TOKEN=TOKEN)
+        for failure in ['update', 'install', 'never']:
+            (self.base / 'events').write_text('')
+            self.env['FAIL_APT'] = failure
+            result = subprocess.run([BASH, self.path(harness)], env=self.env, capture_output=True, text=True)
+            events = (self.base / 'events').read_text()
+            self.assertEqual(result.returncode == 0, failure == 'never', result.stderr)
+            if failure == 'never':
+                self.assertLess(events.index('install -y -qq python3'), events.index('select_manifest'))
+            else:
+                self.assertNotIn('select_manifest', events)
+            self.assertFalse((self.base / 'request').exists())
+
+    def test_uuid_delegates_to_host_without_agent_exchange_loop(self):
+        self.credentials()
+        self.host_fixture()
+        self.env['INCUDAL_AGENT_INSTALL_TOKEN'] = '12345678-1234-1234-1234-123456789abc'
+        _, events = self.run_installer(host_ready=False, input='unexpected input\n')
+        self.assertIn('host --mode nat --yes driver=zfs', events)
+        self.assertNotIn('exchange', events)
 
     def test_exchange_failure_not_retried(self):
         self.credentials()
@@ -231,6 +310,13 @@ class AgentInstallerTests(unittest.TestCase):
             for option in range(7):
                 self.assertIn(f'[{option}]', result.stdout)
             self.assertIn('----------------------------------------', result.stdout)
+            self.assertNotIn('\x1b', result.stdout + result.stderr)
+        self.env.update(COLUMNS='020', NO_COLOR='')
+        result = subprocess.run([BASH, self.path(self.base / 'menu-source')], env=self.env,
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[1], '  ' + '-' * 18)
+        self.assertNotIn('\x1b', result.stdout + result.stderr)
         self.assertFalse((self.base / 'request').exists())
 
     def test_menu_missing_dependency_is_explicit(self):

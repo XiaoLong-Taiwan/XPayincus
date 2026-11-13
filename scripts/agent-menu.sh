@@ -3,19 +3,26 @@ set +x
 set -euo pipefail
 umask 077
 
-fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+if [[ ! -t 1 || ! -t 2 || ${NO_COLOR+x} || "${TERM:-dumb}" == dumb ]]; then
+  export SYSTEMD_COLORS=0
+fi
+
+fail() { printf '  [错误] %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "缺少必要指令：$1"; }
 prompt() {
   [ -r /dev/tty ] && [ -w /dev/tty ] || fail '互動操作需要 /dev/tty；可用 --action 與參數執行。'
-  IFS= read -r -p "$2" "$1" </dev/tty || fail '輸入取消'
+  printf '  %s' "$2" >&2
+  IFS= read -r "$1" </dev/tty || fail '輸入取消'
 }
 action=''
 panel=''
 version='latest'
 binary=''
 token_file=''
+assume_yes=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --yes) assume_yes=1; shift ;;
     --action|--panel-url|--version|--binary|--token-file)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail '參數缺少值'
       case "$1" in
@@ -24,16 +31,25 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2 ;;
     --help|-h)
-      printf '%s\n' 'agent-menu.sh [--action install|reinstall|update|local|status|logs] [--panel-url ORIGIN] [--version latest|vSemVer] [--binary FILE] [--token-file FILE]'
+      printf '%s\n' 'agent-menu.sh [--action install|reinstall|update|local|status|logs] [--panel-url ORIGIN] [--version latest|vSemVer] [--binary FILE] [--token-file FILE] [--yes]'
       exit 0 ;;
     *) fail '未知參數' ;;
   esac
 done
 if [ -z "$action" ]; then
-  printf '\n%s\n' '----------------------------------------' '          XPayincus Agent 管理' '----------------------------------------' \
-    '[1] 新裝 Agent' '[2] 僅重裝 Agent（保留設定）' '[3] 更新 Agent 至最新穩定版' \
-    '[4] 本地 binary 重裝' '[5] Agent 狀態' '[6] Agent 日誌' '[0] 返回／退出' \
-    '----------------------------------------'
+  width="${COLUMNS:-60}"
+  [[ "$width" =~ ^[0-9]{1,3}$ ]] || width=60
+  width=$((10#$width))
+  (( width > 60 )) && width=60
+  (( width < 3 )) && width=3
+  width=$((width - 2))
+  printf -v line '%*s' "$width" ''
+  printf '\n  %s\n' "${line// /-}"
+  printf '  %s\n' 'XPayincus Agent 管理'
+  printf '  %s\n\n' "${line// /-}"
+  printf '  %s\n' '[1] 安裝 Incus / ZFS 與 Agent（預設 ZFS）' '[2] 僅重裝 Agent（保留設定）' '[3] 更新 Agent 至最新穩定版' \
+    '[4] 本地 binary 重裝' '[5] Agent 狀態' '[6] Agent 日誌' '[0] 返回／退出'
+  printf '\n'
   prompt choice '請選擇：'
   case "$choice" in 1) action=install ;; 2) action=reinstall ;; 3) action=update ;; 4) action=local ;; 5) action=status ;; 6) action=logs ;; 0) exit 0 ;; *) fail '無效選項' ;; esac
 fi
@@ -66,6 +82,7 @@ elif [ -n "$binary" ]; then
   fail '--binary 僅適用 local'
 fi
 args+=(--version "$version")
+[ -z "$assume_yes" ] || args+=(--yes)
 work="$(mktemp -d)"
 trap 'rm -f "$work/agent-install.sh"; rmdir "$work"' EXIT
 url="${panel%/}/api/agent/install.sh"

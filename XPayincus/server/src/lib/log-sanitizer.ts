@@ -92,6 +92,7 @@ const REDACTED_JWT = '[REDACTED_JWT]'
 
 // Token 模式匹配（用于检测值中包含的 token）
 const TOKEN_PATTERNS = [
+    { pattern: /(\/api\/(?:hosts\/(?:cert|install\.sh)|agent\/install-config)\/)[^/?#\s"'<>]+/gi, replacement: `$1${REDACTED}` },
     { pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, replacement: REDACTED_JWT },  // JWT
     { pattern: /\b(?:pat|poa)_[A-Za-z0-9_-]{43}\b/g, replacement: REDACTED_JWT },  // XPayincus API token
     { pattern: /Basic\s+[A-Za-z0-9+/=]{8,}/gi, replacement: REDACTED_JWT },  // Basic auth
@@ -174,7 +175,7 @@ export const logSerializers = {
     req: (req: any) => {
         const sanitized: Record<string, unknown> = {
             method: req.method,
-            url: req.url,
+            url: typeof req.url === 'string' ? sanitizeTokensInString(req.url) : req.url,
             hostname: req.hostname,
             remoteAddress: req.ip || req.remoteAddress,
         }

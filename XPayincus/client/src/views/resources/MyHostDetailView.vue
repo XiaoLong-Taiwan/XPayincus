@@ -19,6 +19,8 @@ import HostCreateInstanceTab from '@/components/host/HostCreateInstanceTab.vue'
 import HostOpsTab from '@/components/host/HostOpsTab.vue'
 import FlagIcon from '@/components/FlagIcon.vue'
 import { hostsPath } from '@/utils/app-paths'
+import HostInstallFields from '@/components/host/HostInstallFields.vue'
+import { useHostInstallDetails } from '@/composables/useHostInstallDetails'
 
 // 为 KeepAlive exclude 匹配定义组件名称
 defineOptions({
@@ -88,7 +90,7 @@ const paidInstanceCount = ref(0)
 
 // 重新安装弹窗
 const showReinstallModal = ref(false)
-const reinstallCommand = ref('')
+const { installDetails, clearInstallDetails, loadInstallDetails } = useHostInstallDetails()
 
 const reinstallStatus = ref<'waiting' | 'verifying' | 'success' | 'error'>('waiting')
 const reinstallError = ref('')
@@ -149,7 +151,7 @@ watch(() => route.params.id, async (newId, oldId) => {
     paidInstanceCount.value = 0
     
     showReinstallModal.value = false
-    reinstallCommand.value = ''
+    clearInstallDetails()
     reinstallStatus.value = 'waiting'
     reinstallError.value = ''
     
@@ -306,12 +308,14 @@ async function confirmExtendAll() {
 
 // 重新安装：生成新的安装命令
 async function regenerateInstall() {
-  if (!host.value) return
+  if (!host.value || actionLoading.value === 'reinstall') return
+  if (!window.confirm(t('admin.hosts.hostInstallTokenRotateConfirm'))) return
+  const hostId = host.value.id
   
   actionLoading.value = 'reinstall'
   try {
-    const res = await api.hosts.regenerateInstall(host.value.id)
-    reinstallCommand.value = res.installCommand
+    const res = await loadInstallDetails(() => api.hosts.regenerateInstall(hostId))
+    if (!res || !installDetails.value) return
     reinstallStatus.value = 'waiting'
     reinstallError.value = ''
     showReinstallModal.value = true
@@ -342,17 +346,10 @@ async function verifyAfterReinstall() {
   }
 }
 
-// 复制重新安装命令
-function copyReinstallCommand() {
-  navigator.clipboard.writeText(reinstallCommand.value)
-  toast.success(t('common.copied'))
-}
-
-
-
 // 关闭重新安装弹窗
 function closeReinstallModal() {
   showReinstallModal.value = false
+  clearInstallDetails()
   loadHost()
 }
 
@@ -622,12 +619,7 @@ const tabs = [
                     <span class="text-sm font-medium text-themed">{{ t('admin.hosts.step1RunScript') }}</span>
                   </div>
                   <p class="text-xs text-themed-muted ml-8">{{ t('admin.hosts.runOnHost') }}</p>
-                  <div class="ml-8 overflow-x-auto rounded-lg border border-gray-800 bg-gray-950 p-4">
-                    <code class="text-green-400 text-sm break-all whitespace-pre-wrap font-mono">{{ reinstallCommand }}</code>
-                  </div>
-                  <div class="ml-8 mb-4">
-                    <button class="btn-secondary btn-sm" @click="copyReinstallCommand">{{ t('admin.hosts.copyCommand') }}</button>
-                  </div>
+                  <HostInstallFields v-if="installDetails" :details="installDetails" class="ml-8 mb-4" />
                 </div>
 
                 <!-- 步骤 2: 验证并连接 -->

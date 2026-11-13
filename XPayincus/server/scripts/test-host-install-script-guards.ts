@@ -71,7 +71,8 @@ assert.ok(
 
 assert.ok(
   hostInstallScript.includes('cert_file=$(mktemp /tmp/incudal-panel-cert.XXXXXX.crt)') &&
-    hostInstallScript.includes('curl -sSf "$cert_url" -o "$cert_file"') &&
+    hostInstallScript.includes('--config - -o "$cert_file" 2>/dev/null') &&
+    !hostInstallScript.includes('curl -sSf "$cert_url"') &&
     hostInstallScript.includes('fetch_authenticated_panel_certificate certificate') &&
     hostInstallScript.includes('fetch_authenticated_panel_certificate verify') &&
     hostInstallScript.includes('hmac.compare_digest(proof, expected)') &&
@@ -273,6 +274,44 @@ const runShell = (script: string, expected = 0) => {
   assert.equal(result.status, expected, `isolated shell check failed: ${result.error ?? ''}\n${result.stdout}\n${result.stderr}`)
   return result.stdout
 }
+assert.equal(runShell(`set -euo pipefail
+${shellFunction('import_cert')}
+step() { :; }
+error() { :; }
+rm() { :; }
+mktemp() { printf '/unused-test-cert'; }
+curl() {
+  local arg config
+  for arg in "$@"; do [[ "$arg" != *private-install-token* ]] || exit 91; done
+  config=$(cat)
+  [[ "$config" == 'url = "https://panel.example.org/api/hosts/cert/private-install-token"' ]] || exit 92
+  printf 'protected-url\\n'
+  return 1
+}
+AGENT_CONFIG_FILE=/dev/null/absent-config
+PANEL_URL=https://panel.example.org
+TOKEN=private-install-token
+import_cert
+`, 1), 'protected-url\n', 'certificate TOKEN must travel through curl stdin, never argv, and download failures must stop installation')
+const terminalSetup = hostInstallScript.match(/^RED='' GREEN=''[\s\S]*?^readonly RED[^\n]*/m)?.[0]
+assert.ok(terminalSetup, 'terminal color setup must remain independently testable')
+const messageFunctions = hostInstallScript.match(/^log\(\)[\s\S]*?^step\(\)[^\n]*/m)?.[0]
+assert.ok(messageFunctions)
+for (const noColor of ['', 'export NO_COLOR=']) {
+  const output = runShell(`set -euo pipefail
+${noColor}
+TERM=xterm
+${terminalSetup}
+${messageFunctions}
+${shellFunction('divider')}
+log 'literal \\n 100%'
+COLUMNS=020 divider
+`)
+  assert.equal(output, '  [完成] literal \\n 100%\n  ------------------\n')
+  assert.ok(!output.includes('\u001b'), 'redirected and NO_COLOR output must contain no ANSI')
+}
+assert.ok(hostInstallScript.includes('纯数字/G 为 GiB，GB 为十进位，GiB 为二进位'))
+assert.ok(hostInstallScript.includes('容量支持小数'))
 const arcHarness = `set -euo pipefail
 info() { :; }
 warn() { :; }
@@ -289,9 +328,16 @@ runShell(`${arcHarness}
 [[ $(parse_binary_size 512M) == 536870912 ]]
 [[ $(parse_binary_size 512MiB) == 536870912 ]]
 [[ $(parse_binary_size 2G) == 2147483648 ]]
-[[ $(parse_binary_size 2GB) == 2147483648 ]]
+[[ $(parse_binary_size 2GB) == 2000000000 ]]
 [[ $(parse_binary_size 002) == 2147483648 ]]
-for bad in 0 -1 1.5G 999999999999G 999999999999999999999999 1T '/dev/sda' '1+1'; do
+[[ $(parse_binary_size 1.5gIb) == 1610612736 ]]
+[[ $(parse_binary_size 1.5gb) == 1500000000 ]]
+[[ $(parse_binary_size 1.5) == 1610612736 ]]
+[[ $(parse_binary_size 0.001MB) == 1000 ]]
+[[ $(parse_binary_size 0.000000001G) == 1 ]]
+[[ $(parse_binary_size 1.234567890123456789GiB) == 1325607178 ]]
+[[ $(parse_binary_size 8589934591.999999999GiB) == 9223372036854775806 ]]
+for bad in 0 0.0 -1 .5G 1.G 1e3G 1..5G 999999999999G 8589934592GiB 9223372036.854775808GB 999999999999999999999999 0.0000000001G '/dev/sda' '1+1'; do
   if parse_binary_size "$bad"; then exit 1; fi
 done
 configure_zfs_arc_memory
@@ -319,7 +365,8 @@ incus() {
     'storage list --format csv -c n') printf '%s' "$POOLS" ;;
     'storage show '*) return "$POOL_STATUS" ;;
     'profile device get default root type') return "$ROOT_NAME_STATUS" ;;
-    'profile device add '*|'storage create '*) printf '%s\\n' "$*" ;;
+    'storage create '*) [[ "\${CREATE_STATUS:-0}" == 0 ]] || return 1; printf '%s\\n' "$*" ;;
+    'profile device add '*) printf '%s\\n' "$*" ;;
     *) printf 'unexpected Incus command: %s\\n' "$*" >&2; return 91 ;;
   esac
 }
@@ -384,78 +431,63 @@ if INCUS_STORAGE_POOL=missing POOLS=existing ensure_incus_storage; then exit 1; 
 if INCUS_STORAGE_DRIVER=/dev/sda ensure_incus_storage; then exit 1; fi
 if INCUS_STORAGE_DRIVER=zfs ensure_incus_storage; then exit 1; fi
 zfs_storage_available() { return 0; }
-df() { printf 'Avail\\n42949672960\\n'; }
 INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=2GiB ensure_incus_storage
-if INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=30GiB ensure_incus_storage; then exit 1; fi
+INCUS_STORAGE_DRIVER=zfs INCUS_STORAGE_SIZE=30GiB ensure_incus_storage
 `)
 const zfsStorageHarness = `${storageHarness}
 zfs_storage_available() { return 0; }
-df() { printf 'Avail\\n%s\\n' "$AVAILABLE"; }
+df() { echo unexpected-df >&2; return 91; }
 `
 for (const driver of ['auto', 'zfs']) {
-  for (const [available, gib] of [
-    [40 * 2 ** 30, 10], [20 * 2 ** 30, 10], [19 * 2 ** 30, 9],
-    [5 * 2 ** 30, 2], [2 * 2 ** 30, 1]
-  ]) {
-    assert.equal(runShell(`${zfsStorageHarness}
-AVAILABLE=${available} INCUS_STORAGE_DRIVER=${driver} ensure_incus_storage
-`), `storage create default zfs size=${gib * 2 ** 30}\nprofile device add default root disk path=/ pool=default\n`,
-    `${driver} default must fit half the free disk and stay capped at 10GiB`)
-  }
-}
-for (const available of [0, 512 * 2 ** 20, 2 ** 30, 2 * 2 ** 30 - 1]) {
   assert.equal(runShell(`${zfsStorageHarness}
-AVAILABLE=${available} ensure_incus_storage
-`), 'storage create default dir\nprofile device add default root disk path=/ pool=default\n',
-  'auto must use dir when half-free capacity cannot fit a 1GiB loop')
-  for (const options of ['INCUS_STORAGE_DRIVER=zfs', 'INCUS_STORAGE_SIZE=1GiB']) {
-    assert.equal(runShell(`${zfsStorageHarness}
-if AVAILABLE=${available} ${options} ensure_incus_storage; then exit 92; fi
-`), '', 'explicit ZFS or size must fail without mutation when capacity is insufficient')
-  }
+INCUS_STORAGE_DRIVER=${driver} ensure_incus_storage
+`), 'storage create default zfs size=10737418240\nprofile device add default root disk path=/ pool=default\n',
+  `${driver} must default to 10GiB without querying free space or falling back to dir`)
 }
-for (const size of ['bad', '0', '512MiB', '3GiB', '999999999999999999999999']) {
+for (const [size, bytes] of [
+  ['512MiB', 536870912], ['30GiB', 32212254720], ['1.5GB', 1500000000],
+  ['1.5GiB', 1610612736], ['1.5g', 1610612736], ['1.5', 1610612736],
+  ['2gb', 2000000000], ['2GB', 2000000000], ['2GIB', 2147483648],
+  ['1.5mb', 1500000], ['1.5mIb', 1572864], ['1.5M', 1572864],
+  ['1.5tb', 1500000000000], ['1.5TiB', 1649267441664], ['1T', 1099511627776],
+  ['1.5kb', 1500], ['1.5KiB', 1536], ['1k', 1024], ['0.001KB', 1]
+] as const) {
   assert.equal(runShell(`${zfsStorageHarness}
-if AVAILABLE=4294967296 INCUS_STORAGE_SIZE=${size} ensure_incus_storage; then exit 92; fi
+INCUS_STORAGE_SIZE=${size} ensure_incus_storage
+`), `storage create default zfs size=${bytes}\nprofile device add default root disk path=/ pool=default\n`,
+  `${size} must normalize to bytes without a minimum or free-space limit`)
+}
+for (const size of ['bad', '0', '-1', '1e3GB', '0.0000000001G', '8589934592GiB', '999999999999999999999999']) {
+  assert.equal(runShell(`${zfsStorageHarness}
+if INCUS_STORAGE_SIZE=${size} ensure_incus_storage; then exit 92; fi
 `), '', 'invalid explicit sizes must fail without mutation or prompting')
 }
 assert.equal(runShell(`${zfsStorageHarness}
-AVAILABLE=5368709120 INCUS_STORAGE_SIZE=2560MiB ensure_incus_storage
-`), 'storage create default zfs size=2684354560\nprofile device add default root disk path=/ pool=default\n',
-'an explicit size exactly equal to half-free capacity must remain valid')
-for (const available of ['', 'bad', '-1', '9999999999999999999']) {
-  assert.equal(runShell(`${zfsStorageHarness}
-if AVAILABLE='${available}' ensure_incus_storage; then exit 92; fi
-`), '', 'invalid disk capacity must fail without mutation')
-}
-assert.equal(runShell(`${zfsStorageHarness}
-df() { printf 'Avail\\n42949672960\\n'; return 1; }
-if ensure_incus_storage; then exit 92; fi
-`), '', 'df failure must propagate even if its output looks valid')
+if CREATE_STATUS=1 ensure_incus_storage; then exit 92; fi
+`), '', 'storage creation failures must remain failures')
 const interactiveStorageHarness = zfsStorageHarness.replaceAll('[[ -t 0', '[[ 1 == 1') + `
 INCUS_STORAGE_POOL=default
 INCUS_STORAGE_DRIVER=zfs
-AVAILABLE=5368709120
 READS=0
 read() {
-  [[ "$3" == 'ZFS loop 大小 [2GiB]: ' ]] || return 91
+  [[ "$3" == 'ZFS loop 大小 [10GiB]: ' ]] || return 91
   READS=$((READS + 1))
   case "$READS" in
     1) size=bad ;;
-    2) size=512MiB ;;
-    3) size=3GiB ;;
+    2) size=0 ;;
+    3) size=8589934592GiB ;;
     4) size="$FINAL_SIZE" ;;
     *) return 92 ;;
   esac
 }
 `
-for (const [input, bytes] of [['', 2147483648], ['1536MiB', 1610612736]] as const) {
+for (const [input, bytes] of [['', 10737418240], ['512MiB', 536870912], ['1.5GB', 1500000000], ['30GiB', 32212254720]] as const) {
   assert.equal(runShell(`${interactiveStorageHarness}
 FINAL_SIZE='${input}'
 ensure_incus_storage
 [[ "$READS" == 4 ]]
 `), `storage create default zfs size=${bytes}\nprofile device add default root disk path=/ pool=default\n`,
-  'interactive invalid syntax, undersized and oversized input must retry before accepting valid input or the default')
+  'interactive invalid syntax, zero and overflow must retry before accepting a positive size or the 10GiB default')
 }
 assert.equal(runShell(`${interactiveStorageHarness}
 read() { return 1; }
@@ -488,6 +520,18 @@ const bootServices = shellFunction('preserve_zfs_boot_services')
 assert.ok(bootServices.includes('! -L /etc/modules-load.d/incudal-zfs.conf') && bootServices.includes("grep -Eq '^[[:space:]]*zfs[[:space:]]*$'"), 'existing module-load config must be a regular non-symlink file that loads ZFS')
 assert.ok(bootServices.includes('zfs-import-cache.service zfs-mount.service zfs.target') && bootServices.includes('systemctl enable "$service" >/dev/null 2>&1 || return 1'), 'ZFS boot units must be enabled with failures propagated')
 assert.match(hostInstallScript, /if ! refresh_panel_trust; then\n\s*warn [^\n]*\n\s*elif ! update_incudal_agent_from_config true; then/, 'automatic root script updates must require successful authenticated trust refresh')
+assert.ok(hostInstallScript.indexOf('\n    confirm_install\n') < hostInstallScript.indexOf('\n        if ! refresh_panel_trust; then'), 'automatic trust and Agent updates must follow confirmation')
+assert.ok(hostInstallScript.includes('bash -s -- --host-ready --yes; then'), 'host initialization must install Agent without recursively initializing the host')
+const hostCommandBuilder = hostRoutes.slice(hostRoutes.indexOf('function buildHostInstallCommand('), hostRoutes.indexOf('export default async function hostRoutes'))
+assert.ok(hostCommandBuilder.includes('/api/agent/install.sh') && !hostCommandBuilder.includes('installToken'), 'host commands must use the generic TOKEN-free installer')
+assert.equal((hostRoutes.match(/installScriptUrl: `\$\{panelUrl\}\/api\/agent\/install.sh`/g) ?? []).length, 2, 'host creation and regeneration must include installScriptUrl')
+const prepareHost = hostInstallScript.slice(hostInstallScript.indexOf('    if [[ "$ACTION" == prepare_agent_host ]]'), hostInstallScript.indexOf('    # 如果通过命令行指定了卸载'))
+assert.ok(prepareHost.indexOf('confirm_install') < prepareHost.indexOf('install_deps'), 'standalone host preparation must confirm before installing packages')
+assert.ok(prepareHost.includes('setup_kernel || return 1') && prepareHost.indexOf('confirm_install') < prepareHost.indexOf('setup_kernel') && prepareHost.indexOf('setup_kernel') < prepareHost.indexOf('init_incus'), 'standalone host preparation must apply forwarding and RA settings after confirmation and stop on failure before Incus initialization')
+assert.ok(prepareHost.includes('init_incus || return 1') && !prepareHost.includes('install_incudal_agent'), 'host preparation must initialize networking and storage without recursively installing Agent')
+assert.ok(hostRoutes.includes("'/install.sh/:token', { logLevel: 'silent' }"), 'UUID script downloads must suppress request URL logging')
+assert.ok(hostRoutes.includes("'/cert/:token', { logLevel: 'silent' }"), 'certificate downloads must suppress TOKEN-bearing request URL logging')
+assert.match(shellFunction('install_incudal_agent'), /AGENT_INSTALL_STATUS="安装失败"[\s\S]*return 1/, 'host setup must propagate Agent installation failures')
 const arcFailureHarness = `set -euo pipefail
 ${arcApply.replace('"/etc/modprobe.d/99-zfs-arc.conf"', '"/dev/null"').replace('[[ -d /sys/module/zfs ]]', '[[ -d /dev/null ]]')}
 info() { :; }
