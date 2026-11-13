@@ -1,8 +1,8 @@
 # XPayincus
 
-統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，本次發行目標為 `v1.0.15`；正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準，歷史子專案發行紀錄保留原版本，不代表目前部署版本。
+統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，本次發行目標為 `v1.0.16`；正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準，歷史子專案發行紀錄保留原版本，不代表目前部署版本。
 
-本輪版本同步與驗證範圍見 [v1.0.15 發行目標](RELEASE.md#v1015-發行目標)；記錄儲存池用途更新、監控共用 HTTP client、宿主捷徑與 UI 入口變更，同步產品版本、Compose 標籤、fixture 與現行文件。目前為 v1.0.15 來源準備，本次僅編輯與靜態差異核對，未執行測試或建置。
+本輪版本同步與驗證範圍見 [v1.0.16 發行目標](RELEASE.md#v1016-發行目標)；修正 Agent heartbeat 原始 body hash 驗證，並同步產品版本與 Compose 標籤。測試、建置與發布由 GitHub Actions 執行。
 
 | 邏輯端 | 來源目錄 | 部署方式 |
 | --- | --- | --- |

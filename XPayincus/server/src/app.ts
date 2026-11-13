@@ -13,6 +13,7 @@ import rateLimit from '@fastify/rate-limit'
 import { readFile } from 'fs/promises'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import { Readable } from 'stream'
 
 // 导入数据库
 import { initPrismaDatabase } from './db/init-prisma.js'
@@ -132,6 +133,19 @@ const fastify = Fastify({
   requestTimeout: 125000, // 125秒，比操作超时稍长
   keepAliveTimeout: 125000, // 125秒，保持连接时间
   forceCloseConnections: false
+})
+
+fastify.addHook('preParsing', async (request, _reply, payload) => {
+  if (request.method !== 'POST' || request.url.split('?')[0] !== '/api/agent/heartbeat') {
+    return payload
+  }
+
+  const chunks: Buffer[] = []
+  for await (const chunk of payload) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+  request.rawAgentBody = Buffer.concat(chunks)
+  return Readable.from(request.rawAgentBody)
 })
 
 // 自定义 schema 验证错误处理，返回友好的错误信息

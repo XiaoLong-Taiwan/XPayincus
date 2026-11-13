@@ -5,7 +5,12 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.15**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.16**; GitHub Releases record publication status.
+
+## v1.0.16 Agent Heartbeat Body Hash Fix (Release Target)
+
+- Validate the Agent heartbeat body hash against the original JSON bytes received by the API, avoiding cross-language numeric or Unicode serialization differences after parsing.
+- Preserve normal JSON parsing and leave other API routes unchanged. GitHub Actions runs tests, builds, and publication.
 
 ## v1.0.15 Storage Pools, Monitoring, and Host Entry Points (Release Target)
 

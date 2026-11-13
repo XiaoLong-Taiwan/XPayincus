@@ -958,7 +958,9 @@ async function authenticateAgentRequest(
     return null
   }
 
-  const bodyHash = createAgentBodyHash(request.body ?? {})
+  const bodyHash = request.rawAgentBody
+    ? createHash('sha256').update(request.rawAgentBody).digest('hex')
+    : createAgentBodyHash(request.body ?? {})
   if (bodyHash !== headers.bodyHash.toLowerCase()) {
     reply.code(401).send({ error: 'Agent body hash mismatch', code: 'AGENT_BODY_HASH_MISMATCH' })
     return null

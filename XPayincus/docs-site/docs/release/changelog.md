@@ -5,7 +5,12 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.15**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.16**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.16 Agent heartbeat hash 修正（發行目標）
+
+- API 對 Agent heartbeat 收到的原始 JSON bytes 驗證 body hash，避免解析後重新序列化造成跨語言數字或 Unicode 表示差異。
+- 保留正常 JSON 解析流程，其他 API 路由不受影響。測試、建置與發布由 GitHub Actions 執行。
 
 ## v1.0.15 儲存池、監控與宿主入口（發行目標）
 

@@ -14,6 +14,7 @@ declare module 'fastify' {
   }
 
   interface FastifyRequest {
+    rawAgentBody?: Buffer
     user: {
       id: number
       username: string
