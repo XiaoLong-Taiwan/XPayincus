@@ -3832,22 +3832,29 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     }
 
     try {
-      const client = await getIncusClient(host)
-      
+      const pool = await db.getStoragePool(hostId, poolName)
+      if (!pool) {
+        return reply.code(404).send({ error: '存储池未登记，请先关联已有存储池后再编辑' })
+      }
+
       // 构建更新配置
       const config: Record<string, string> = {}
       if (size) {
         config['size'] = size
       }
 
-      await updateStoragePool(client, poolName, {
-        config: Object.keys(config).length > 0 ? config : undefined,
-        description: description
-      })
+      const descriptionChanged = description !== undefined && description !== (pool.description ?? '')
+      if (size || descriptionChanged) {
+        const client = await getIncusClient(host)
+        await updateStoragePool(client, poolName, {
+          config: Object.keys(config).length > 0 ? config : undefined,
+          description: description
+        })
+      }
 
       // 更新数据库中的描述和用途（如果有）
       if (description !== undefined || purpose !== undefined) {
-        const updateData: any = {}
+        const updateData: db.UpdateStoragePoolData = {}
         if (description !== undefined) updateData.description = description
         if (purpose !== undefined) updateData.purpose = purpose
         await db.updateStoragePool(hostId, poolName, updateData)

@@ -1,5 +1,4 @@
-import axios from 'axios'
-import { buildApiUrl } from '@/utils/api-url'
+import { http } from '@/api'
 
 export interface MonitoringStats {
   min: number
@@ -62,15 +61,11 @@ export interface ComponentEvents extends MonitoringResponse {
 }
 
 async function get<T>(hostId: number, view: string, params: MonitoringQuery & { name?: string; metric?: InstanceMetric; orderBy?: 'avg' | 'max'; top?: number }, signal?: AbortSignal): Promise<T> {
-  const token = localStorage.getItem('token')
-  const response = await axios.get<T>(buildApiUrl(`/agent/hosts/${hostId}/monitoring/${view}`), {
+  return http.get<T, T>(`/agent/hosts/${hostId}/monitoring/${view}`, {
     params,
     signal,
-    withCredentials: true,
-    timeout: 30000,
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
+    timeout: 30000
   })
-  return response.data
 }
 
 export const agentMonitoringApi = {

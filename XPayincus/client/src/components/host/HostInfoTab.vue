@@ -93,13 +93,7 @@ const agentStatusError = ref('')
 const agentHistoryLoading = ref(false)
 const agentHistorySamples = ref<Array<Record<string, unknown>>>([])
 const maintenancePlans = ref<Array<{ id: number; targetHostId: number; status: string; instanceIds: number[]; results: Array<Record<string, unknown>>; error: string | null; createdAt: string }>>([])
-const maintenanceTargets = ref<Array<{ id: number; name: string }>>([])
-const maintenanceInstances = ref<Array<{ id: number; name: string }>>([])
-const maintenanceTargetId = ref<number | null>(null)
-const maintenanceInstanceIds = ref<number[]>([])
-const maintenancePreflight = ref<{ cpu?: number; memory?: number; disk?: number } | null>(null)
 const maintenanceBusy = ref(false)
-watch([maintenanceTargetId, maintenanceInstanceIds], () => { maintenancePreflight.value = null })
 let agentStatusRefreshTimer: ReturnType<typeof setInterval> | null = null
 let agentStatusRefreshIntervalMs = 0
 
@@ -178,44 +172,10 @@ async function loadAgentHistory() {
 
 async function loadMaintenanceData() {
   try {
-    const [plans, targets, instances] = await Promise.all([
-      api.hosts.getMaintenancePlans(props.host.id),
-      api.hosts.list({ page: 1, pageSize: 100 }),
-      api.instances.list({ hostId: props.host.id, pageSize: 100 })
-    ])
+    const plans = await api.hosts.getMaintenancePlans(props.host.id)
     maintenancePlans.value = plans.plans
-    maintenanceTargets.value = targets.hosts.filter(host => host.id !== props.host.id).map(host => ({ id: host.id, name: host.name }))
-    maintenanceInstances.value = ((instances as any).instances || instances.items || []).map((instance: any) => ({ id: instance.id, name: instance.name }))
   } catch (error: any) {
     toast.error(error?.message || t('admin.hosts.maintenanceLoadFailed'))
-  }
-}
-
-async function preflightMaintenance() {
-  if (!maintenanceTargetId.value || maintenanceInstanceIds.value.length === 0) return
-  maintenanceBusy.value = true
-  maintenancePreflight.value = null
-  try {
-    const result = await api.hosts.createMaintenancePlan(props.host.id, { targetHostId: maintenanceTargetId.value, instanceIds: maintenanceInstanceIds.value, dryRun: true })
-    if (result.passed) maintenancePreflight.value = { cpu: result.cpu, memory: result.memory, disk: result.disk }
-  } catch (error: any) {
-    toast.error(error?.message || t('admin.hosts.maintenancePreflightFailed'))
-  } finally {
-    maintenanceBusy.value = false
-  }
-}
-
-async function createMaintenancePlan() {
-  if (!maintenancePreflight.value || !maintenanceTargetId.value || !window.confirm(t('admin.hosts.maintenanceCreateConfirm'))) return
-  maintenanceBusy.value = true
-  try {
-    await api.hosts.createMaintenancePlan(props.host.id, { targetHostId: maintenanceTargetId.value, instanceIds: maintenanceInstanceIds.value })
-    maintenancePreflight.value = null
-    await loadMaintenanceData()
-  } catch (error: any) {
-    toast.error(error?.message || t('admin.hosts.maintenanceCreateFailed'))
-  } finally {
-    maintenanceBusy.value = false
   }
 }
 
@@ -1031,20 +991,6 @@ const xAxisLabels = computed(() => {
 
   <div class="card p-5 mt-4">
     <h2 class="mb-4 text-sm font-semibold text-themed">{{ t('admin.hosts.maintenanceTitle') }}</h2>
-    <div class="grid gap-3 md:grid-cols-3">
-      <select v-model="maintenanceTargetId" class="input" :disabled="maintenanceBusy">
-        <option :value="null">{{ t('admin.hosts.maintenanceTarget') }}</option>
-        <option v-for="target in maintenanceTargets" :key="target.id" :value="target.id">{{ target.name }} (#{{ target.id }})</option>
-      </select>
-      <select v-model="maintenanceInstanceIds" class="input md:col-span-2" multiple :disabled="maintenanceBusy">
-        <option v-for="instance in maintenanceInstances" :key="instance.id" :value="instance.id">{{ instance.name }} (#{{ instance.id }})</option>
-      </select>
-    </div>
-    <div class="mt-3 flex flex-wrap items-center gap-2">
-      <button class="btn btn-secondary" :disabled="maintenanceBusy || !maintenanceTargetId || !maintenanceInstanceIds.length" @click="preflightMaintenance">{{ t('admin.hosts.maintenancePreflight') }}</button>
-      <button v-if="maintenancePreflight" class="btn btn-primary" :disabled="maintenanceBusy" @click="createMaintenancePlan">{{ t('admin.hosts.maintenanceCreate') }}</button>
-      <span v-if="maintenancePreflight" class="text-xs text-themed-muted">CPU {{ maintenancePreflight.cpu }} · RAM {{ maintenancePreflight.memory }} · Disk {{ maintenancePreflight.disk }}</span>
-    </div>
     <div class="mt-5 space-y-3">
       <article v-for="plan in maintenancePlans" :key="plan.id" class="border-t border-themed pt-3">
         <div class="flex flex-wrap items-start justify-between gap-3">

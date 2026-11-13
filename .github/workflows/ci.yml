@@ -36,6 +36,7 @@ jobs:
           python3 scripts/test-manage-menu.py
           python3 scripts/test-dashboard-menu.py
           python3 scripts/test-agent-installer.py
+          python3 scripts/test-host-shortcuts.py
           python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
   panel:
     needs: version
@@ -61,6 +62,7 @@ jobs:
       - run: pnpm rebuild esbuild
       - run: pnpm --filter server exec prisma generate
       - run: pnpm test
+      - run: pnpm --filter server test:storage-pool-update
       - run: pnpm --filter client test:host-install-ui-guards
       - run: pnpm --filter server test:panel-backup-guards
       - run: pnpm --filter server test:update-manifest-contract

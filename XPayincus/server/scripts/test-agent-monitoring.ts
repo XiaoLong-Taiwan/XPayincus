@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
 import ts from 'typescript'
+import { testAgentMonitoringClient } from './test-agent-monitoring-client.js'
 import { aggregateMonitoring, aggregateMonitoringCounters, ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceName, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring } from '../src/services/agent-monitoring.js'
 
 const directory = mkdtempSync(join(tmpdir(), 'agent-monitoring-'))
@@ -21,6 +22,7 @@ const sample = (id: string, at: number, value: number) => ({
 const envelope = { schemaVersion: 2, samples: [sample('a', now - 120000, 10), sample('b', now - 60000, 30)] }
 const app = Fastify()
 try {
+  await testAgentMonitoringClient()
   assert.deepEqual(ingestAgentMonitoring('fixture', envelope, now), ['a'.repeat(32), 'b'.repeat(32)])
   assert.deepEqual(ingestAgentMonitoring('fixture', envelope, now), ['a'.repeat(32), 'b'.repeat(32)])
   const history = readAgentMonitoring('fixture', range, now)

@@ -267,7 +267,7 @@ function buildTicketFormData(
 
 
 // 创建 axios 实例
-const http: AxiosInstance = axios.create({
+export const http: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
   timeout: TIMEOUT.DEFAULT,

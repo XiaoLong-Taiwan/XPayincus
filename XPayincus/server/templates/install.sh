@@ -2596,31 +2596,58 @@ manage_incudal_agent() {
 }
 
 # ========================== 安装结果 ==========================
+install_shortcuts() (
+    set -euo pipefail
+    umask 077
+    local shortcut_tmp
+    shortcut_tmp=$(mktemp /usr/local/bin/.incudal.XXXXXXXX)
+    trap 'rm -f -- "$shortcut_tmp"' EXIT
+    # 快捷入口只保存无凭据的下载包装器，绝不复制面板渲染后含 token/secret 的本脚本。
+    cat > "$shortcut_tmp" <<'SHORTCUT'
+#!/bin/bash
+set +x
+set -euo pipefail
+umask 077
+[[ "$EUID" -eq 0 ]] || { printf '%s\n' '請以 root 執行 incudal / k。' >&2; exit 1; }
+SCRIPT_CACHE="/root/incudal.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/XPayincus/server/templates/install.sh"
+SCRIPT_TMP=$(mktemp "${SCRIPT_CACHE}.XXXXXXXX")
+trap 'rm -f -- "$SCRIPT_TMP"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo "正在获取最新的节点管理脚本..."
+if curl -q -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 --retry 2 -o "$SCRIPT_TMP" "$SCRIPT_URL"; then
+    [[ -s "$SCRIPT_TMP" ]] && head -n 1 "$SCRIPT_TMP" | grep -qx '#!/usr/bin/env bash' && bash -n "$SCRIPT_TMP" || {
+        printf '%s\n' "下載內容為空或不是有效的節點 Bash 腳本：$SCRIPT_URL；既有快取已保留。" >&2
+        exit 1
+    }
+    chmod 0700 "$SCRIPT_TMP"
+    mv -fT -- "$SCRIPT_TMP" "$SCRIPT_CACHE"
+    trap - EXIT
+    exec bash "$SCRIPT_CACHE" "$@"
+else
+    status=$?
+    printf '%s\n' "下載失敗（curl exit=$status）：$SCRIPT_URL" '請檢查 HTTP 狀態、DNS、TLS 與代理；純 IPv6 主機另請確認 GitHub 的 IPv4 出口／WARP。既有快取已保留，不會自動執行。' >&2
+    exit 1
+fi
+SHORTCUT
+    chown root:root "$shortcut_tmp"
+    chmod 0755 "$shortcut_tmp"
+    mv -fT -- "$shortcut_tmp" /usr/local/bin/incudal
+    if [[ ! -e /usr/local/bin/k && ! -L /usr/local/bin/k ]]; then
+        ln -s incudal /usr/local/bin/k
+    elif [[ ! -L /usr/local/bin/k || "$(readlink /usr/local/bin/k)" != incudal && "$(readlink /usr/local/bin/k)" != /usr/local/bin/incudal ]]; then
+        warn '已保留既有 /usr/local/bin/k；請使用 incudal。'
+    fi
+)
+
 show_result() {
     local mode_label=""
     case "$MODE" in
         nat)      mode_label="NAT（仅 IPv4）" ;;
         nat_ipv6) mode_label="NAT + IPv6" ;;
     esac
-
-    # 快捷入口只保存无凭据的下载包装器，绝不复制面板渲染后含 token/secret 的本脚本。
-    cat > /usr/local/bin/incudal <<'SHORTCUT'
-#!/bin/bash
-# Incudal 节点管理快捷入口 - 自动下载最新版本
-SCRIPT_CACHE="/root/incudal.sh"
-SCRIPT_URL="https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/server/templates/install.sh"
-echo "正在获取最新的节点管理脚本..."
-if curl -sSfL "$SCRIPT_URL" -o "$SCRIPT_CACHE" 2>/dev/null; then
-    chmod 0700 "$SCRIPT_CACHE"
-    exec bash "$SCRIPT_CACHE" "$@"
-else
-    echo "下载失败。如果本机是纯 IPv6 环境，请确保 WARP 已开启后重试。"
-    echo "或手动从面板获取安装脚本保存到 /root/incudal.sh"
-    exit 1
-fi
-SHORTCUT
-    chown root:root /usr/local/bin/incudal
-    chmod 0755 /usr/local/bin/incudal
+    install_shortcuts
 
     printf '\n'
     divider
@@ -3802,6 +3829,7 @@ main() {
             --yes) INSTALL_ASSUME_YES=true; shift ;;
             --prepare-agent-host) ACTION="prepare_agent_host"; shift ;;
             --refresh-agent-trust) ACTION="refresh_agent_trust"; shift ;;
+            --install-shortcuts) ACTION="install_shortcuts"; shift ;;
             --mode)
                 if [[ $# -lt 2 ]]; then error "--mode 缺少参数值"; exit 1; fi
                 MODE="$2"; shift 2 ;;
@@ -3887,6 +3915,7 @@ main() {
                 echo "储存：INCUS_STORAGE_POOL、INCUS_STORAGE_DRIVER=auto|zfs|dir、INCUS_STORAGE_SIZE=10GiB"
                 echo "自动优先沿用 profile root、现有 default、名称排序首池；仅无池时新建，不清理磁盘"
                 echo "  --agent                 打开 Agent 安装 / 更新菜单"
+                echo "  --install-shortcuts     僅修復 incudal / k 快捷入口，保留既有其他 k 命令"
                 echo "  --help, -h              显示帮助信息"
                 echo ""
                 echo "RFW 防火墙独立可控安装（不依赖节点安装）:"
@@ -3962,6 +3991,11 @@ main() {
     if [[ "$UNINSTALL_DELETE_DATA" == "true" && "$ACTION" != "uninstall" ]]; then
         error "--delete-data 必须配合 --uninstall"
         exit 1
+    fi
+
+    if [[ "$ACTION" == install_shortcuts ]]; then
+        install_shortcuts
+        return $?
     fi
 
     # 检测系统环境（只读探测；所有 CLI 入参已在此之前校验完毕）

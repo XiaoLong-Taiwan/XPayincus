@@ -5,9 +5,18 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.14**; v1.0.13 has been officially released.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.15**; GitHub Releases record publication status.
 
-## v1.0.14 Installation Details and Flow Fixes (Release Target)
+## v1.0.15 Storage Pools, Monitoring, and Host Entry Points (Release Target)
+
+- Persist storage pool `purpose` updates after checking registration and association. Purpose-only changes do not call Incus; capacity or description changes update Incus.
+- Use the shared HTTP client for Agent monitoring, retaining common authentication, refresh, and error handling, query parameters, cancellation signals, and the 30-second timeout.
+- Correct the unified repository path for `incudal`/`k` shortcuts. Atomically replace the cache only after successful download and Bash validation; failures preserve but do not execute the cache. Preserve unrelated existing `k` commands and provide `--install-shortcuts` for repair.
+- Remove maintenance preflight/creation controls and related target/instance requests from host details, retaining existing plans and follow-up actions.
+- Synchronize product versions, Compose tags, fixtures, and current documentation, retaining third-party and historical versions, 30 assets, and minimum updater `v0.0.3`.
+- This cycle uses editing and static inspection only, without tests, type checks, builds, commits, or publication; remote Releases were not rechecked. Full details are in `docs-site/release-notes/v1.0.15.md`.
+
+## v1.0.14 Installation Details and Flow Fixes (Historical Preparation)
 
 - Display the installation command, panel address, and TOKEN separately with independent copy actions, success/failure feedback, and Agent TOKEN expiration. Commands do not embed the TOKEN.
 - Clear frontend installation details before reloading, on closing, host changes, deactivation, and unmount; ignore stale responses. This does not revoke issued TOKENs or clear the clipboard.
@@ -46,7 +55,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances from released `v1.0.13` to `v1.0.14`.
+- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.14` to `v1.0.15`, without implying that the preceding version was published.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 

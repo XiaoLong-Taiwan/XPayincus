@@ -258,10 +258,11 @@ export async function getStoragePool(hostId: number, name: string) {
 export interface UpdateStoragePoolData {
   description?: string
   config?: Record<string, string>
+  purpose?: StoragePurpose
 }
 
 export async function updateStoragePool(hostId: number, name: string, data: UpdateStoragePoolData) {
-  const updateData: Record<string, unknown> = {}
+  const updateData: Prisma.StoragePoolUpdateManyMutationInput = {}
   
   if (data.description !== undefined) {
     updateData.description = data.description
@@ -269,12 +270,19 @@ export async function updateStoragePool(hostId: number, name: string, data: Upda
   if (data.config !== undefined) {
     updateData.config = data.config
   }
+  if (data.purpose !== undefined) {
+    updateData.purpose = data.purpose
+  }
 
-  return prisma.storagePool.updateMany({
+  const result = await prisma.storagePool.updateMany({
     where: {
       hostId,
       name
     },
     data: updateData
   })
+  if (result.count === 0) {
+    throw new Error('存储池未登记或关联已失效，请先关联已有存储池后再编辑')
+  }
+  return result
 }

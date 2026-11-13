@@ -1,8 +1,8 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.14`（v1.0.13 已正式發布，發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.15`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
 
-本輪同步 v1.0.14 產品版本、Compose 標籤、fixture 與現行文件，並記錄安裝指令／面板地址／TOKEN 分欄、TOKEN 狀態清理及安裝流程修正，詳見 [v1.0.14 發行目標](../RELEASE.md#v1014-發行目標)。跨版本升級仍須交付完整 migration。本次僅編輯與靜態核對，未執行測試、型別檢查或建置，真機驗收待後續確認。
+本輪同步 v1.0.15 產品版本、Compose 標籤、fixture 與現行文件，並記錄儲存池用途更新、監控共用 HTTP client、宿主捷徑與 UI 入口變更，詳見 [v1.0.15 發行目標](../RELEASE.md#v1015-發行目標)。跨版本升級仍須交付完整 migration。本次僅編輯與靜態核對，未執行測試、型別檢查或建置，真機驗收待後續確認。
 
 ## 目錄與能力
 
