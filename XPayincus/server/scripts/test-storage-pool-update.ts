@@ -49,6 +49,7 @@ assert.deepEqual(rows[0]!.config, { size: '20GiB' })
 assert.equal(rows[0]!.purpose, 'instance_storage')
 assert.equal(rows[1]!.description, 'other')
 await assert.rejects(storage.updateStoragePool(3, 'shared', { purpose: 'instance_data' }), /先关联/)
+rows[0]!.description = 'original'
 
 const routeSource = readFileSync(new URL('../src/routes/hosts.ts', import.meta.url), 'utf8')
 const start = routeSource.indexOf('  fastify.patch<{', routeSource.indexOf('// 修改存储池配置'))
