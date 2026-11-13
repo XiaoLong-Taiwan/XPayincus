@@ -356,8 +356,12 @@ class AgentInstallerTests(unittest.TestCase):
                     break
                 status = None
             if status is None:
-                child, status = os.waitpid(pid, os.WNOHANG)
-                if not child:
+                while time.monotonic() < deadline:
+                    child, status = os.waitpid(pid, os.WNOHANG)
+                    if child:
+                        break
+                    time.sleep(0.05)
+                if status is None:
                     self.fail('TTY menu did not exit')
             self.assertEqual(os.waitstatus_to_exitcode(status), 0, output.decode(errors='replace'))
         finally:
