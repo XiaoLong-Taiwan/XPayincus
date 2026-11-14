@@ -84,6 +84,17 @@ assert.ok(
 )
 
 assert.ok(
+  hostInstallScript.includes('trust_fail()') &&
+    hostInstallScript.includes('面板凭证信任刷新失败：') &&
+    hostInstallScript.includes('无法取得面板证书（本机需能访问面板 HTTPS，且 Agent 认证有效）') &&
+    hostInstallScript.includes('无法把面板证书写入 Incus 信任库') &&
+    hostInstallScript.includes('面板无法连回本机 Incus API') &&
+    hostInstallScript.includes('if not hmac.compare_digest(proof, expected):') &&
+    !hostInstallScript.includes('    except Exception:\n        sys.exit(1)'),
+  'host install script must report which authenticated trust refresh stage failed instead of a silent exit'
+)
+
+assert.ok(
   caddyInstallScript.includes('auto_https disable_redirects') &&
     caddyInstallScript.indexOf('auto_https disable_redirects') > caddyInstallScript.indexOf('admin localhost:2019') &&
     caddyInstallScript.indexOf('auto_https disable_redirects') < caddyInstallScript.indexOf(':${CADDY_PORT} {'),

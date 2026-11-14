@@ -5,7 +5,13 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.16**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.17**; GitHub Releases record publication status.
+
+## v1.0.17 Trust Refresh Diagnostics (Release Target)
+
+- Report trust refresh failures by stage, distinguish an installed Agent from incomplete trust, and provide the retry command.
+- Report only HTTP status codes and fixed API log codes, without secrets, raw HTTP content, or exception text. Preserve HMAC verification and remove old trust only after successful verification.
+- Synchronize versions and Compose tags, retaining 30 assets and minimum updater `v0.0.3`. GitHub Actions runs tests and builds; no production deployment is performed.
 
 ## v1.0.16 Agent Heartbeat Body Hash Fix (Release Target)
 

@@ -250,6 +250,11 @@ assert.ok(buildCommand({ panelUrl: 'https://panel.example.org', binaryUrl: 'http
 assert.equal((agentRouteSource.match(/\n      panelUrl,\n      agent:/g) ?? []).length, 2, 'both Agent install responses must include panelUrl')
 assert.ok(installScriptSource.indexOf('\nconfirm_plan\n') < installScriptSource.indexOf('\npreflight_environment\n'), 'summary confirmation must precede host mutations')
 assert.ok(installScriptSource.includes('--prepare-agent-host') && installScriptSource.includes('--refresh-agent-trust'), 'ait TOKEN flow must initialize the host and authenticate Incus trust')
+assert.ok(
+  installScriptSource.includes('Agent 本体已安装并启动，但面板 Incus 信任刷新未完成') &&
+    installScriptSource.includes('修复后重试：incudal --refresh-agent-trust'),
+  'failed authenticated trust refresh must state that the Agent is already installed and how to retry it'
+)
 assert.ok(installScriptSource.includes('api/hosts/install.sh/%s') && installScriptSource.includes('unset INCUDAL_AGENT_INSTALL_TOKEN'), 'UUID must delegate to host initialization without leaking TOKEN into nested Agent install')
 const pythonBootstrap = installScriptSource.indexOf('apt-get install -y -qq python3')
 assert.ok(pythonBootstrap > installScriptSource.indexOf('\nconfirm_plan\n') && pythonBootstrap < installScriptSource.indexOf('MANIFEST_SELECTION="$(select_manifest)"'), 'missing Python must bootstrap after confirmation and before manifest validation')

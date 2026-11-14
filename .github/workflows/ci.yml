@@ -36,6 +36,7 @@ jobs:
           python3 scripts/test-manage-menu.py
           python3 scripts/test-dashboard-menu.py
           python3 scripts/test-agent-installer.py
+          python3 scripts/test-panel-trust-diagnostics.py
           python3 scripts/test-host-shortcuts.py
           python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
   panel:

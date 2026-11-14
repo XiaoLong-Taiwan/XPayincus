@@ -2163,15 +2163,18 @@ fetch_authenticated_panel_certificate() {
     PANEL_TRUST_ID="$(read_agent_config_value agent_id)" \
     PANEL_TRUST_SECRET="$(read_agent_config_value agent_secret)" \
     python3 - "$phase" "$target" <<'PY'
-import hashlib, hmac, json, os, re, secrets, sys, time, urllib.request
+import hashlib, hmac, json, os, re, secrets, sys, time, urllib.error, urllib.request
 phase, target = sys.argv[1:]
+def bail(message):
+    sys.stderr.write('  [错误] panel-trust [%s] %s\n' % (phase, message))
+    sys.exit(1)
 origin = os.environ['PANEL_TRUST_URL'].rstrip('/')
 agent_id = os.environ['PANEL_TRUST_ID']
 secret = os.environ['PANEL_TRUST_SECRET'].encode()
 if not re.fullmatch(r'https://(?:[A-Za-z0-9.-]+|\[[A-Fa-f0-9:]+\])(?::[0-9]{1,5})?', origin):
-    sys.exit(1)
+    bail('面板地址无效或不是 HTTPS')
 if not re.fullmatch(r'agt_[A-Za-z0-9_-]{24,64}', agent_id) or not re.fullmatch(rb'ias_[A-Za-z0-9_-]{32,96}', secret):
-    sys.exit(1)
+    bail('Agent ID 或密钥格式无效，无法完成面板认证')
 path = '/api/agent/panel-trust/' + phase
 nonce = secrets.token_hex(24)
 timestamp = str(time.time_ns() // 1000000)
@@ -2181,7 +2184,7 @@ if phase == 'verify':
         with open('/var/lib/incus/server.crt') as source:
             body = json.dumps({'incus': {'serverCertificate': source.read(16385)}}, sort_keys=True, separators=(',', ':')).encode()
     except OSError:
-        sys.exit(1)
+        bail('无法读取 /var/lib/incus/server.crt')
 digest = hashlib.sha256(body).hexdigest()
 signature = hmac.new(secret, '\n'.join(['POST', path, timestamp, nonce, digest]).encode(), hashlib.sha256).hexdigest()
 request = urllib.request.Request(origin + path, data=body, headers={
@@ -2195,15 +2198,22 @@ try:
     with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
         payload = response.read(65537)
     if len(payload) > 65536:
-        sys.exit(1)
-    proof, certificate = payload.split(b'\n', 1)
+        bail('面板响应超过预期长度')
+    try:
+        proof, certificate = payload.split(b'\n', 1)
+    except ValueError:
+        bail('面板响应格式无效（可能被 CDN 或 WAF 改写）')
     expected = hmac.new(secret, ('panel-trust\n' + phase + '\n' + nonce + '\n' + hashlib.sha256(certificate).hexdigest()).encode(), hashlib.sha256).hexdigest().encode()
     if not hmac.compare_digest(proof, expected):
-        sys.exit(1)
+        bail('面板响应签名校验失败，无法确认证书来源')
     with open(target, 'wb') as output:
         output.write(certificate)
+except urllib.error.HTTPError as error:
+    bail('面板拒绝请求 HTTP %d' % error.code)
+except urllib.error.URLError:
+    bail('无法连接面板 HTTPS，请检查网络、DNS 与 TLS 证书')
 except Exception:
-    sys.exit(1)
+    bail('处理面板响应失败，请检查响应格式与本机文件权限')
 PY
 }
 
@@ -2222,21 +2232,35 @@ preserve_zfs_boot_services() {
     done
 }
 
+trust_fail() {
+    error "面板凭证信任刷新失败：$1"
+    return 0
+}
+
 refresh_panel_trust() {
-    command -v python3 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1 && command -v incus >/dev/null 2>&1 || return 1
+    if ! command -v python3 >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || ! command -v incus >/dev/null 2>&1; then
+        trust_fail '缺少 python3、openssl 或 incus 命令'
+        return 1
+    fi
     local work_dir fingerprint old_fingerprints verified_fingerprint
-    work_dir=$(mktemp -d /tmp/incudal-panel-trust.XXXXXX) || return 1
-    if ! fetch_authenticated_panel_certificate certificate "$work_dir/cert" ||
-       ! openssl x509 -in "$work_dir/cert" -noout -checkend 0 >/dev/null 2>&1; then
+    work_dir=$(mktemp -d /tmp/incudal-panel-trust.XXXXXX) || { trust_fail '无法创建临时目录 /tmp'; return 1; }
+    if ! fetch_authenticated_panel_certificate certificate "$work_dir/cert"; then
         rm -rf "$work_dir"
+        trust_fail '无法取得面板证书（本机需能访问面板 HTTPS，且 Agent 认证有效）'
         return 1
     fi
-    fingerprint=$(openssl x509 -in "$work_dir/cert" -outform DER | sha256sum | awk '{print $1}') || { rm -rf "$work_dir"; return 1; }
-    if ! incus config trust list --format json > "$work_dir/trust"; then
+    if ! openssl x509 -in "$work_dir/cert" -noout -checkend 0 >/dev/null 2>&1; then
         rm -rf "$work_dir"
+        trust_fail '面板证书已过期或内容无效'
         return 1
     fi
-    if ! old_fingerprints=$(python3 - "$work_dir/trust" <<'PY'
+    fingerprint=$(openssl x509 -in "$work_dir/cert" -outform DER | sha256sum | awk '{print $1}') || { rm -rf "$work_dir"; trust_fail '无法计算面板证书指纹'; return 1; }
+    if ! incus config trust list --format json > "$work_dir/trust" 2>/dev/null; then
+        rm -rf "$work_dir"
+        trust_fail '无法读取 Incus 信任列表（Incus 服务或 socket 异常）'
+        return 1
+    fi
+    if ! old_fingerprints=$(python3 - "$work_dir/trust" 2>/dev/null <<'PY'
 import json, re, sys
 with open(sys.argv[1]) as source:
     entries = json.load(source)
@@ -2248,28 +2272,33 @@ for entry in entries:
 PY
     ); then
         rm -rf "$work_dir"
+        trust_fail '现有面板信任项格式不符合预期（restricted 或非 client 类型）'
         return 1
     fi
     if ! incus config trust show "$fingerprint" >/dev/null 2>&1; then
         if ! incus config trust add-certificate "$work_dir/cert" --name "panel-${fingerprint}" >/dev/null 2>&1; then
             rm -rf "$work_dir"
+            trust_fail '无法把面板证书写入 Incus 信任库'
             return 1
         fi
     fi
     if ! fetch_authenticated_panel_certificate verify "$work_dir/verified"; then
         rm -rf "$work_dir"
+        trust_fail '面板无法连回本机 Incus API 或信任验证未通过；请检查监听地址、防火墙、安全组及面板证书'
         return 1
     fi
-    verified_fingerprint=$(openssl x509 -in "$work_dir/verified" -outform DER | sha256sum | awk '{print $1}') || { rm -rf "$work_dir"; return 1; }
+    verified_fingerprint=$(openssl x509 -in "$work_dir/verified" -outform DER | sha256sum | awk '{print $1}') || { rm -rf "$work_dir"; trust_fail '无法计算面板证书指纹'; return 1; }
     if [[ "$fingerprint" != "$verified_fingerprint" ]]; then
         rm -rf "$work_dir"
+        trust_fail '两次取得的面板证书指纹不一致'
         return 1
     fi
     local old
     while IFS= read -r old; do
         [[ -n "$old" && "$old" != "$fingerprint" ]] || continue
-        if ! incus config trust remove "$old"; then
+        if ! incus config trust remove "$old" >/dev/null 2>&1; then
             rm -rf "$work_dir"
+            trust_fail "无法移除旧的面板信任项 ${old}"
             return 1
         fi
     done <<< "$old_fingerprints"

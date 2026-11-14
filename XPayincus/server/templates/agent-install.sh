@@ -790,7 +790,13 @@ fi
 
 rm -f "${BACKUP_BIN}" "${BACKUP_CONFIG}" "${BACKUP_SERVICE}"
 if [ -n "${HOST_SCRIPT}" ]; then
-  INCUDAL_AGENT_CONFIG_FILE="${CONFIG_FILE}" bash "${HOST_SCRIPT}" --refresh-agent-trust || fail 'Agent installed; authenticated Incus trust refresh failed'
+  INCUDAL_AGENT_CONFIG_FILE="${CONFIG_FILE}" bash "${HOST_SCRIPT}" --refresh-agent-trust || {
+    printf '  %s\n' 'Agent 本体已安装并启动，但面板 Incus 信任刷新未完成，面板暂时无法管理本机。' >&2
+    printf '  %s\n' \
+      '排查：本机需能访问面板 HTTPS，面板需能访问本机 Incus API 端口。' \
+      '修复后重试：incudal --refresh-agent-trust' >&2
+    fail 'Agent installed; authenticated Incus trust refresh failed'
+  }
 fi
 systemctl status "${SERVICE_NAME}" --no-pager --lines=20 || true
 

@@ -5,7 +5,13 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.16**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.17**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.17 信任刷新診斷（發行目標）
+
+- 依階段提示信任刷新失敗原因與重試入口；Agent 已啟動但信任未完成時明確顯示狀態。
+- HTTP 失敗只顯示狀態碼，API 日誌使用固定代碼，避免輸出密鑰、原始 HTTP 內容或例外文字。保留 HMAC 驗證及驗證成功後才移除舊信任。
+- 同步版本與 Compose 標籤，維持 30 件資產及最低 updater `v0.0.3`。測試與建置由 GitHub Actions 執行，不部署生產；詳見 `docs-site/release-notes/v1.0.17.md`。
 
 ## v1.0.16 Agent heartbeat hash 修正（發行目標）
 

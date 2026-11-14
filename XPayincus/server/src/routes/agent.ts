@@ -1057,6 +1057,9 @@ export default async function agentRoutes(fastify: FastifyInstance) {
           if (response.statusCode !== 200 || data.type !== 'sync' || data.status_code !== 200) {
             return reply.code(409).send({ error: 'Panel certificate is not trusted by host' })
           }
+        } catch {
+          request.log.warn({ code: 'PANEL_TRUST_HOST_UNREACHABLE', hostId: agent.hostId }, 'Panel trust verification could not reach the host Incus API')
+          return reply.code(502).send({ error: 'Panel cannot reach the host Incus API for trust verification', code: 'PANEL_TRUST_HOST_UNREACHABLE' })
         } finally {
           await dispatcher.close()
         }
@@ -1067,6 +1070,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         .update(`panel-trust\n${request.params.phase}\n${headers.nonce}\n${digest}`).digest('hex')
       return reply.header('Cache-Control', 'no-store').type('text/plain').send(`${proof}\n${pair.cert.toString('utf8')}`)
     } catch {
+      request.log.error({ code: 'PANEL_TRUST_OPERATION_FAILED', phase: request.params.phase, hostId: agent.hostId }, 'Panel trust operation failed')
       return reply.code(503).send({ error: 'Panel trust operation failed' })
     }
   })
