@@ -1,8 +1,8 @@
 # XPayincus
 
-統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，本次發行目標為 `v1.0.17`；正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準，歷史子專案發行紀錄保留原版本，不代表目前部署版本。
+統一管理 Dashboard、Server API、Agent、RFW 與 ZFS 的單一倉庫。根 [VERSION](VERSION) 是整體發行版本，本次發行目標為 `v1.0.18`；正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準，歷史子專案發行紀錄保留原版本，不代表目前部署版本。
 
-本輪版本同步與驗證範圍見 [v1.0.17 發行目標](RELEASE.md#v1017-發行目標)；新增安全的面板信任刷新分階段診斷與重試提示，並同步產品版本與 Compose 標籤。測試、建置與發布由 GitHub Actions 執行。
+本輪同步產品版本、Compose 標籤與現行文件至 v1.0.18，現行最低 updater 記載為 v1.0.3；範圍見 [v1.0.18 發行目標](RELEASE.md#v1018-發行目標)。本次僅編輯與靜態核對，未執行測試、建置或提交；後續驗證與發布由 GitHub Actions 執行。
 
 | 邏輯端 | 來源目錄 | 部署方式 |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ v1.0.2 新增 [舊宿主匯出與首次匯入指南](XPayincus/server/scripts/LE
 
 根 release workflow 在與根 `VERSION` 相符的 `v*` tag 推送後，先等待統一 CI 與版本檢查，再呼叫可重用的 `.github/workflows/docker.yml`，使用原生 amd64／arm64 runner 發布 API 與 web 多架構映像。彙整與 GitHub Release 發布均等待映像成功，再逐一附加完整 30 件資產；手動執行 release workflow 須選 `main`，會發布映像與 Actions artifacts，但不建立 GitHub Release。Release 發布不會自動部署或執行正式 OTA。
 
-可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.15`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
+可直接從 Actions 的 **Publish Docker Images** 選 `main` 手動執行，依根 `VERSION` 發布 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:v1.0.18`，不等待完整 release 建置，也不建立 Git tag。Web 映像使用獨立的 `xpayincus-panel-web` package，Docker target 仍為 `web`，避免歷史 Web 套件的寫入權限限制。版本標籤須與同映像的 `sha-<完整 commit SHA>` index 完全一致；不同 commit 或缺少來源證據時拒絕覆寫。同 commit 重跑保留既有 SHA index。手動發布後若要發行同版本，Git tag 必須指向同一 commit；有任何後續修改須升版本。
 
 版本同步、產物命名、SHA256 manifests、Agent 來源與舊 OTA 格式見 [RELEASE.md](RELEASE.md)。ZFS 僅提供 builder 原始碼包，並非已建置的核心模組。宿主安裝器仍可能使用明示釘選的歷史 RFW／ZFS 資產或 DKMS 回退，統一來源版本不代表二進位已重新發布。
 

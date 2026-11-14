@@ -273,6 +273,18 @@ read_agent_config_value() {
     printf '%s\n' "$value"
 }
 
+has_valid_agent_trust_config() {
+    [[ -r "$AGENT_CONFIG_FILE" && -f "$AGENT_CONFIG_FILE" ]] || return 1
+    local panel_url agent_id agent_secret
+    panel_url=$(read_agent_config_value panel_url) || return 1
+    agent_id=$(read_agent_config_value agent_id) || return 1
+    agent_secret=$(read_agent_config_value agent_secret) || return 1
+    panel_url="${panel_url%/}"
+    [[ "$panel_url" =~ ^https://([A-Za-z0-9.-]+|\[[A-Fa-f0-9:]+\])(:[0-9]{1,5})?$ ]] &&
+        [[ "$agent_id" =~ ^agt_[A-Za-z0-9_-]{24,64}$ ]] &&
+        [[ "$agent_secret" =~ ^ias_[A-Za-z0-9_-]{32,96}$ ]]
+}
+
 get_agent_panel_url() {
     local config_panel_url=""
     config_panel_url=$(read_agent_config_value "panel_url" || true)
@@ -2309,7 +2321,7 @@ PY
 import_cert() {
     step "步骤 [5/5]  导入面板信任证书..."
 
-    if [[ -f "$AGENT_CONFIG_FILE" ]]; then
+    if [[ -z "${TOKEN:-}" && -f "$AGENT_CONFIG_FILE" ]]; then
         refresh_panel_trust
         return $?
     fi
@@ -2342,15 +2354,48 @@ import_cert() {
         exit 1
     fi
 
-    local existing_trust
+    local existing_trust fingerprint trust_details
     if ! existing_trust=$(incus config trust list --format csv -c n); then
         rm -f "$cert_file"
         return 1
     fi
-    if printf '%s\n' "$existing_trust" | grep -Eq '^panel(-[a-f0-9]{64})?$'; then
+    if ! fingerprint=$(openssl x509 -in "$cert_file" -outform DER | sha256sum | awk '{print $1}'); then
         rm -f "$cert_file"
-        refresh_panel_trust
-        return $?
+        return 1
+    fi
+    if [[ ! "$fingerprint" =~ ^[a-f0-9]{64}$ ]]; then
+        rm -f "$cert_file"
+        return 1
+    fi
+    if incus config trust show "$fingerprint" >/dev/null 2>&1; then
+        if ! trust_details=$(incus config trust list --format json) || \
+           ! printf '%s\n' "$trust_details" | python3 -c '
+import json, sys
+try:
+    entries = json.load(sys.stdin)
+    matches = [entry for entry in entries if entry.get("fingerprint") == sys.argv[1]]
+    valid = len(matches) == 1 and matches[0].get("type") == "client" and matches[0].get("restricted") is False
+except (ValueError, TypeError, AttributeError):
+    valid = False
+sys.exit(0 if valid else 1)
+' "$fingerprint"; then
+            rm -f "$cert_file"
+            error "现有面板证书信任必须为 client 类型且 restricted 为 false；无法确认或权限不符，已中止并保留现有信任配置"
+            return 1
+        fi
+        rm -f "$cert_file"
+        log "面板证书指纹已在信任库中，已确认 client 类型且不受限"
+        return 0
+    fi
+    if printf '%s\n' "$existing_trust" | grep -Eq '^panel(-[a-f0-9]{64})?$'; then
+        if ! incus config trust add-certificate "$cert_file" --name "panel-${fingerprint}" >/dev/null 2>&1; then
+            rm -f "$cert_file"
+            error "无法添加面板证书，已保留现有信任配置"
+            return 1
+        fi
+        rm -f "$cert_file"
+        log "面板证书已添加；为避免中断现有连接，保留旧信任，不会自动清理，请在确认新连接正常后另行审查旧信任"
+        return 0
     fi
 
     if ! incus config trust add-certificate "$cert_file" --name panel >/dev/null 2>&1; then
@@ -4088,9 +4133,13 @@ main() {
     # ---- 交互式流程 ----
 
     # 如果 stdin 不是终端且缺少参数，给出提示
+    local use_existing_agent_auth=false
+    if [[ -z "$TOKEN" ]] && has_valid_agent_trust_config; then
+        use_existing_agent_auth=true
+    fi
     if [[ ! -t 0 ]]; then
-        if [[ -z "$MODE" || -z "$TOKEN" ]]; then
-            error "通过管道执行时，必须提供 --mode 和 --token 参数"
+        if [[ -z "$MODE" || ( -z "$TOKEN" && "$use_existing_agent_auth" != true ) ]]; then
+            error "通过管道执行时，必须提供 --mode，以及 --token 或有效的既有 Agent 配置"
             echo -e "  ${DIM}示例: curl -sL <URL> | sudo bash -s -- --mode nat --token <TOKEN>${NC}"
             exit 1
         fi
@@ -4165,7 +4214,9 @@ main() {
     fi
 
     # Token 输入（未通过 CLI 指定或面板注入时交互输入）
-    if [[ -z "$TOKEN" ]]; then
+    if [[ "$use_existing_agent_auth" == true ]]; then
+        info "使用既有 Agent 配置进行面板认证"
+    elif [[ -z "$TOKEN" ]]; then
         read_token
     else
         local token_masked="${TOKEN:0:8}…${TOKEN: -4}"
@@ -4221,7 +4272,7 @@ main() {
     # 安装前确认
     confirm_install
 
-    if [[ -f "$AGENT_CONFIG_FILE" ]]; then
+    if [[ -z "${TOKEN:-}" && -f "$AGENT_CONFIG_FILE" ]]; then
         if ! refresh_panel_trust; then
             warn "面板信任更新失败，保留现有信任；可修复认证后重试"
         elif ! update_incudal_agent_from_config true; then

@@ -5,7 +5,15 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.17**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.18**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.18 版本與文件同步（發行目標）
+
+- 同步產品版本、Agent 預設版本、RFW 自家 crate／Cargo.lock、Compose 標籤及現行 fixture／文件至 v1.0.18。
+- 現行最低 updater 記載為 `v1.0.3`，與 manifest 產生器一致；維持 30 件資產與 16 筆 SHA256SUMS，保留第三方依賴、歷史紀錄及宿主資產釘選。
+- 本次僅編輯與靜態核對，保留既有工作區修改；未執行測試、型別檢查、建置、提交或發布。完整說明位於 `docs-site/release-notes/v1.0.18.md`。
+
+以下舊版條目保留當時記載，不作為現行 updater 版本或發布狀態的依據。
 
 ## v1.0.17 信任刷新診斷（發行目標）
 
@@ -66,7 +74,7 @@
 ## 版本号规则 / Versioning Rule
 
 - 唯一版本來源為統一倉庫根 `VERSION`，格式為 canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]`，依根 `RELEASE.md` 契約維護。
-- Patch 不限個位數；本輪由來源版本 `v1.0.14` 遞增為 `v1.0.15`，不據此推定前版已發布。
+- Patch 不限個位數；本輪由來源版本 `v1.0.17` 遞增為 `v1.0.18`，不據此推定前版已發布。
 - 核心數字與純數字預發行識別碼不得有前導零；版本檔不得有 BOM、空白或額外行，僅允許可選的一個 LF／CRLF 結尾。
 - 歷史 tag、交接與發行說明保留原樣，第三方相依及實際 ZFS 模組版本不跟隨產品升版。
 

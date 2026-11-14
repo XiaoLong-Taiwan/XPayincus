@@ -5,7 +5,15 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.17**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.18**; GitHub Releases record publication status.
+
+## v1.0.18 Version and Documentation Synchronization (Release Target)
+
+- Synchronize product versions, the Agent default, RFW first-party crates and Cargo.lock, Compose tags, and current fixtures and documentation to v1.0.18.
+- Record the current minimum updater as `v1.0.3`, matching the manifest generators. Retain 30 assets, 16 SHA256SUMS entries, third-party dependencies, historical records, and pinned host assets.
+- This cycle uses editing and static inspection only, preserving existing workspace changes without tests, type checks, builds, commits, or publication. Full details are in `docs-site/release-notes/v1.0.18.md`.
+
+Older entries below preserve their original records and do not define the current updater version or publication status.
 
 ## v1.0.17 Trust Refresh Diagnostics (Release Target)
 
@@ -66,7 +74,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.14` to `v1.0.15`, without implying that the preceding version was published.
+- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.17` to `v1.0.18`, without implying that the preceding version was published.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 
