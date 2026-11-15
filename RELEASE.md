@@ -1,8 +1,16 @@
 # 統一發行
 
-根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.18`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
+根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.19`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
 
 GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent 內兩個宿主元件須納入實際來源，不能只有 gitlink 或 submodule。Git 工作區是否已提交、推送及遠端 CI 是否成功，需另以當次紀錄確認，不應把文件中的工作區描述當作即時狀態。來源碼上傳不等於建立 GitHub Release，也不代表已部署。
+
+## v1.0.19 發行目標
+
+- 同步三份 VERSION、四份 package.json、RFW 三個自家 crate 與 Cargo.lock、Go Agent 預設版本、Compose 映像／建置標籤及現行 fixture／文件至 v1.0.19。
+- Compose 未完成更新與恢復提示提供經 shell 安全引用的部署絕對路徑，要求先選 `[0]` 退出數字選單，再於 shell 執行完整命令。前置重試限 `backupComplete=false` 且已修正原因；恢復啟動須有可驗證備份、目前為目標版本，並確認部署檔、secrets 與 schema 相容；保留 journal 與備份，不自動回滾 DB。
+- Agent 一次性 TOKEN bootstrap 在消耗 TOKEN 前檢查面板憑證配對；嚴格解析 Agent 認證、憑證與宿主已安裝狀態。首次節點先安裝捷徑並匯入初始 trust，啟動後顯示「待驗證」；擁有者／管理員在面板驗證連線成功後再執行 `incudal --refresh-agent-trust`。已安裝節點仍使用 HMAC 刷新，認證錯誤不轉成首次安裝成功。
+- 最低 updater 維持 `v1.0.3`，完整發行契約維持 30 件資產與 16 筆 SHA256SUMS；保留歷史、第三方版本、宿主資產釘選及既有功能修改。
+- 本次僅編輯與靜態核對，未執行測試、型別檢查、建置或封裝，未暫存、提交、推送、建立 tag、發布、部署或 OTA，未重新查核遠端 Release。CI 與隔離真機驗收待後續確認；發行稿見 [v1.0.19 發行說明](XPayincus/docs-site/release-notes/v1.0.19.md)。
 
 ## v1.0.18 發行目標
 
@@ -160,9 +168,9 @@ GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent �
 
 ## GHCR 映像發布
 
-`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（本次發行目標 `v1.0.18`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
+`.github/workflows/docker.yml` 同時提供 `workflow_call` 與 `workflow_dispatch`。tag release 由 `release.yml` 在 CI／version 成功後呼叫；直接手動執行 **Publish Docker Images** 時必須選 `main`，立即按該次選定 commit 的根 `VERSION` 發布（本次發行目標 `v1.0.19`），不等待完整 CI／Release 產物，不建立 Git tag 或 GitHub Release。只允許 `xiaolong-taiwan/xpayincus` 發布到固定 GHCR namespace。
 
-API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。本次發行目標標籤為 `:v1.0.18`，發布狀態以 registry 與 Actions 為準。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
+API 與 web 各自在 `ubuntu-24.04`／`ubuntu-24.04-arm` 原生 runner 建置 `linux/amd64`／`linux/arm64`，不使用 QEMU。Buildx 先推送各架構 digest，再合併兩架構 OCI index 至 `ghcr.io/xiaolong-taiwan/xpayincus-{api,panel-web}:sha-<完整 commit SHA>` 及版本標籤。Web 使用新的 `xpayincus-panel-web` package 避開歷史套件權限，Docker target 與 digest artifact 名稱仍使用 `web`；API 名稱不變。本次發行目標標籤為 `:v1.0.19`，發布狀態以 registry 與 Actions 為準。映像設定 OCI title、source、revision、version 等 labels，index 另設定 source／revision／version annotations，發布後檢查架構及來源。GHA cache 按 target／arch 分開；workflow 與 reusable caller 均授予 `packages: write`，使用內建 `GITHUB_TOKEN` 登入。
 
 發布前同時核對 API／web：既有版本 index 的 revision、version、source 與兩種架構必須符合，且內容必須與該 commit 的 SHA index 完全一致，缺少 SHA 證據或不同 commit 一律失敗。所有 Docker workflow 共用 concurrency group 且不取消執行中的發布；重跑保留既有 SHA index，不以新建置覆寫它，再補上尚未發布的版本標籤。手動發布後，之後同版本 Git tag 必須指向相同 commit；若 main 已新增 commit，須升版，不能重新指定舊版映像。兩個 GHCR package 的標籤更新不是跨 package 原子交易，失敗可能留下部分完成標籤，可在同 commit 重跑補齊。
 
@@ -221,16 +229,16 @@ bash panel.sh status
 | Dashboard Compose 原始碼 | `xpayincus-dashboard-${VERSION}-compose.tar.gz` |
 | 最小 Compose 部署 bundle | `xpayincus-compose-${VERSION}.tar.gz`，根 VERSION 與固定部署檔 |
 | Compose bootstrap 入口 | `xpayincus-compose-${VERSION}.sh` |
-| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.18-linux-{amd64,arm64}.tar.gz` |
-| Agent | `xpayincus-agent-v1.0.18-linux-{amd64,arm64}` 與單檔 `.gz` |
+| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.19-linux-{amd64,arm64}.tar.gz` |
+| Agent | `xpayincus-agent-v1.0.19-linux-{amd64,arm64}` 與單檔 `.gz` |
 | Agent 舊格式 manifest | `manifest.json`，保留 `files.linux-amd64/linux-arm64`、`name/sha256/size/gzip` |
-| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.18-ota-manifest.json`，schemaVersion 1 |
-| RFW | `xpayincus-rfw-v1.0.18-linux-{amd64,arm64}` |
-| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.18-source.tar.gz`，不是核心模組 |
+| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.19-ota-manifest.json`，schemaVersion 1 |
+| RFW | `xpayincus-rfw-v1.0.19-linux-{amd64,arm64}` |
+| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.19-source.tar.gz`，不是核心模組 |
 | 統一索引 | `release-manifest.json`，包含 ZFS source-only 狀態與執行需求 |
 | 雜湊 | 個別產物 `.sha256` 與 `SHA256SUMS`，後者涵蓋產物及三份新增 JSON manifest，不自我雜湊 |
 
-表中的 `v1.0.18` 對應目前根 VERSION；下載前須確認正式 Release 已存在，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
+表中的 `v1.0.19` 對應目前根 VERSION；下載前須確認正式 Release 已存在，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
 
 manifest 產生前目錄必須恰有 13 個一般檔案：Dashboard 包、最小 Compose bundle、Compose bootstrap 腳本、ZFS source 包、兩個 panel tarball、兩個 Agent 二進位與兩個 `.gz`、兩個 RFW 二進位、Agent `manifest.json`。多餘檔案（含舊版、異名、既有 checksum／輸出 manifest）、缺件、目錄及符號連結均拒絕。收集器只接收 9 件建置產物，其餘四件由 assemble 封裝產生，不要求 incoming 預先提供最小 bundle。Agent manifest 的 `files` 必須恰為 `linux-amd64` 與 `linux-arm64`，每項名稱、壓縮檔 SHA256、大小與 `gzip: true` 均核對。完成後再次核對原始 13 件、13 份個別 checksum、三份新增 JSON 與 `SHA256SUMS`，共 30 件；`SHA256SUMS` 共 16 筆。統一索引保留 `compose.artifact` 指向完整 Dashboard 包，新增 `compose.bundle` 指向最小包，兩者皆列入 artifacts 的 URL／大小／SHA256；不將 Compose 包或 bootstrap 混入 OTA。
 

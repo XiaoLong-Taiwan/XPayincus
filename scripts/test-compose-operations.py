@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -97,6 +98,30 @@ class OperationsTests(unittest.TestCase):
         report = operations.recovery(argparse.Namespace(base=str(self.base)))
         self.assertFalse(report['automaticDatabaseRollback'])
         self.assertFalse((self.base / '.state').exists())
+        panel = 'bash ' + shlex.quote(str(self.base.resolve() / 'panel.sh'))
+        self.assertIn(panel + ' doctor', report['checks'][0]['detail'])
+        self.assertIn(panel + ' status', report['checks'][0]['detail'])
+
+    def test_recovery_commands_quote_absolute_panel_path_and_preserve_journal(self):
+        base = self.base / "panel space's $HOME; deployment"
+        state = base / '.state'
+        state.mkdir(parents=True)
+        file = state / 'update-journal.json'
+        original = json.dumps({'format': 'incudal-update-journal-v1', 'status': 'interrupted', 'backupComplete': False})
+        file.write_text(original)
+        with patch.object(operations, 'command') as run:
+            report = operations.recovery(argparse.Namespace(base=str(base)))
+        run.assert_not_called()
+        self.assertEqual(file.read_text(), original)
+        self.assertFalse(report['automaticDatabaseRollback'])
+        steps = '\n'.join(report['steps'])
+        panel = 'bash ' + shlex.quote(str(base.resolve() / 'panel.sh'))
+        for action in ('status', 'doctor', 'logs api', 'recover --retry-preflight', 'recover --resume-up'):
+            self.assertIn(panel + ' ' + action, steps)
+        for condition in ('backupComplete=false', '可驗證備份', '目標版本', 'secrets 與 schema 相容', '[0] 退出腳本', 'shell'):
+            self.assertIn(condition, steps)
+        self.assertNotIn('bash panel.sh', steps)
+        self.assertNotIn('python3 operations.py', steps)
 
     def test_native_doctor_queries_readonly_without_password_in_arguments(self):
         (self.base / '.env').write_text('FRONTEND_URL=https://pay.example.org\nADMIN_FRONTEND_URL=https://admin.example.org\nDATABASE_URL=postgresql://incudal:private-password@localhost/incudal\n')

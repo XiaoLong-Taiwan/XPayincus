@@ -10,6 +10,10 @@ Agent 运行在 Incus 宿主机上，用于上报宿主机资源、实例状态�
 
 節點安裝腳本會把面板的 Incus 客戶端憑證加入宿主機 Incus trust。若面板重裝、遷移、災備還原或憑證輪替，舊 trust 可能造成 `not authorized`。支援 HMAC 的新版 Agent 可用既有節點認證取得並驗證新憑證，確認新連線成功後才移除舊指紋。
 
+首次 Agent 安裝使用一次性 `ait_` TOKEN，透過 `/api/agent/install-config/:token?bootstrap=1` 取得 Agent 認證、base64 面板憑證及宿主已安裝狀態。面板先檢查憑證配對，失敗回傳 503 且不消耗 TOKEN；安裝器只接受固定四行格式，不執行回傳 shell 程式碼，舊兩行回應須先更新面板。兌換後先安裝宿主捷徑，首次節點在替換／啟動 Agent 前匯入初始憑證，失敗即停止。
+
+首次節點啟動後顯示「待驗證」，此時不刷新 HMAC 信任或移除舊指紋。請由節點擁有者／管理員在面板執行連線驗證，成功後再於宿主執行 `incudal --refresh-agent-trust`。已安裝節點仍走 HMAC 刷新；403 或簽名錯誤會失敗，不能當作首次安裝成功。
+
 舊版 Agent 若不支援 HMAC 認證端點，面板不能安全地遠端證明新憑證，也不得盲目加入或移除 trust。先備份 `/etc/incus/` 與 Agent 設定，將面板升級至支援受認證信任端點的版本，再於原 Incus 宿主機重新執行新版節點管理腳本，讓 Agent 二進位更新；接著再次開啟腳本，完成受認證的信任更新。若舊 Agent 無法以原認證完成更新，從後台為該節點重新產生 Agent 安裝命令／一次性 token，在原宿主機執行以重新配對 Agent，完成信任後再於後台驗證節點。若 API 回報 `AGENT_AUTH_REQUIRED` 或 `AGENT_SIGNATURE_INVALID`，不得略過檢查或手動信任下載到的憑證，應走重新配對。這些步驟不會自動清除 Incus 容器、儲存池或節點資料；勿使用卸載／刪除資料選項，也不要手動刪除舊 trust 直到新憑證連線驗證成功。
 
 面板憑證檢查於每次 API 啟動執行。`client.crt` 與 `client.key` 僅在兩檔都不存在時生成；只缺一檔、權限錯誤或配對不符時 API 會拒絕啟動。請從備份還原原配對，不要刪除半套檔案觸發新憑證生成。
@@ -59,4 +63,4 @@ Agent 默认每 60 秒上报一次，最小允许 30 秒。不要把上报间隔
 bash scripts/build-agent-release.sh
 ```
 
-產品版本取自根 `VERSION`；`XPayincus-Agent/` 是 Go 原始碼目錄。根 release workflow 僅上傳 Actions artifacts，不會建立 GitHub Release。本次文件整理未執行測試、建置或宿主升級。
+產品版本取自根 `VERSION`，目前發行目標為 `v1.0.19`；`XPayincus-Agent/` 是 Go 原始碼目錄。根 release workflow 的 tag 流程在 CI、版本與映像發布成功後建立 GitHub Release；手動流程僅發布映像與 Actions artifacts。發布狀態以 GitHub Release 為準。本次文件整理未執行測試、建置或宿主升級。

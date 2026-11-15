@@ -373,10 +373,15 @@ function buildAgentInstallCommand(input: {
 function buildAgentInstallConfig(input: {
   agentId: string
   agentSecret: string
+  bootstrap?: { certificate: string; installed: boolean }
 }): string {
   return [
     `INCUDAL_AGENT_ID=${shellEscape(input.agentId)}`,
-    `INCUDAL_AGENT_SECRET=${shellEscape(input.agentSecret)}`
+    `INCUDAL_AGENT_SECRET=${shellEscape(input.agentSecret)}`,
+    ...(input.bootstrap ? [
+      `INCUDAL_PANEL_CERTIFICATE=${shellEscape(input.bootstrap.certificate)}`,
+      `INCUDAL_HOST_INSTALLED=${shellEscape(String(input.bootstrap.installed))}`
+    ] : [])
   ].join('\n') + '\n'
 }
 
@@ -1104,15 +1109,35 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       .send(manifest)
   })
 
-  fastify.get<{ Params: AgentInstallTokenParams }>('/install-config/:token', {
+  fastify.get<{ Params: AgentInstallTokenParams; Querystring: { bootstrap?: string } }>('/install-config/:token', {
     logLevel: 'silent'
   }, async (
-    request: FastifyRequest<{ Params: AgentInstallTokenParams }>,
+    request: FastifyRequest<{ Params: AgentInstallTokenParams; Querystring: { bootstrap?: string } }>,
     reply: FastifyReply
   ) => {
     const { token } = request.params
     try {
+      const bootstrap = request.query.bootstrap === '1'
+      let certificate: string | undefined
+      if (bootstrap) {
+        try {
+          const appDir = process.env.INCUDAL_APP_DIR || process.cwd()
+          const installDir = process.env.INSTALL_DIR || (appDir.endsWith('/current') ? dirname(appDir) : null)
+          const stableDir = installDir ? join(installDir, 'server/certs') : null
+          const certDir = stableDir && (existsSync(join(stableDir, 'client.crt')) || existsSync(join(stableDir, 'client.key')))
+            ? stableDir : join(__dirname, '../../certs')
+          const explicit = process.env.PANEL_CRT_PATH || process.env.PANEL_KEY_PATH
+          certificate = readPanelCertificatePair(
+            explicit ? process.env.PANEL_CRT_PATH || '' : join(certDir, 'client.crt'),
+            explicit ? process.env.PANEL_KEY_PATH || '' : join(certDir, 'client.key')
+          ).cert.toString('base64')
+        } catch {
+          return reply.code(503).send('# Error: Panel certificate unavailable; Agent install token was not consumed')
+        }
+      }
       const result = await consumeHostAgentInstallToken(token)
+      const host = bootstrap ? await prisma.host.findUnique({ where: { id: result.host.id }, select: { isInstalled: true } }) : null
+      if (bootstrap && !host) return reply.code(403).send('# Error: Host not found')
       request.log.info(
         { hostId: result.host.id, agentId: result.agent.agentId },
         'Host Agent install token consumed'
@@ -1130,7 +1155,8 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         .header('Cache-Control', 'no-store')
         .send(buildAgentInstallConfig({
           agentId: result.agent.agentId,
-          agentSecret: result.agentSecret
+          agentSecret: result.agentSecret,
+          bootstrap: certificate ? { certificate, installed: host!.isInstalled } : undefined
         }))
     } catch (error) {
       if (error instanceof Error && error.message === 'AGENT_INSTALL_TOKEN_EXPIRED') {

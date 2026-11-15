@@ -19,7 +19,7 @@ def function(name):
 
 class HostInstallTrustTests(unittest.TestCase):
     def run_import(self, token='fixture-uuid', config=True, trust='panel', failure='', known=False,
-                   trust_details=None):
+                   trust_details=None, bootstrap=''):
         script = r'''
 set -euo pipefail
 exec 3>&1
@@ -27,7 +27,8 @@ step() { :; }
 log() { printf '%s\n' "$*"; }
 error() { printf '%s\n' "$*" >&2; }
 rm() { :; }
-mktemp() { printf '/unused-certificate'; }
+mktemp() { printf '/dev/null'; }
+base64() { [[ "$FAILURE" != decode ]]; }
 refresh_panel_trust() { printf 'hmac\n'; return 43; }
 curl() {
   local arg input
@@ -68,9 +69,9 @@ printf 'continue-agent-install\n'
         env = dict(os.environ, TOKEN=token, PANEL_URL='https://panel.example.org',
                    AGENT_CONFIG_FILE='/bin/bash' if config else '/dev/null/absent',
                    TRUST=trust, FAILURE=failure, KNOWN=str(int(known)),
-                   TRUST_DETAILS=trust_details)
+                   TRUST_DETAILS=trust_details, INCUDAL_BOOTSTRAP_CERTIFICATE=bootstrap)
         return subprocess.run([BASH, '--noprofile', '--norc', '-s'],
-                              input=function('import_cert') + '\n' + script,
+                              input=('python3() { command python "$@"; }\n' if os.name == 'nt' else '') + function('import_cert') + '\n' + script,
                               env=env, capture_output=True, text=True, timeout=15)
 
     def test_uuid_ignores_stale_config_and_preserves_old_trust(self):
@@ -129,6 +130,17 @@ printf 'continue-agent-install\n'
         self.assertEqual(result.returncode, 43)
         self.assertEqual(result.stdout, 'hmac\n')
 
+    def test_bootstrap_payload_uses_same_trust_checks_without_hmac(self):
+        result = self.run_import(token='', bootstrap='Y2VydA==')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('add panel-', result.stdout)
+        self.assertNotIn('hmac', result.stdout)
+        self.assertNotIn('token-download', result.stdout)
+        for failure in ('decode', 'certificate', 'add'):
+            result = self.run_import(token='', bootstrap='Y2VydA==', failure=failure)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('continue-agent-install', result.stdout)
+
     def test_bootstrap_failures_stop_before_agent_install(self):
         for failure in ('download', 'certificate', 'list', 'fingerprint', 'add'):
             with self.subTest(failure=failure):
@@ -186,7 +198,7 @@ main "$@"
                           'agent_id': 'agt_' + 'a' * 32, 'agent_secret': 'ias_' + 's' * 43}
                 if isinstance(config, dict):
                     values.update(config)
-                config_path.write_text('\n'.join(f'{key}: "{value}"' for key, value in values.items()))
+                config_path.write_text('\n'.join(f'{key}: "{value}"' for key, value in values.items()), newline='\n')
             args = ['--mode', mode, '--yes'] if mode else ['--yes']
             args += ['--port', port]
             if token:
@@ -194,7 +206,9 @@ main "$@"
             env = dict(os.environ, TEST_INJECTED_TOKEN=injected_token,
                        AGENT_CONFIG_FILE=str(config_path), FAILURE=failure,
                        PANEL_URL='https://panel.example.org')
-            command = [BASH, '--noprofile', '--norc', '-c', definitions + '\n' + script, '--', *args]
+            harness = Path(directory) / 'main.sh'
+            harness.write_text(definitions + '\n' + script, newline='\n')
+            command = [BASH, '--noprofile', '--norc', str(harness), *args]
             if interactive:
                 master, slave = os.openpty()
                 try:

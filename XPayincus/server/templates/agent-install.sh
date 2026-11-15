@@ -24,6 +24,8 @@ TARGET_VERSION="latest"
 ASSUME_YES="0"
 HOST_READY="0"
 HOST_SCRIPT=""
+BOOTSTRAP_CERTIFICATE=""
+BOOTSTRAP_HOST_INSTALLED=""
 
 usage() {
   printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--yes] [--reinstall] [--version latest|vSemVer] [--binary FILE --sha256 HEX]' \
@@ -480,7 +482,7 @@ fetch_agent_install_config() {
     return 0
   fi
 
-  local config_url="${PANEL_BASE_URL}/api/agent/install-config/${install_token}"
+  local config_url="${PANEL_BASE_URL}/api/agent/install-config/${install_token}?bootstrap=1"
   if [ "${DRY_RUN}" = "1" ]; then
     printf '  + fetch %s/api/agent/install-config/<redacted-install-token>\n' "${PANEL_BASE_URL}"
     INCUDAL_AGENT_ID="${INCUDAL_AGENT_ID:-agt_from_install_token}"
@@ -500,12 +502,16 @@ fetch_agent_install_config() {
       INCUDAL_AGENT_ID="${BASH_REMATCH[1]}"
     elif [[ "${line}" =~ ^INCUDAL_AGENT_SECRET=\'(ias_[A-Za-z0-9_-]{32,96})\'$ ]] && [ "${count}" = "1" ]; then
       INCUDAL_AGENT_SECRET="${BASH_REMATCH[1]}"
+    elif [[ "${line}" =~ ^INCUDAL_PANEL_CERTIFICATE=\'([A-Za-z0-9+/=]+)\'$ ]] && [ "${count}" = "2" ] && [ "${#line}" -le 32768 ]; then
+      BOOTSTRAP_CERTIFICATE="${BASH_REMATCH[1]}"
+    elif [[ "${line}" =~ ^INCUDAL_HOST_INSTALLED=\'(true|false)\'$ ]] && [ "${count}" = "3" ]; then
+      BOOTSTRAP_HOST_INSTALLED="${BASH_REMATCH[1]}"
     else
       fail "invalid Agent install config response"
     fi
     count=$((count + 1))
   done < "${INSTALL_CONFIG_PATH}"
-  [ "${count}" = "2" ] || fail "incomplete Agent install config response"
+  [ "${count}" = "4" ] || fail "incomplete Agent bootstrap config response; update the panel before retrying"
   rm -f "${INSTALL_CONFIG_PATH}"
   INSTALL_CONFIG_PATH=""
   unset INCUDAL_AGENT_INSTALL_TOKEN
@@ -654,6 +660,14 @@ if [ "${REINSTALL}" != 1 ] && [ "${HOST_READY}" != 1 ] && [ "${DRY_RUN}" != 1 ] 
 fi
 
 fetch_agent_install_config
+if [ -n "${BOOTSTRAP_CERTIFICATE}" ]; then
+  [ -n "${HOST_SCRIPT}" ] || prepare_host_script
+  bash "${HOST_SCRIPT}" --install-shortcuts || fail 'host shortcut installation failed'
+  if [ "${BOOTSTRAP_HOST_INSTALLED}" = false ]; then
+    INCUDAL_BOOTSTRAP_CERTIFICATE="${BOOTSTRAP_CERTIFICATE}" bash "${HOST_SCRIPT}" --bootstrap-agent-trust || fail 'initial panel trust import failed; Agent installation stopped'
+  fi
+  unset BOOTSTRAP_CERTIFICATE
+fi
 if [ "${REINSTALL}" != "1" ]; then
   need_env INCUDAL_AGENT_ID
   need_env INCUDAL_AGENT_SECRET
@@ -789,7 +803,7 @@ if [ "${COMMIT_OK}" != "1" ]; then
 fi
 
 rm -f "${BACKUP_BIN}" "${BACKUP_CONFIG}" "${BACKUP_SERVICE}"
-if [ -n "${HOST_SCRIPT}" ]; then
+if [ -n "${HOST_SCRIPT}" ] && [ "${BOOTSTRAP_HOST_INSTALLED}" != false ]; then
   INCUDAL_AGENT_CONFIG_FILE="${CONFIG_FILE}" bash "${HOST_SCRIPT}" --refresh-agent-trust || {
     printf '  %s\n' 'Agent 本体已安装并启动，但面板 Incus 信任刷新未完成，面板暂时无法管理本机。' >&2
     printf '  %s\n' \
@@ -800,5 +814,10 @@ if [ -n "${HOST_SCRIPT}" ]; then
 fi
 systemctl status "${SERVICE_NAME}" --no-pager --lines=20 || true
 
+if [ "${BOOTSTRAP_HOST_INSTALLED}" = false ]; then
+  printf '\n  [待驗證] %s\n' 'Agent 已啟動，首次面板憑證已匯入；節點尚未完成面板驗證。'
+  printf '  %s\n' '請由節點擁有者／管理員在面板執行連線驗證；成功後再執行 incudal --refresh-agent-trust。舊信任尚未輪替。'
+  exit 0
+fi
 printf '\n  [完成] %s\n' 'Incudal Agent installed or upgraded and started.'
 printf '  %s\n\n' '查看状态: systemctl status incudal-agent' '查看日志: journalctl -u incudal-agent -n 100 --no-pager'

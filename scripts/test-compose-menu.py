@@ -91,6 +91,16 @@ class MenuTests(unittest.TestCase):
         self.assertNotIn(b'CALL', result.stdout)
         self.assertEqual(list(self.base.iterdir()), [])
 
+    def test_update_failure_explains_recovery_conditions_and_menu_exit(self):
+        result = self.menu('2\nyes\n0\n', extra='bash() { printf "CALL <%s>\\n" "$*"; return 1; }')
+        self.assertEqual(result.returncode, 0, process_output(result))
+        self.assertEqual(result.stdout.count(b'CALL'), 1)
+        self.assertIn(b'panel.sh update', result.stdout)
+        for text in ('保留 journal 與備份', '[0] 退出腳本', 'shell', '完整命令', 'backupComplete=false',
+                     '備份完整', '目標版本', 'secrets 與 schema 相容', '不自動回滾資料庫'):
+            self.assertIn(text.encode(), result.stderr)
+        self.assertNotIn(b'panel.sh recover', result.stdout)
+
     def test_trust_refusal_does_not_execute_and_rebuild_requires_confirmation(self):
         result = self.menu('2\nno\n9\nyes\nno\n9\nrebuild\n0\n')
         self.assertEqual(result.returncode, 0, process_output(result))

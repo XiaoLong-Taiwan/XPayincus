@@ -2321,7 +2321,7 @@ PY
 import_cert() {
     step "步骤 [5/5]  导入面板信任证书..."
 
-    if [[ -z "${TOKEN:-}" && -f "$AGENT_CONFIG_FILE" ]]; then
+    if [[ -z "${INCUDAL_BOOTSTRAP_CERTIFICATE:-}" && -z "${TOKEN:-}" && -f "$AGENT_CONFIG_FILE" ]]; then
         refresh_panel_trust
         return $?
     fi
@@ -2330,7 +2330,12 @@ import_cert() {
     local cert_file=""
     cert_file=$(mktemp /tmp/incudal-panel-cert.XXXXXX.crt)
 
-    if ! printf 'url = "%s"\n' "$cert_url" | curl -q -fsS --proto '=http,https' \
+    if [[ -n "${INCUDAL_BOOTSTRAP_CERTIFICATE:-}" ]]; then
+        if ! printf '%s' "$INCUDAL_BOOTSTRAP_CERTIFICATE" | base64 --decode > "$cert_file"; then
+            rm -f "$cert_file"
+            return 1
+        fi
+    elif ! printf 'url = "%s"\n' "$cert_url" | curl -q -fsS --proto '=http,https' \
         --connect-timeout 10 --max-time 60 --config - -o "$cert_file" 2>/dev/null; then
         rm -f "$cert_file"
         error "证书导入失败！请检查："
@@ -3902,6 +3907,7 @@ main() {
         case "$1" in
             --yes) INSTALL_ASSUME_YES=true; shift ;;
             --prepare-agent-host) ACTION="prepare_agent_host"; shift ;;
+            --bootstrap-agent-trust) ACTION="bootstrap_agent_trust"; shift ;;
             --refresh-agent-trust) ACTION="refresh_agent_trust"; shift ;;
             --install-shortcuts) ACTION="install_shortcuts"; shift ;;
             --mode)
@@ -4072,6 +4078,12 @@ main() {
         return $?
     fi
 
+    if [[ "$ACTION" == bootstrap_agent_trust ]]; then
+        [[ -n "${INCUDAL_BOOTSTRAP_CERTIFICATE:-}" ]] || { error '缺少一次性安裝授權交付的面板憑證'; return 1; }
+        import_cert || return 1
+        return 0
+    fi
+
     # 检测系统环境（只读探测；所有 CLI 入参已在此之前校验完毕）
     detect_system
 
@@ -4093,6 +4105,7 @@ main() {
             install_incus || return 1
         fi
         init_incus || return 1
+        install_shortcuts || return 1
         return 0
     fi
 

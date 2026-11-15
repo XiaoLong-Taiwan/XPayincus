@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -386,7 +387,11 @@ def main():
         if journal_file.exists():
             previous = json.loads(journal_file.read_text())
             if previous.get('status') != 'complete':
-                fail('已有未完成更新 journal；請先執行 recover，確認狀態後使用 recover --resume-up 或人工保留 journal 再重試。')
+                panel = 'bash ' + shlex.quote(str(base / 'panel.sh'))
+                fail(f'已有未完成更新 journal；請先執行 {panel} recover（唯讀）。'
+                     f'僅在 backupComplete=false 且修正失敗原因後，執行 {panel} recover --retry-preflight；'
+                     f'僅在已完成可驗證備份、目前為目標版本，並確認部署檔、secrets 與 schema 相容後，執行 {panel} recover --resume-up。'
+                     '保留 journal 與備份，不自動回滾資料庫；若正在數字選單，請先選擇 [0] 退出腳本，再於 shell 執行命令。')
             history = state / ('update-' + uuid.uuid4().hex + '.json')
             shutil.copyfile(journal_file, history)
         JOURNAL = journal_file

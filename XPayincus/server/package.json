@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "XPayincus backend service",
   "type": "module",
   "main": "dist/app.js",
@@ -31,7 +31,7 @@
     "test:agent-monitoring": "node --import tsx scripts/test-agent-monitoring.ts",
     "test:agent-report-state-guards": "node --import tsx scripts/test-agent-report-state-guards.ts && node --import tsx scripts/test-agent-status-guards.ts",
     "test:agent-status-guards": "node --import tsx scripts/test-agent-status-guards.ts",
-    "test:agent-install-command-guards": "node --import tsx scripts/test-agent-install-command-guards.ts && node --import tsx scripts/test-agent-release-cache.ts && node --import tsx scripts/test-agent-upgrade.ts",
+    "test:agent-install-command-guards": "node --import tsx scripts/test-agent-install-command-guards.ts && node --import tsx scripts/test-agent-bootstrap.ts && node --import tsx scripts/test-agent-release-cache.ts && node --import tsx scripts/test-agent-upgrade.ts",
     "test:agent-upgrade": "node --import tsx scripts/test-agent-upgrade.ts",
     "test:agent-response-redaction": "node --import tsx scripts/test-agent-response-redaction.ts",
     "test:aff-points-query-guards": "node --import tsx scripts/test-aff-points-query-guards.ts",

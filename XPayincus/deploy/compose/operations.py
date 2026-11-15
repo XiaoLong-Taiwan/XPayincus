@@ -241,10 +241,11 @@ def migration_plan(options):
 
 def recovery(options):
     base = Path(options.base).resolve()
+    panel = 'bash ' + shlex.quote(str(base / 'panel.sh'))
     file = base / '.state/update-journal.json'
     report = {'format': 'incudal-recovery-v1', 'checks': [], 'automaticDatabaseRollback': False}
     if not file.is_file() or file.is_symlink():
-        add(report, 'journal', 'warn', '沒有可信 journal；使用 doctor/status 與備份人工核對')
+        add(report, 'journal', 'warn', f'沒有可信 journal；使用 {panel} doctor 與 {panel} status 及備份人工核對')
         return report
     data = json.loads(file.read_text())
     if data.get('format') != 'incudal-update-journal-v1' or (base / '.state').is_symlink():
@@ -262,7 +263,13 @@ def recovery(options):
                 digest.update(block)
         valid = digest.hexdigest() == data.get('backupSha256')
     add(report, 'backup', 'pass' if valid else 'warn', '已完成備份可用' if valid else '未證實備份完整；禁止切換或還原')
-    report['steps'] = ['先執行 bash panel.sh status 與 python3 operations.py doctor --base ' + shlex.quote(str(base)), '僅在 backupComplete=false 時，修正失敗原因後執行 bash panel.sh recover --retry-preflight；保留舊 journal 並重新下載驗證與備份。', '若已切換或啟動中斷，保留 journal 與備份，查看 bash panel.sh logs api；migration 可能已執行，不得盲目退版。', '確認目標部署檔、secrets 與 schema 相容後，執行 bash panel.sh recover --resume-up；會取得既有鎖，重新拉取／檢查後啟動，不還原 DB。']
+    report['steps'] = [
+        '若正在數字選單，請先選擇 [0] 退出腳本，再於 shell 執行以下命令。',
+        f'先執行 {panel} status 與 {panel} doctor。',
+        f'僅在 backupComplete=false 時，修正失敗原因後執行 {panel} recover --retry-preflight；保留舊 journal 並重新下載驗證與備份。',
+        f'若已切換或啟動中斷，保留 journal 與備份，查看 {panel} logs api；migration 可能已執行，不得盲目退版。',
+        f'僅在已完成可驗證備份、目前為目標版本，並確認部署檔、secrets 與 schema 相容後，執行 {panel} recover --resume-up；會取得既有鎖，重新拉取／檢查後啟動，不還原 DB。',
+    ]
     return report
 
 

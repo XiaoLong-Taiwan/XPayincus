@@ -5,7 +5,14 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.18**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.19**; GitHub Releases record publication status.
+
+## v1.0.19 Recovery Guidance and Initial Trust (Release Target)
+
+- Compose recovery guidance uses shell-quoted absolute deployment paths, instructs users to exit the numeric menu first, and states the conditions for preflight retries and startup recovery. Preserve journals and backups; database rollback is not automatic.
+- Agent one-time TOKEN bootstrap checks the panel certificate pair before consuming the TOKEN. Initial hosts import the certificate and remain pending verification; the owner or administrator verifies connectivity in the panel before running `incudal --refresh-agent-trust`. Installed hosts retain HMAC refresh, and authentication errors remain failures.
+- Synchronize all required version sources, Compose tags, fixtures, and current documentation to v1.0.19. Retain minimum updater `v1.0.3`, 30 assets, 16 SHA256SUMS entries, historical records, and third-party versions.
+- This cycle uses editing and static inspection only, without tests, type checks, builds, commits, pushes, or publication. Full details are in `docs-site/release-notes/v1.0.19.md`.
 
 ## v1.0.18 Version and Documentation Synchronization (Release Target)
 
@@ -74,7 +81,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.17` to `v1.0.18`, without implying that the preceding version was published.
+- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.18` to `v1.0.19`, without implying that the preceding version was published.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 

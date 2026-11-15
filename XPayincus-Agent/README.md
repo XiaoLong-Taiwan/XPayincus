@@ -2,9 +2,9 @@
 
 統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.18`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.19`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
 
-v1.0.12 加入 schemaVersion 2 宿主／實例監控歷史、Linux PSI、累計計數器差值與重設辨識，以及 RFW／ZFS 狀態事件，詳見 [v1.0.12 歷史紀錄](../RELEASE.md#v1012-歷史版本準備紀錄已正式發布) 與 [宿主元件管理](components/README.md)。監控提供 avg／min／max／count／coverage；缺少 PSI 或實例指標時不補成零，資料受採樣、spool 與後端容量限制。後端最多保留 30 天，樣本最多 8192 筆或 1536 KiB、元件事件最多 512 筆或 256 KiB，超限會提早截斷，不能保證完整 30 天。須持久掛載 Agent state 與後端私人 state 目錄；後端仍只支援單一 Node 程序。v1.0.14 安裝入口修正與 TOKEN 分欄見 [歷史發行稿](../XPayincus/docs-site/release-notes/v1.0.14.md)；v1.0.15 監控 HTTP client 與宿主捷徑變更見 [本輪發行目標](../RELEASE.md#v1015-發行目標)。本次僅同步版本與文件，CI 與隔離宿主驗收待後續確認。
+v1.0.12 加入 schemaVersion 2 宿主／實例監控歷史、Linux PSI、累計計數器差值與重設辨識，以及 RFW／ZFS 狀態事件，詳見 [v1.0.12 歷史紀錄](../RELEASE.md#v1012-歷史版本準備紀錄已正式發布) 與 [宿主元件管理](components/README.md)。監控提供 avg／min／max／count／coverage；缺少 PSI 或實例指標時不補成零，資料受採樣、spool 與後端容量限制。後端最多保留 30 天，樣本最多 8192 筆或 1536 KiB、元件事件最多 512 筆或 256 KiB，超限會提早截斷，不能保證完整 30 天。須持久掛載 Agent state 與後端私人 state 目錄；後端仍只支援單一 Node 程序。v1.0.14 安裝入口修正與 TOKEN 分欄見 [歷史發行稿](../XPayincus/docs-site/release-notes/v1.0.14.md)；v1.0.15 監控 HTTP client 與宿主捷徑變更見 [歷史發行目標](../RELEASE.md#v1015-發行目標)。本次首次信任流程見 [v1.0.19 發行目標](../RELEASE.md#v1019-發行目標)；CI 與隔離宿主驗收待後續確認。
 
 ## 宿主元件整合
 
@@ -43,6 +43,10 @@ go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml
 從管理後台產生 **Agent** 安裝 TOKEN（`ait_`，30 分鐘有效、只能兌換一次），在目標宿主機執行。此 TOKEN 與宿主初始化 TOKEN 不同；產生新 Agent TOKEN 會輪換 Agent 憑證，使舊 Agent 憑證失效。安裝模板位於 `../XPayincus/server/templates/agent-install.sh`，由面板 `/api/agent/install.sh` 提供。
 
 安裝器從面板同源 `/api/agent/manifest.json` 選擇 amd64／arm64，下載、核對 SHA256 後原子安裝至 `/usr/local/bin/incudal-agent`，建立設定及 systemd 服務，執行單次心跳後啟動服務。自訂 `INCUDAL_AGENT_BINARY_URL` 必須同時提供 `INCUDAL_AGENT_BINARY_SHA256`。
+
+一次性 TOKEN 透過 `/api/agent/install-config/:token?bootstrap=1` 兌換 Agent 認證、base64 面板憑證與宿主已安裝狀態；面板先檢查憑證配對，失敗回傳 503 且不消耗 TOKEN。安裝器嚴格解析四行設定，不執行回傳程式碼；舊兩行回應須先更新面板。兌換後安裝宿主捷徑；首次節點在替換／啟動 Agent 前匯入初始面板憑證，失敗即停止。若宿主尚未準備完成，仍會進入既有 Incus／ZFS 準備流程。
+
+首次節點啟動後顯示「待驗證」，不立即執行 HMAC 信任刷新或移除舊 trust。請由擁有者／管理員在面板執行連線驗證，成功後再於宿主執行 `incudal --refresh-agent-trust`。已安裝節點仍使用 HMAC 刷新，403 等認證錯誤會失敗，不會轉成首次安裝成功；首次匯入不代表面板已完成驗證。
 
 ### 獨立互動與參數入口
 
@@ -92,7 +96,7 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 `--reinstall` 要求已有 `/etc/incudal-agent/config.yaml`，逐位元組保留設定與憑證，更新 Agent binary 及 Agent systemd unit，重啟 `incudal-agent`；不接受新地址／TOKEN。若需更換面板或輪換憑證，使用獨立安裝入口。地址讀取支援安裝器產生的 `panel_url: "…"` 格式；自訂 YAML 格式須先調整。`--binary` 接受已編譯的未壓縮 Linux amd64／arm64 binary，不下載 manifest 或 binary，也不執行編譯；可與首次安裝的地址及 TOKEN 檔案搭配。預設計算本機 SHA256 並驗證暫存副本；指定 `--sha256` 時另核對可信雜湊。自行計算的雜湊只確認複製一致性，不證明來源可信。
 
-所有入口只管理 Agent binary、Agent 設定及 `incudal-agent.service`，不安裝、移除、重啟或改寫 Incus／RFW／ZFS。沒有既有設定時不可使用保留設定的重裝模式。本機重裝不需要下載，但單次冒煙仍需要連到面板；`-once` 不觸發自動升級。
+保留設定的 `--reinstall` 模式只更新 Agent binary 與 `incudal-agent.service`，保留既有設定，不執行首次宿主準備或 TOKEN bootstrap。沒有既有設定時不可使用此模式。本機 binary 重裝不下載 manifest／binary，但單次冒煙仍需要連到面板；`-once` 不觸發自動升級。TOKEN 安裝另包含宿主捷徑，依面板宿主狀態選擇首次 Incus trust 匯入或已安裝節點 HMAC 刷新；宿主未準備完成時會進入既有準備流程。
 
 ### 失敗與重試
 
@@ -114,7 +118,7 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 宿主詳情的 Agent 區塊在 Agent 在線、啟用且發現較新版本時顯示「一鍵更新 Agent」。確認視窗列出目前及目標版本，明確授權替換 Agent binary 並重啟 Agent 服務；只有宿主擁有者或管理員可操作。不輪換憑證，不更新 Incus／RFW／ZFS 或 systemd unit。
 
-`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.18" }`（版本僅為範例，須已正式發布）。後端重新驗證目標版本、平台與最低 updater 版本（現行 `v1.0.3`），固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
+`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.19" }`（版本僅為範例，須已正式發布）。後端重新驗證目標版本、平台與最低 updater 版本（現行 `v1.0.3`），固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
 
 未授權心跳不自動下發新版，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`、`delivered`、`succeeded`、`failed`、`unconfirmed`，附 operation ID、目標版本、階段、錯誤及時間。支援 `upgrade-status-v1` 的 Agent 以相同 operation ID 去重，回應遺失時可重新下發同一操作；舊 Agent 維持一次下發相容行為。新版成功須符合目標版本及 `healthy` 回報，舊版僅確認目標版本心跳，皆不代表所有宿主功能已驗收。
 

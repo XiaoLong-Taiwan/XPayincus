@@ -144,6 +144,10 @@ class HostShortcutTests(unittest.TestCase):
         self.assertLess(main.index('if [[ "$ACTION" == install_shortcuts ]]'), main.index('\n    detect_system\n'))
         self.assertIn('--install-shortcuts) ACTION="install_shortcuts"; shift ;;', main)
         self.assertIn('    install_shortcuts\n', self.source[self.source.index('show_result() {'):])
+        prepare = main.split('if [[ "$ACTION" == prepare_agent_host ]]', 1)[1].split('    # 如果通过命令行指定了卸载', 1)[0]
+        self.assertLess(prepare.index('init_incus || return 1'), prepare.index('install_shortcuts || return 1'))
+        agent = (ROOT / 'XPayincus/server/templates/agent-install.sh').read_text()
+        self.assertIn('bash "${HOST_SCRIPT}" --install-shortcuts || fail', agent)
         result = subprocess.run([BASH, '-n', shell_path(SOURCE)], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
 

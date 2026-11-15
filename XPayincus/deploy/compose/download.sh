@@ -360,7 +360,7 @@ dashboard_menu() {
               esac
             done
             ;;
-          2) bash "$directory/panel.sh" update || printf '更新失敗，請保留備份並依前述階段處理。\n' >&8 ;;
+          2) bash "$directory/panel.sh" update || printf '更新失敗，請保留 journal 與備份並依前述階段處理；若有恢復指引，請先選擇 [0] 退出腳本，再於 shell 執行前述完整命令。僅在 backupComplete=false 且修正原因後可前置重試；恢復啟動須先確認備份完整、目前為目標版本及部署檔、secrets 與 schema 相容，不自動回滾資料庫。\n' >&8 ;;
           4) bash "$directory/panel.sh" pull || printf '拉取映像失敗，現有服務未停止。\n' >&8 ;;
           5)
             printf '資料匯入會取代目前資料庫，請先確認已有可用備份。\n備份檔絕對路徑：' >&8

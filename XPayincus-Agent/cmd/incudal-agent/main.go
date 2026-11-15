@@ -18,7 +18,7 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/upgrade"
 )
 
-var version = "v1.0.18"
+var version = "v1.0.19"
 var operationStatePath string
 
 func main() {

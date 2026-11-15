@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -233,14 +234,25 @@ class UpdateTests(unittest.TestCase):
         self.assertTrue(list((self.base / '.state').glob('update-*.json')))
 
     def test_unfinished_journal_is_not_overwritten(self):
+        self.base = self.base.with_name("panel space's $HOME; deployment")
+        self.base.mkdir()
         state = self.base / '.state'
         state.mkdir()
         file = state / 'update-journal.json'
         original = '{"format":"incudal-update-journal-v1","status":"interrupted"}'
         file.write_text(original)
-        with patch.object(sys, 'argv', ['update', str(self.base)]), self.assertRaises(SystemExit):
+        with patch.object(sys, 'argv', ['update', str(self.base)]), \
+                patch.object(update, 'run') as run, self.assertRaises(SystemExit) as caught:
             update.dispatch()
         self.assertEqual(file.read_text(), original)
+        run.assert_not_called()
+        message = str(caught.exception)
+        panel = 'bash ' + shlex.quote(str(self.base.resolve() / 'panel.sh'))
+        for action in ('recover', 'recover --retry-preflight', 'recover --resume-up'):
+            self.assertIn(panel + ' ' + action, message)
+        for condition in ('backupComplete=false', '可驗證備份', '目標版本', 'secrets 與 schema 相容', '[0] 退出腳本', 'shell'):
+            self.assertIn(condition, message)
+        self.assertNotIn('bash panel.sh', message)
 
     def test_recovery_rejects_missing_backup_without_running_commands(self):
         state = self.base / '.state'

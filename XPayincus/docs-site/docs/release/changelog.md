@@ -5,7 +5,14 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.18**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.19**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.19 恢復提示與首次信任（發行目標）
+
+- Compose 恢復提示提供經 shell 安全引用的部署絕對路徑，要求先退出數字選單，並說明前置重試與恢復啟動的條件；保留 journal 與備份，不自動回滾 DB。
+- Agent 一次性 TOKEN bootstrap 在消耗 TOKEN 前檢查面板憑證配對；首次節點匯入初始憑證後顯示「待驗證」，由擁有者／管理員於面板驗證成功後再執行 `incudal --refresh-agent-trust`。已安裝節點仍走 HMAC 刷新，認證錯誤不轉成成功。
+- 同步全部必要版本來源、Compose 標籤、fixture 與現行文件至 v1.0.19；最低 updater 維持 `v1.0.3`，維持 30 件資產與 16 筆 SHA256SUMS，保留歷史及第三方版本。
+- 本次僅編輯與靜態核對，未執行測試、型別檢查、建置、提交、推送或發布。完整說明位於 `docs-site/release-notes/v1.0.19.md`。
 
 ## v1.0.18 版本與文件同步（發行目標）
 
@@ -74,7 +81,7 @@
 ## 版本号规则 / Versioning Rule
 
 - 唯一版本來源為統一倉庫根 `VERSION`，格式為 canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]`，依根 `RELEASE.md` 契約維護。
-- Patch 不限個位數；本輪由來源版本 `v1.0.17` 遞增為 `v1.0.18`，不據此推定前版已發布。
+- Patch 不限個位數；本輪由來源版本 `v1.0.18` 遞增為 `v1.0.19`，不據此推定前版已發布。
 - 核心數字與純數字預發行識別碼不得有前導零；版本檔不得有 BOM、空白或額外行，僅允許可選的一個 LF／CRLF 結尾。
 - 歷史 tag、交接與發行說明保留原樣，第三方相依及實際 ZFS 模組版本不跟隨產品升版。
 
