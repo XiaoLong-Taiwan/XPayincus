@@ -348,6 +348,7 @@ export default defineConfig(({ mode }) => {
   const appEntry = process.env.VITE_APP_ENTRY === 'admin' ? 'admin' : 'user'
   const entryScript = appEntry === 'admin' ? '/src/admin/main.ts' : '/src/main.ts'
   const apiClientEntry = appEntry === 'admin' ? './src/api/admin.ts' : './src/api/index.ts'
+  const adminApiEntry = appEntry === 'admin' ? './src/api/admin.ts' : './src/api/admin-user-stub.ts'
   const appPathsEntry = appEntry === 'admin' ? './src/utils/app-paths-admin.ts' : './src/utils/app-paths-user.ts'
   const sideNavItemsEntry = appEntry === 'admin'
     ? './src/config/side-nav-items-admin.ts'
@@ -437,6 +438,10 @@ export default defineConfig(({ mode }) => {
         {
           find: /^@\/api$/,
           replacement: fileURLToPath(new URL(apiClientEntry, import.meta.url))
+        },
+        {
+          find: /^@\/api\/admin$/,
+          replacement: fileURLToPath(new URL(adminApiEntry, import.meta.url))
         },
         {
           find: /^@\/utils\/app-paths$/,

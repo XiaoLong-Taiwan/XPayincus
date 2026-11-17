@@ -31,6 +31,9 @@ interface Host {
   instanceType?: 'container' | 'vm' | 'both'
   ipv6ParentInterface?: string
   ipv6Subnet?: string
+  ipv6Mode?: number
+  ipv6CapabilityAvailable?: boolean
+  agent?: { id: number; status: string } | null
   transferEnabled?: boolean
   trafficResetDay?: number
   notifyPurchase?: boolean
@@ -61,6 +64,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const saving = ref(false)
+const agentManagedHost = computed(() => (props.host.url || '').includes('agent-managed.invalid'))
 
 const form = ref({
   name: '',
@@ -74,6 +78,8 @@ const form = ref({
   instanceType: 'container' as 'container' | 'vm' | 'both',
   ipv6ParentInterface: '',
   ipv6Subnet: '',
+  ipv6Mode: 3 as 1 | 3,
+  ipv6CapabilityAvailable: false,
   transferEnabled: true,
   trafficResetDay: 1,
   notifyPurchase: true,
@@ -154,7 +160,7 @@ function extractPortFromUrl(url: string): number {
   }
 }
 
-watch(() => props.host, (newHost) => {
+watch(() => props.host, async (newHost) => {
   if (newHost) {
     const hostName = newHost.name || ''
     // 从节点名称中提取后缀
@@ -175,6 +181,8 @@ watch(() => props.host, (newHost) => {
       instanceType: newHost.instanceType || 'container',
       ipv6ParentInterface: newHost.ipv6ParentInterface || '',
       ipv6Subnet: newHost.ipv6Subnet || '',
+      ipv6Mode: newHost.ipv6Mode === 1 ? 1 : 3,
+      ipv6CapabilityAvailable: Boolean(newHost.ipv6Subnet && newHost.ipv6ParentInterface),
       transferEnabled: newHost.transferEnabled !== undefined ? newHost.transferEnabled : true,
       trafficResetDay: newHost.trafficResetDay || 1,
       notifyPurchase: newHost.notifyPurchase !== undefined ? newHost.notifyPurchase : true,
@@ -191,6 +199,21 @@ watch(() => props.host, (newHost) => {
         portRangeStart: newHost.natConfig?.portRangeStart || null,
         portRangeEnd: newHost.natConfig?.portRangeEnd || null
       }
+    }
+    try {
+      const agentStatus = await api.hosts.getAgentStatus(newHost.id)
+      const hostReport = agentStatus.agent?.lastReport?.host
+      form.value.ipv6CapabilityAvailable = Boolean(
+        hostReport?.routedIpv6 &&
+        hostReport.ipv6Prefixes?.some(prefix => {
+          if (typeof prefix !== 'string') return false
+          const [address, prefixLength, ...extra] = prefix.trim().split('/')
+          const length = Number(prefixLength)
+          return extra.length === 0 && address.includes(':') && Number.isInteger(length) && length >= 1 && length <= 64
+        })
+      )
+    } catch {
+      form.value.ipv6CapabilityAvailable = Boolean(newHost.ipv6Subnet && newHost.ipv6ParentInterface)
     }
   }
 }, { immediate: true })
@@ -222,15 +245,17 @@ async function saveConfig() {
     return
   }
 
-  // 验证服务器地址
-  if (!form.value.hostAddress) {
+  const agentManaged = agentManagedHost.value
+  if (!agentManaged && !form.value.hostAddress) {
     toast.error(t('admin.hosts.ipAddressRequired'))
     return
   }
-  const ipValidation = validateHostAddress(form.value.hostAddress, t('admin.hosts.ipAddress'))
-  if (!ipValidation.valid) {
-    toast.error(ipValidation.message || '')
-    return
+  if (!agentManaged) {
+    const ipValidation = validateHostAddress(form.value.hostAddress, t('admin.hosts.ipAddress'))
+    if (!ipValidation.valid) {
+      toast.error(ipValidation.message || '')
+      return
+    }
   }
 
   // 验证描述
@@ -242,7 +267,7 @@ async function saveConfig() {
     }
   }
 
-  if (requiresIpv6ParentInterface.value && !form.value.ipv6ParentInterface.trim()) {
+  if (form.value.ipv6Mode === 1 && requiresIpv6ParentInterface.value && !form.value.ipv6ParentInterface.trim()) {
     toast.error(t('admin.hosts.ipv6ParentInterfaceRequired'))
     return
   }
@@ -287,16 +312,17 @@ async function saveConfig() {
 
   saving.value = true
   try {
-    const url = buildHostApiUrl(form.value.hostAddress, form.value.apiPort || 8443)
+    const url = agentManaged ? undefined : buildHostApiUrl(form.value.hostAddress, form.value.apiPort || 8443)
     
     const result = await api.hosts.update(props.host.id, {
       name: fullName,
-      url: url,
+      ...(url ? { url } : {}),
       location: form.value.location || undefined,
       countryCode: form.value.countryCode,
       cpuAllowanceMax: form.value.cpuAllowanceMax || undefined,
       memoryMax: form.value.memoryMax || undefined,
       instanceType: form.value.instanceType,
+      ipv6Mode: form.value.ipv6Mode,
       ipv6ParentInterface: form.value.ipv6ParentInterface.trim() || undefined,
       ipv6Subnet: form.value.ipv6Subnet.trim() || undefined,
       transferEnabled: form.value.transferEnabled,
@@ -380,13 +406,13 @@ async function saveConfig() {
         <div>
           <label class="block text-xs text-themed-muted mb-1.5">{{ t('admin.hosts.ipAddress') }}</label>
           <div class="flex gap-2">
-            <input v-model="form.hostAddress" type="text" class="input flex-1" placeholder="10.0.0.1 / 2001:db8::1 / node.example.com" required />
+            <input v-model="form.hostAddress" type="text" class="input flex-1" placeholder="10.0.0.1 / 2001:db8::1 / node.example.com" :required="!agentManagedHost" />
           </div>
           <p class="text-xs text-themed-muted mt-1">{{ t('admin.hosts.ipAddressHint') }}</p>
         </div>
         <div>
           <label class="block text-xs text-themed-muted mb-1.5">{{ t('admin.hosts.apiPort') }}</label>
-          <input v-model.number="form.apiPort" type="number" min="1" max="65535" class="input" placeholder="8443" required />
+          <input v-model.number="form.apiPort" type="number" min="1" max="65535" class="input" placeholder="8443" :required="!agentManagedHost" />
           <p class="text-xs text-themed-muted mt-1">{{ t('admin.hosts.apiPortHint') }}</p>
         </div>
       </div>
@@ -433,6 +459,14 @@ async function saveConfig() {
           </div>
         </div>
         
+        <div>
+          <label class="block text-xs text-themed-muted mb-1.5">{{ t('admin.hosts.hostIpv6Mode') }}</label>
+          <select v-model.number="form.ipv6Mode" class="input">
+            <option :value="3">{{ t('admin.hosts.hostIpv6Disabled') }}</option>
+            <option :value="1" :disabled="!form.ipv6CapabilityAvailable">{{ t('admin.hosts.hostIpv6Routed') }}</option>
+          </select>
+          <p class="text-xs text-themed-muted mt-1">{{ t('admin.hosts.hostIpv6CapabilityLimit') }}</p>
+        </div>
         <!-- IPv6 父接口 -->
         <div>
           <label class="block text-xs text-themed-muted mb-1.5">

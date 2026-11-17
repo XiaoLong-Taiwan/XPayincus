@@ -10,13 +10,13 @@
 - 與 owner 預設用**繁體中文**溝通。
 
 ## 1. 这是什么项目
-**XPayincus**（內部代號 `incudal`）——商用 Incus（LXC/KVM）NAT VPS 銷售與交付平台。統一發行版本以根 `../VERSION` 為準，目前為 **v1.0.19（發行目標；發布狀態以 GitHub Release 為準）**；不從歷史交接檔推定目前生產版本。本目錄是統一倉庫中的 pnpm workspace，下表路徑相對於本目錄：
+**XPayincus**（內部代號 `incudal`）——商用 Incus（LXC/KVM）NAT VPS 銷售與交付平台。統一發行版本以根 `../VERSION` 為準，目前為 **v1.0.20（發行目標；發布狀態以 GitHub Release 為準）**；不從歷史交接檔推定目前生產版本。本目錄是統一倉庫中的 pnpm workspace，下表路徑相對於本目錄：
 
 | 目录 | 技术栈 / 作用 |
 |------|----------------|
 | `client/` | Vue 3 + Vite SPA。双端构建（`VITE_APP_ENTRY`）→ `dist/user`（pay.xpayincus.com）+ `dist/admin`（admin.xpayincus.com）。两端独立源、**不共享 cookie 域**。 |
 | `server/` | Fastify 5 + Prisma 7 + PostgreSQL，包含 API 路由與排程／worker。核心不依賴 Redis；資料庫任務使用 PG advisory lock，程序內狀態仍要求單一 Node 程序。三套鉴权面：Web 的 JWT+refresh cookie、Public API 的 `pat_`/`poa_` token、host agent 的 HMAC。 |
-| `../XPayincus-Agent/` | Go 宿主 Agent，只讀監控（心跳／資源／實例狀態／流量），HMAC 簽名與自升級。 |
+| `../XPayincus-Agent/` | Go 宿主 Agent，心跳／資源／實例狀態／流量監控、HMAC 簽名、自升級與出站 WSS 管理隧道；面板不直連宿主管理埠。 |
 | `../XPayincus-Agent/components/rfw/`、`../XPayincus-Agent/components/zfs/` | 宿主 eBPF/XDP 防火牆與 Debian ZFS builder；Go Agent 不直接載入核心模組，管理邊界見 `../XPayincus-Agent/components/README.md`。 |
 | 其它 | `docs-site/`（VitePress）、`deploy/compose/`（面板容器配置）、`scripts/`（安裝／校驗／OTA）；插件與主題平台已移除，不再列為現行目錄。 |
 

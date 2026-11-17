@@ -3,6 +3,7 @@
  */
 
 export interface IncusClientOptions {
+  hostId?: number
   url: string
   certPath: string | null
   keyPath: string | null

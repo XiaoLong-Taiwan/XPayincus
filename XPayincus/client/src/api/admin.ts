@@ -1263,6 +1263,25 @@ const api = {
     listHosted: (params: { userId?: number; page?: number; pageSize?: number; search?: string } = {}): Promise<{ hosts: HostWithDetails[]; total: number; page: number; pageSize: number; totalPages: number }> =>
       http.get('/hosts', { params: { ...params, scope: 'hosted' } }),
     get: (id: number): Promise<HostWithDetails> => http.get(`/hosts/${id}`),
+    getPorts: (id: number): Promise<{
+      source: 'managed-mappings'
+      completeness: 'partial' | 'managed-only'
+      listenerCoverage: 'unavailable'
+      readFailures: number
+      mappings: Array<{
+        id: number
+        instanceId: number
+        instanceName: string
+        instanceStatus: string
+        instanceType: 'container' | 'virtual-machine' | 'unknown'
+        protocol: 'tcp' | 'udp'
+        publicPort: number
+        privatePort: number
+        addressFamilies: Array<'ipv4' | 'ipv6' | 'unknown'>
+        systemManaged: boolean
+        remark: string | null
+      }>
+    }> => http.get(`/hosts/${id}/ports`),
     lookupGiftTargetUser: (hostId: number, username: string): Promise<{
       user: {
         id: number

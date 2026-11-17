@@ -6,14 +6,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { Prisma } from '@prisma/client'
 import { createHash, createHmac } from 'crypto'
-import { Agent, request as undiciRequest } from 'undici'
+import { getAgentTunnel } from '../lib/agent-tunnel.js'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { isIP } from 'net'
 import { dirname, isAbsolute, join } from 'path'
 import { fileURLToPath } from 'url'
 import { prisma } from '../db/prisma.js'
 import { createLog, LogModule, LogResult } from '../db/logs.js'
-import { decryptSensitiveData } from '../lib/security.js'
+import { decryptSensitiveData, getJwtSigningSecret } from '../lib/security.js'
 import {
   agentNonceTtlMs,
   createAgentBodyHash,
@@ -66,6 +66,7 @@ interface AgentHeartbeatBody {
   upgradeStatus?: Record<string, unknown>
   history?: Record<string, unknown>
   monitoring?: Record<string, unknown>
+  host?: Record<string, unknown>
 }
 
 interface AgentBinaryParams {
@@ -182,6 +183,34 @@ function normalizeCapabilities(value: unknown): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function finitePositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+function isPublicIpv4(value: string): boolean {
+  const octets = value.split('.').map(Number)
+  if (octets.length !== 4 || octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false
+  const [first, second] = octets
+  return !(
+    first === 0 || first === 10 || first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51) ||
+    (first === 203 && second === 0) ||
+    first >= 224
+  )
+}
+
+function isRoutedIpv6Prefix(value: string): boolean {
+  const [address, prefixText, ...extra] = value.trim().split('/')
+  const prefix = Number(prefixText)
+  return extra.length === 0 && isIP(address) === 6 && Number.isInteger(prefix) && prefix >= 1 && prefix <= 64 && !address.toLowerCase().startsWith('fc') && !address.toLowerCase().startsWith('fd')
 }
 
 function buildRequestPath(request: FastifyRequest): string {
@@ -352,6 +381,13 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+function generateCaddyScriptToken(hostId: number): string {
+  const expireAt = Date.now() + 30 * 60 * 1000
+  const payload = `${hostId}:${expireAt}`
+  const signature = createHmac('sha256', getJwtSigningSecret('Caddy script token signing')).update(payload).digest('hex')
+  return Buffer.from(`${payload}:${signature}`).toString('base64url')
+}
+
 function buildAgentInstallCommand(input: {
   panelUrl: string
   binaryUrl?: string | null
@@ -374,13 +410,15 @@ function buildAgentInstallConfig(input: {
   agentId: string
   agentSecret: string
   bootstrap?: { certificate: string; installed: boolean }
+  caddyInstallUrl?: string
 }): string {
   return [
     `INCUDAL_AGENT_ID=${shellEscape(input.agentId)}`,
     `INCUDAL_AGENT_SECRET=${shellEscape(input.agentSecret)}`,
     ...(input.bootstrap ? [
       `INCUDAL_PANEL_CERTIFICATE=${shellEscape(input.bootstrap.certificate)}`,
-      `INCUDAL_HOST_INSTALLED=${shellEscape(String(input.bootstrap.installed))}`
+      `INCUDAL_HOST_INSTALLED=${shellEscape(String(input.bootstrap.installed))}`,
+      ...(input.caddyInstallUrl ? [`INCUDAL_CADDY_INSTALL_URL=${shellEscape(input.caddyInstallUrl)}`] : [])
     ] : [])
   ].join('\n') + '\n'
 }
@@ -938,7 +976,8 @@ function buildHeartbeatReport(body: AgentHeartbeatBody): Record<string, unknown>
     upgradeStatus: body.upgradeStatus ?? {},
     instanceSampledAt: body.instances?.reportedAt ?? null,
     resources: body.resources ?? {},
-    metrics: normalizeAgentMetrics(body.metrics)
+    metrics: normalizeAgentMetrics(body.metrics),
+    host: isRecord(body.host) ? body.host : {}
   }
 }
 
@@ -1050,23 +1089,15 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         if (typeof serverCertificate !== 'string' || serverCertificate.length > 16384) {
           return reply.code(400).send({ error: 'Host server certificate required' })
         }
-        const dispatcher = new Agent({ connect: {
-          cert: pair.cert, key: pair.key, ca: serverCertificate, rejectUnauthorized: true,
-          checkServerIdentity: () => undefined, timeout: 10000
-        } })
         try {
-          const response = await undiciRequest(new URL('/1.0/resources', host.url), {
-            dispatcher, method: 'GET', headersTimeout: 10000, bodyTimeout: 10000
-          })
-          const data = await response.body.json() as { type?: string; status_code?: number }
+          const response = await getAgentTunnel(agent.hostId).request('incus', 'GET', '/1.0/resources')
+          const data = JSON.parse(response.body.toString()) as { type?: string; status_code?: number }
           if (response.statusCode !== 200 || data.type !== 'sync' || data.status_code !== 200) {
             return reply.code(409).send({ error: 'Panel certificate is not trusted by host' })
           }
         } catch {
           request.log.warn({ code: 'PANEL_TRUST_HOST_UNREACHABLE', hostId: agent.hostId }, 'Panel trust verification could not reach the host Incus API')
           return reply.code(502).send({ error: 'Panel cannot reach the host Incus API for trust verification', code: 'PANEL_TRUST_HOST_UNREACHABLE' })
-        } finally {
-          await dispatcher.close()
         }
       }
       const headers = readAgentAuthHeaders(request.headers)!
@@ -1156,7 +1187,10 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         .send(buildAgentInstallConfig({
           agentId: result.agent.agentId,
           agentSecret: result.agentSecret,
-          bootstrap: certificate ? { certificate, installed: host!.isInstalled } : undefined
+          bootstrap: certificate ? { certificate, installed: host!.isInstalled } : undefined,
+          caddyInstallUrl: bootstrap
+            ? `${derivePanelUrl(request)}/api/hosts/caddy-script/${generateCaddyScriptToken(result.host.id)}`
+            : undefined
         }))
     } catch (error) {
       if (error instanceof Error && error.message === 'AGENT_INSTALL_TOKEN_EXPIRED') {
@@ -1678,7 +1712,8 @@ export default async function agentRoutes(fastify: FastifyInstance) {
           components: { type: 'object', additionalProperties: true },
           upgradeStatus: { type: 'object', additionalProperties: true },
           history: { type: 'object', additionalProperties: true },
-          monitoring: { type: 'object', additionalProperties: true }
+          monitoring: { type: 'object', additionalProperties: true },
+          host: { type: 'object', additionalProperties: true }
         }
       }
     }
@@ -1732,6 +1767,65 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     if (heartbeatResult.count !== 1) {
       return reply.code(409).send({ error: 'Agent heartbeat is superseded or Agent is disabled', code: 'AGENT_HEARTBEAT_REJECTED' })
     }
+
+    const hostReport = isRecord(request.body.host) ? request.body.host : {}
+    const reportedNetwork = isRecord(hostReport.network) ? hostReport.network : {}
+    const interfaces = Array.isArray(reportedNetwork.interfaces) ? reportedNetwork.interfaces : []
+    const publicAddresses = interfaces.flatMap((item) => {
+      if (!isRecord(item) || !Array.isArray(item.addresses)) return []
+      return item.addresses.filter((address) => isRecord(address) && typeof address.address === 'string' && typeof address.prefixLength === 'number' && isIP(address.address) > 0)
+    })
+    const publicIpv4 = publicAddresses.find((address) => typeof address.address === 'string' && isIP(address.address) === 4 && isPublicIpv4(address.address))
+    const routedIpv6 = hostReport.routedIpv6 === true && Array.isArray(hostReport.ipv6Prefixes)
+      ? hostReport.ipv6Prefixes.find((value) => typeof value === 'string' && isRoutedIpv6Prefix(value))
+      : undefined
+    const poolReports = Array.isArray(hostReport.storagePools) ? hostReport.storagePools : []
+    for (const pool of poolReports.slice(0, 64)) {
+      if (!isRecord(pool) || typeof pool.name !== 'string' || !/^[a-zA-Z0-9._-]{1,64}$/.test(pool.name)) continue
+      await prisma.storagePool.upsert({
+        where: { hostId_name: { hostId: agent.hostId, name: pool.name } },
+        create: { hostId: agent.hostId, name: pool.name, driver: typeof pool.driver === 'string' ? pool.driver.slice(0, 32) : 'unknown', purpose: pool.name === 'default' ? 'instance_data' : 'instance_storage' },
+        update: { driver: typeof pool.driver === 'string' ? pool.driver.slice(0, 32) : 'unknown' }
+      })
+    }
+    const currentHost = await prisma.host.findUnique({
+      where: { id: agent.hostId },
+      select: {
+        cpuAllowanceMax: true, memoryMax: true, storageSize: true, ipv6Mode: true, ipv6Subnet: true, ipv6ParentInterface: true,
+        storagePools: { where: { purpose: 'instance_data' }, orderBy: { id: 'asc' }, take: 1, select: { name: true } }
+      }
+    })
+    const reportedResources = isRecord(request.body.resources) ? request.body.resources : {}
+    const cpuTotal = finitePositiveNumber(reportedResources.cpuTotal)
+    const memoryTotalMb = finitePositiveNumber(reportedResources.memoryTotalMb)
+    const systemPoolName = currentHost?.storagePools[0]?.name
+    const systemPoolReport = systemPoolName ? poolReports.find(value => isRecord(value) && value.name === systemPoolName) : undefined
+    const poolTotalBytes = isRecord(systemPoolReport) && isRecord(systemPoolReport.space) ? finitePositiveNumber(systemPoolReport.space.total) : null
+    const storageSizeGb = poolTotalBytes ? Math.floor(poolTotalBytes / (1024 ** 3)) : null
+    const reportedRuntime = isRecord(request.body.runtime) ? request.body.runtime : {}
+    const reportedArchitecture = typeof hostReport.architecture === 'string' ? hostReport.architecture : reportedRuntime.goarch
+    const architecture = typeof reportedArchitecture === 'string' ? reportedArchitecture.trim().toLowerCase() : ''
+    const normalizedArchitecture = ['arm64', 'aarch64'].includes(architecture) ? 'aarch64'
+      : ['amd64', 'x86_64', 'x64'].includes(architecture) ? 'x86_64' : null
+    const publicIpv4Addresses = Array.isArray(hostReport.publicIpv4)
+      ? hostReport.publicIpv4.find(value => typeof value === 'string' && isIP(value) === 4 && isPublicIpv4(value))
+      : undefined
+    const hostUpdates: Prisma.HostUpdateInput = {
+      isInstalled: true,
+      ...(normalizedArchitecture ? { architecture: normalizedArchitecture } : {}),
+      ...(typeof publicIpv4?.address === 'string' ? { ipAddress: publicIpv4.address } : typeof publicIpv4Addresses === 'string' ? { ipAddress: publicIpv4Addresses } : {}),
+      ...(currentHost?.cpuAllowanceMax === 0 && cpuTotal ? { cpuAllowanceMax: cpuTotal * 100 } : {}),
+      ...(currentHost?.memoryMax === 0 && memoryTotalMb ? { memoryMax: Math.floor(memoryTotalMb) } : {}),
+      ...(currentHost?.storageSize === 0 && storageSizeGb && storageSizeGb > 0 ? { storageSize: storageSizeGb } : {}),
+      ...(currentHost?.ipv6Mode === 3 && !currentHost.ipv6Subnet && typeof routedIpv6 === 'string'
+        ? { ipv6Mode: 1, ipv6Subnet: routedIpv6.trim(), ipv6ParentInterface: typeof hostReport.ipv6Interface === 'string' ? hostReport.ipv6Interface.slice(0, 64) : null }
+        : {})
+    }
+    await prisma.host.update({ where: { id: agent.hostId }, data: hostUpdates })
+    await prisma.host.updateMany({
+      where: { id: agent.hostId, status: { in: ['online', 'offline'] } },
+      data: { status: 'online' }
+    })
 
     let acceptedSampleIds: string[] = []
     try {

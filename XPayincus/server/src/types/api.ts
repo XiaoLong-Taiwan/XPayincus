@@ -1,10 +1,10 @@
 /**
- * API 请求/响应类型定义
+ * API è¯·æ±‚/å“åº”ç±»åž‹å®šä¹‰
  */
 
 import type { User, Instance, Host, Package } from './database.js'
 
-// ==================== 认证相关 ====================
+// ==================== è®¤è¯ç›¸å…³ ====================
 
 export interface LoginRequest {
   username: string
@@ -42,7 +42,7 @@ export interface RegisterResponse {
   }
 }
 
-// ==================== 用户相关 ====================
+// ==================== ç”¨æˆ·ç›¸å…³ ====================
 
 export interface CreateUserRequest {
   username: string
@@ -58,12 +58,12 @@ export interface UpdateUserRequest {
   emailCode?: string
 }
 
-// ==================== 实例相关 ====================
+// ==================== å®žä¾‹ç›¸å…³ ====================
 
 export interface CreateInstanceRequest {
   name: string
   packageId: number
-  planId?: number  // 付费方案ID（付费套餐必填）
+  planId?: number  // ä»˜è´¹æ–¹æ¡ˆIDï¼ˆä»˜è´¹å¥—é¤å¿…å¡«ï¼‰
   image: string
   cpu: number
   memory: number
@@ -92,11 +92,11 @@ export interface InstanceWithDetails extends Instance {
   package?: Pick<Package, 'id' | 'name'>
 }
 
-// ==================== 节点相关 ====================
+// ==================== èŠ‚ç‚¹ç›¸å…³ ====================
 
 export interface CreateHostRequest {
   name: string
-  url: string
+  url?: string
   location?: string
   countryCode?: string
   tags?: string[]
@@ -137,7 +137,7 @@ export interface UpdateHostRequest {
   instanceType?: 'container' | 'vm' | 'both'
   ipv6ParentInterface?: string
   ipv6Subnet?: string
-  trafficResetDay?: number  // 流量重置日（1-28�?
+  trafficResetDay?: number  // æµé‡é‡ç½®æ—¥ï¼ˆ1-28ï¼?
   notifyPurchase?: boolean
   notifyRenew?: boolean
   notifyDestroy?: boolean
@@ -154,7 +154,7 @@ export interface UpdateHostRequest {
     portRangeEnd?: number | null
   }
 }
-// ==================== 套餐相关 ====================
+// ==================== å¥—é¤ç›¸å…³ ====================
 
 export interface CreatePackageRequest {
   name: string
@@ -164,42 +164,42 @@ export interface CreatePackageRequest {
   diskMax: number
   bandwidthMax?: number
   networkMode?: 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat' | 'public_ipv4' | 'public_ipv4_ipv6'
-  instanceType?: 'container' | 'vm'  // 实例类型
+  instanceType?: 'container' | 'vm'  // å®žä¾‹ç±»åž‹
   hostIds?: number[]
   hostStoragePools?: Record<string, string | null>
   privileged?: boolean
   nested?: boolean
   active?: boolean
-  // 套餐资源限制
+  // å¥—é¤èµ„æºé™åˆ¶
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
   siteLimit?: number
   monthlyTrafficLimit?: string | null
   trafficResetPrice?: number
-  // 存储 I/O 限制
+  // å­˜å‚¨ I/O é™åˆ¶
   ioLimitMode?: 'throughput' | 'iops'
   limitsRead?: string
   limitsWrite?: string
   limitsReadIops?: number
   limitsWriteIops?: number
-  // 网络限制
+  // ç½‘ç»œé™åˆ¶
   limitsIngress?: string
   limitsEgress?: string
-  // 进程与调�?
+  // è¿›ç¨‹ä¸Žè°ƒåº?
   limitsProcesses?: number
   limitsCpuPriority?: number
-  // 启动配置
+  // å¯åŠ¨é…ç½®
   bootAutostart?: boolean
   bootAutostartPriority?: number
   bootAutostartDelay?: number
   bootHostShutdownTimeout?: number
-  // 全局共享配置
+  // å…¨å±€å…±äº«é…ç½®
   globalShared?: boolean
-  globalQuotaMultiplier?: number | null  // 配额倍数限制，如 0.5, 1.0, 1.5, 2.0，null 表示无限制（1x�?
-  globalMaxInstances?: number | null  // 全局共享的最大实例数，null 表示无限�?
-  // 实例操作权限
-  allowInstanceDeletion?: boolean  // 是否允许用户删除实例
+  globalQuotaMultiplier?: number | null  // é…é¢å€æ•°é™åˆ¶ï¼Œå¦‚ 0.5, 1.0, 1.5, 2.0ï¼Œnull è¡¨ç¤ºæ— é™åˆ¶ï¼ˆ1xï¼?
+  globalMaxInstances?: number | null  // å…¨å±€å…±äº«çš„æœ€å¤§å®žä¾‹æ•°ï¼Œnull è¡¨ç¤ºæ— é™åˆ?
+  // å®žä¾‹æ“ä½œæƒé™
+  allowInstanceDeletion?: boolean  // æ˜¯å¦å…è®¸ç”¨æˆ·åˆ é™¤å®žä¾‹
 }
 
 export interface UpdatePackageRequest {
@@ -210,42 +210,42 @@ export interface UpdatePackageRequest {
   diskMax?: number
   bandwidthMax?: number
   networkMode?: 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat' | 'public_ipv4' | 'public_ipv4_ipv6'
-  instanceType?: 'container' | 'vm'  // 实例类型
+  instanceType?: 'container' | 'vm'  // å®žä¾‹ç±»åž‹
   hostIds?: number[]
   hostStoragePools?: Record<string, string | null>
   privileged?: boolean
   nested?: boolean
   active?: boolean
-  // 套餐资源限制
+  // å¥—é¤èµ„æºé™åˆ¶
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
   siteLimit?: number
   monthlyTrafficLimit?: string | null
   trafficResetPrice?: number
-  // 存储 I/O 限制
+  // å­˜å‚¨ I/O é™åˆ¶
   ioLimitMode?: 'throughput' | 'iops'
   limitsRead?: string
   limitsWrite?: string
   limitsReadIops?: number
   limitsWriteIops?: number
-  // 网络限制
+  // ç½‘ç»œé™åˆ¶
   limitsIngress?: string
   limitsEgress?: string
-  // 进程与调�?
+  // è¿›ç¨‹ä¸Žè°ƒåº?
   limitsProcesses?: number
   limitsCpuPriority?: number
-  // 启动配置
+  // å¯åŠ¨é…ç½®
   bootAutostart?: boolean
   bootAutostartPriority?: number
   bootAutostartDelay?: number
   bootHostShutdownTimeout?: number
-  // 全局共享配置
+  // å…¨å±€å…±äº«é…ç½®
   globalShared?: boolean
-  globalQuotaMultiplier?: number | null  // 配额倍数限制，如 0.5, 1.0, 1.5, 2.0，null 表示无限制（1x�?
-  globalMaxInstances?: number | null  // 全局共享的最大实例数，null 表示无限�?
-  // 实例操作权限
-  allowInstanceDeletion?: boolean  // 是否允许用户删除实例
+  globalQuotaMultiplier?: number | null  // é…é¢å€æ•°é™åˆ¶ï¼Œå¦‚ 0.5, 1.0, 1.5, 2.0ï¼Œnull è¡¨ç¤ºæ— é™åˆ¶ï¼ˆ1xï¼?
+  globalMaxInstances?: number | null  // å…¨å±€å…±äº«çš„æœ€å¤§å®žä¾‹æ•°ï¼Œnull è¡¨ç¤ºæ— é™åˆ?
+  // å®žä¾‹æ“ä½œæƒé™
+  allowInstanceDeletion?: boolean  // æ˜¯å¦å…è®¸ç”¨æˆ·åˆ é™¤å®žä¾‹
 }
 
 export interface InstanceConfig {
@@ -279,7 +279,7 @@ export interface InstanceConfigResponse {
   swap: InstanceSwapConfig
 }
 
-// 实例配置覆盖请求
+// å®žä¾‹é…ç½®è¦†ç›–è¯·æ±‚
 export interface UpdateInstanceConfigRequest {
   limitsRead?: string | null
   limitsWrite?: string | null
@@ -295,7 +295,7 @@ export interface UpdateInstanceConfigRequest {
   bootHostShutdownTimeout?: number | null
 }
 
-// ==================== 快照/备份 ====================
+// ==================== å¿«ç…§/å¤‡ä»½ ====================
 
 export interface CreateSnapshotRequest {
   name: string
@@ -307,7 +307,7 @@ export interface CreateBackupRequest {
   description?: string
 }
 
-// ==================== 通用响应 ====================
+// ==================== é€šç”¨å“åº” ====================
 
 export interface ApiResponse<T = unknown> {
   success: boolean

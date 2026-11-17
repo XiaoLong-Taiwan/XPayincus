@@ -1,8 +1,8 @@
 # XPayincus Host Agent
 
-統一倉庫的 Go 宿主監控元件，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依心跳回應自升級。不執行實例建立、銷毀或啟停等下發任務，也不放入面板 Compose。
+統一倉庫的 Go 宿主 Agent，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依已授權的心跳回應升級。Agent 主動建立出站 WSS 管理隧道，將面板請求轉送至固定本機 Incus socket 與 Caddy admin API；面板不直連宿主管理埠。Agent 維持宿主部署，不放入面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.19`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 須同步。統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.20`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 與 Go main 預設版本同步。Server 與 Agent 須協調升級，新隧道 frame 沒有舊版能力協商或直連降級；反向代理須支援 WebSocket Upgrade 與長連線。協定及失敗語意見 [TUNNEL.md](TUNNEL.md)，統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
 
 v1.0.12 加入 schemaVersion 2 宿主／實例監控歷史、Linux PSI、累計計數器差值與重設辨識，以及 RFW／ZFS 狀態事件，詳見 [v1.0.12 歷史紀錄](../RELEASE.md#v1012-歷史版本準備紀錄已正式發布) 與 [宿主元件管理](components/README.md)。監控提供 avg／min／max／count／coverage；缺少 PSI 或實例指標時不補成零，資料受採樣、spool 與後端容量限制。後端最多保留 30 天，樣本最多 8192 筆或 1536 KiB、元件事件最多 512 筆或 256 KiB，超限會提早截斷，不能保證完整 30 天。須持久掛載 Agent state 與後端私人 state 目錄；後端仍只支援單一 Node 程序。v1.0.14 安裝入口修正與 TOKEN 分欄見 [歷史發行稿](../XPayincus/docs-site/release-notes/v1.0.14.md)；v1.0.15 監控 HTTP client 與宿主捷徑變更見 [歷史發行目標](../RELEASE.md#v1015-發行目標)。本次首次信任流程見 [v1.0.19 發行目標](../RELEASE.md#v1019-發行目標)；CI 與隔離宿主驗收待後續確認。
 
@@ -10,7 +10,7 @@ v1.0.12 加入 schemaVersion 2 宿主／實例監控歷史、Linux PSI、累計�
 
 Agent 來源樹納入 [RFW](components/rfw/README.md) 與 [ZFS builder](components/zfs/README.md)，實體路徑分別為 `components/rfw` 與 `components/zfs`。以宿主元件 bundle 與 [管理文件](components/README.md) 整合，保留獨立工具鏈及既有資產名稱，不將 Rust/eBPF 或 ZFS 核心功能嵌入 Go Agent。
 
-Go 程序仍只負責監控、心跳與自身二進位升級；不自動啟停 RFW、不下載或載入 eBPF、不執行 DKMS／`modprobe`。bundle 是同一統一 Release 的邏輯元件集合，不新增封裝資產，不代表 Agent 安裝器或自升級會安裝全部元件。宿主權限、核心相容性、規則、服務與回復由管理者分別控管。
+Go 程序負責監控、心跳、自身二進位升級與固定本機目的地的管理隧道轉送；不自動啟停 RFW、不下載或載入 eBPF、不執行 DKMS／`modprobe`。bundle 是同一統一 Release 的邏輯元件集合，不新增封裝資產，不代表 Agent 安裝器或自升級會安裝全部元件。宿主權限、核心相容性、規則、服務與回復由管理者分別控管。
 
 ## 設定與執行
 
@@ -118,7 +118,7 @@ sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha2
 
 宿主詳情的 Agent 區塊在 Agent 在線、啟用且發現較新版本時顯示「一鍵更新 Agent」。確認視窗列出目前及目標版本，明確授權替換 Agent binary 並重啟 Agent 服務；只有宿主擁有者或管理員可操作。不輪換憑證，不更新 Incus／RFW／ZFS 或 systemd unit。
 
-`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.19" }`（版本僅為範例，須已正式發布）。後端重新驗證目標版本、平台與最低 updater 版本（現行 `v1.0.3`），固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
+`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.20" }`（版本僅為範例，須已正式發布）。後端重新驗證目標版本、平台與最低 updater 版本（現行 `v1.0.3`），固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
 
 未授權心跳不自動下發新版，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`、`delivered`、`succeeded`、`failed`、`unconfirmed`，附 operation ID、目標版本、階段、錯誤及時間。支援 `upgrade-status-v1` 的 Agent 以相同 operation ID 去重，回應遺失時可重新下發同一操作；舊 Agent 維持一次下發相容行為。新版成功須符合目標版本及 `healthy` 回報，舊版僅確認目標版本心跳，皆不代表所有宿主功能已驗收。
 

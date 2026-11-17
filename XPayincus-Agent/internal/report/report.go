@@ -1,11 +1,14 @@
 package report
 
 import (
+	"context"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -14,6 +17,11 @@ var incusSocketCandidates = []string{
 	"/var/snap/incus/common/lxd/unix.socket",
 	"/var/lib/lxd/unix.socket",
 }
+
+var hostNetworkInterfaces = net.Interfaces
+var hostInterfaceAddresses = func(iface net.Interface) ([]net.Addr, error) { return iface.Addrs() }
+var hostIpv6DefaultInterface = readIpv6DefaultInterface
+var hostIncusStoragePools = collectIncusStoragePools
 
 func HeartbeatPayload(version string, heartbeatIntervalSeconds int) map[string]any {
 	instances := cachedInstances()
@@ -49,8 +57,155 @@ func HeartbeatPayload(version string, heartbeatIntervalSeconds int) map[string]a
 		"components": components,
 		"instances":  instances,
 		"resources":  resources,
+		"host":       collectHostReport(),
 		"metrics":    collectMetrics(heartbeatIntervalSeconds),
 	}
+}
+
+func collectHostReport() map[string]any {
+	interfaces, err := hostNetworkInterfaces()
+	if err != nil {
+		interfaces = nil
+	}
+	return buildHostReport(interfaces, hostIncusStoragePools(), hostIpv6DefaultInterface())
+}
+
+func buildHostReport(systemInterfaces []net.Interface, pools []any, routedInterface string) map[string]any {
+	interfaces := make([]any, 0)
+	ipv6Prefixes := make([]any, 0)
+	publicIpv4 := make([]string, 0)
+	for _, iface := range systemInterfaces {
+		addresses := make([]any, 0)
+		ifaceAddresses, err := hostInterfaceAddresses(iface)
+		if err != nil {
+			continue
+		}
+		for _, address := range ifaceAddresses {
+			ip, network, err := net.ParseCIDR(address.String())
+			if err != nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+				continue
+			}
+			prefix, bits := network.Mask.Size()
+			if prefix < 0 {
+				continue
+			}
+			addresses = append(addresses, map[string]any{"address": ip.String(), "prefixLength": prefix})
+			if ip.To4() != nil && isPublicHostIPv4(ip) {
+				publicIpv4 = append(publicIpv4, ip.String())
+			}
+			if iface.Name == routedInterface && ip.To4() == nil && ip.IsGlobalUnicast() && bits == 128 && prefix >= 1 && prefix <= 64 && !ip.IsPrivate() {
+				ipv6Prefixes = append(ipv6Prefixes, ip.String()+"/"+strconv.Itoa(prefix))
+			}
+		}
+		if len(addresses) > 0 {
+			interfaces = append(interfaces, map[string]any{"name": iface.Name, "addresses": addresses})
+		}
+	}
+	return map[string]any{
+		"architecture": runtime.GOARCH,
+		"network":       map[string]any{"interfaces": interfaces},
+		"publicIpv4":    publicIpv4,
+		"storagePools":  pools,
+		"ipv6Prefixes":  ipv6Prefixes,
+		"routedIpv6":    len(ipv6Prefixes) > 0,
+		"ipv6Interface": routedInterface,
+	}
+}
+
+func isPublicHostIPv4(ip net.IP) bool {
+	return ip.To4() != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
+}
+
+func readIpv6DefaultInterface() string {
+	content, err := os.ReadFile("/proc/net/ipv6_route")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 10 && fields[0] == strings.Repeat("0", 32) && fields[1] == "00" && fields[9] != "lo" {
+			return fields[9]
+		}
+	}
+	return ""
+}
+
+func collectIncusStoragePools() []any {
+	socketPath, ok := detectIncusSocket()
+	if !ok {
+		return []any{}
+	}
+	client := newIncusUnixHTTPClient(socketPath)
+	return collectIncusStoragePoolsWithClient(client)
+}
+
+func collectIncusStoragePoolsWithClient(client *http.Client) []any {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	boundedClient := *client
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	boundedClient.Transport = deadlineTransport{ctx: ctx, base: transport}
+	response, err := incusRequest[[]struct {
+		Name   string `json:"name"`
+		Driver string `json:"driver"`
+	}](&boundedClient, "/1.0/storage-pools?recursion=1")
+	if err != nil {
+		return []any{}
+	}
+	pools := make([]any, 0, len(response))
+	for _, pool := range response {
+		if pool.Name != "" && len(pool.Name) <= 64 {
+			report := map[string]any{"name": pool.Name, "driver": pool.Driver}
+			resources, err := incusRequest[struct {
+				Space struct {
+					Total uint64 `json:"total"`
+					Used  uint64 `json:"used"`
+				} `json:"space"`
+			}](&boundedClient, "/1.0/storage-pools/"+url.PathEscape(pool.Name)+"/resources")
+			if err == nil {
+				report["space"] = map[string]any{"total": resources.Space.Total, "used": resources.Space.Used}
+			}
+			pools = append(pools, report)
+		}
+		if len(pools) >= 64 {
+			break
+		}
+	}
+	return pools
+}
+
+func networkInterfaces() []net.Interface {
+	interfaces, err := hostNetworkInterfaces()
+	if err != nil {
+		return nil
+	}
+	return interfaces
+}
+
+func firstIpv6Interface(interfaces []any) string {
+	for _, item := range interfaces {
+		value, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if addresses, ok := value["addresses"].([]any); ok {
+			for _, address := range addresses {
+				entry, ok := address.(map[string]any)
+				if !ok {
+					continue
+				}
+				if address, ok := entry["address"].(string); ok && strings.Contains(address, ":") {
+					if name, ok := value["name"].(string); ok {
+						return name
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func collectResources() map[string]any {
@@ -243,29 +398,6 @@ func readMeminfoKB() map[string]int64 {
 		values[key] = kb
 	}
 	return values
-}
-
-func readDiskStats(path string) map[string]any {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return map[string]any{}
-	}
-
-	blockSize := uint64(stat.Bsize)
-	total := stat.Blocks * blockSize
-	free := stat.Bfree * blockSize
-	if total == 0 || free > total {
-		return map[string]any{}
-	}
-
-	used := total - free
-	return map[string]any{
-		"diskMountpoint":     path,
-		"diskTotalBytes":     total,
-		"diskUsedBytes":      used,
-		"diskAvailableBytes": stat.Bavail * blockSize,
-		"diskUsagePercent":   roundPercent(float64(used) / float64(total) * 100),
-	}
 }
 
 func readLoadAverage() map[string]any {

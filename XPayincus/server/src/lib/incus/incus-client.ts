@@ -3,8 +3,9 @@
  * 使用 mTLS (双向 TLS) 与 Incus 服务器通信
  */
 
-import { Agent, request } from 'undici'
-import { readFileSync } from 'fs'
+import { Dispatcher, request } from 'undici'
+import { AgentTunnelDispatcher, resolveTunnelHostId } from '../agent-tunnel-dispatcher.js'
+import { getAgentTunnel } from '../agent-tunnel.js'
 import type {
   IncusClientOptions,
   IncusApiResponse
@@ -16,10 +17,12 @@ export class IncusClient {
   baseUrl: string
   certPath: string | null
   keyPath: string | null
-  agent: Agent | null = null
+  agent: Dispatcher | null = null
+  private hostId?: number
   connected: boolean = false
 
   constructor(options: IncusClientOptions) {
+    this.hostId = options.hostId
     this.baseUrl = IncusClient.normalizeUrl(options.url)
     const certificatePair = resolveCertificatePair(options.certPath, options.keyPath)
     this.certPath = certificatePair.certPath
@@ -65,23 +68,7 @@ export class IncusClient {
    */
   async connect(): Promise<unknown> {
     try {
-      if (!this.certPath || !this.keyPath) {
-        throw new Error('Certificate or key path is missing')
-      }
-
-      const cert = readFileSync(this.certPath)
-      const key = readFileSync(this.keyPath)
-
-      this.agent = new Agent({
-        connect: {
-          cert,
-          key,
-          rejectUnauthorized: false // Incus 使用自签名证书
-        },
-        // 超时配置，防止 Headers Timeout Error
-        headersTimeout: 120000, // 2分钟
-        bodyTimeout: 300000     // 5分钟（对于大数据传输）
-      })
+      this.agent = new AgentTunnelDispatcher(() => resolveTunnelHostId(this.hostId, this.baseUrl), 'incus')
 
       // 测试连接
       const info = await this.getServerInfo()
@@ -106,7 +93,7 @@ export class IncusClient {
     const url = `${this.baseUrl}${path}`
     const options: {
       method: string
-      dispatcher: Agent
+      dispatcher: Dispatcher
       headers: Record<string, string>
       body?: string
     } = {
@@ -175,22 +162,26 @@ export class IncusClient {
    * 读取实例文件（用于 Files API，不解析 JSON）
    * @returns 文件内容与 HTTP 状态码
    */
+  async stream(method: string, path: string, source?: AsyncIterable<Uint8Array>, headers: Record<string, string> = {}) {
+    if (!this.agent) throw new Error('Incus 客户端未连接')
+    const hostId = await resolveTunnelHostId(this.hostId, this.baseUrl)
+    return getAgentTunnel(hostId).requestStream('incus', method, path, source, headers)
+  }
+
   async readFile(path: string): Promise<{ content: string; statusCode: number }> {
     if (!this.agent) {
       throw new Error('Incus 客户端未连接')
     }
 
-    const url = `${this.baseUrl}${path}`
-    const response = await request(url, {
-      method: 'GET',
-      dispatcher: this.agent,
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    })
-
-    // Files API 返回原始文件内容，不是 JSON
-    const content = await response.body.text()
+    const response = await this.stream('GET', path)
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of response.body) {
+      size += chunk.length
+      if (size > 16 * 1024 * 1024) { response.body.destroy(); throw new Error('FILE_TEXT_LIMIT_USE_STREAM') }
+      chunks.push(chunk)
+    }
+    const content = Buffer.concat(chunks).toString('utf8')
 
     return { content, statusCode: response.statusCode }
   }

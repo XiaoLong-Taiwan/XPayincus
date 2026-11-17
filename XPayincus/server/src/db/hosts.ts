@@ -4,6 +4,7 @@
  */
 
 import { prisma } from './prisma.js'
+import { isIP } from 'node:net'
 import type { Instance, PackagePlan, Prisma } from '@prisma/client'
 import type { Host } from '../types/database.js'
 import { resolveStoragePoolForNewInstance } from './storage-pools.js'
@@ -15,6 +16,25 @@ import {
 import { countFreePublicIpv4ForHost } from './public-ipv4.js'
 
 type DbClient = Prisma.TransactionClient | typeof prisma
+
+function hostReportSupportsNetworkMode(reportValue: unknown, mode: string | null | undefined): boolean {
+  const report = reportValue && typeof reportValue === 'object' && !Array.isArray(reportValue) ? reportValue as Record<string, unknown> : {}
+  const host = report.host && typeof report.host === 'object' && !Array.isArray(report.host) ? report.host as Record<string, unknown> : {}
+  const interfacesValue = host.network && typeof host.network === 'object' && !Array.isArray(host.network) ? (host.network as Record<string, unknown>).interfaces : null
+  const interfaces = Array.isArray(interfacesValue) ? interfacesValue : []
+  const hasIpv4 = interfaces.some(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const addresses = (item as Record<string, unknown>).addresses
+    return Array.isArray(addresses) && addresses.some(address => address && typeof address === 'object' && !Array.isArray(address) && typeof (address as Record<string, unknown>).address === 'string' && isIP((address as Record<string, unknown>).address as string) === 4)
+  })
+  const hasRoutedIpv6 = host.routedIpv6 === true && Array.isArray(host.ipv6Prefixes) && host.ipv6Prefixes.some(value => {
+    if (typeof value !== 'string') return false
+    const [address, prefix, ...extra] = value.trim().split('/')
+    const prefixLength = Number(prefix)
+    return extra.length === 0 && isIP(address) === 6 && Number.isInteger(prefixLength) && prefixLength >= 1 && prefixLength <= 64
+  })
+  return (!networkModeNeedsPublicIpv4(mode) || hasIpv4) && (!networkModeNeedsRoutedIpv6(mode) || hasRoutedIpv6)
+}
 
 export type PlanUpgradeCapacityReason =
   | 'host_not_found'
@@ -365,6 +385,7 @@ export async function updateHost(id: number, data: {
   natPortEnd?: number | null
   ipv6ParentInterface?: string | null
   ipv6Subnet?: string | null
+  ipv6Mode?: number
   trafficResetDay?: number
   notifyPurchase?: boolean
   notifyRenew?: boolean
@@ -386,6 +407,7 @@ export async function updateHost(id: number, data: {
     natPortEnd?: number | null
     ipv6ParentInterface?: string | null
     ipv6Subnet?: string | null
+    ipv6Mode?: number
     trafficResetDay?: number
     notifyPurchase?: boolean
     notifyRenew?: boolean
@@ -407,6 +429,7 @@ export async function updateHost(id: number, data: {
   if (data.natPortEnd !== undefined) updateData.natPortEnd = data.natPortEnd ?? null
   if (data.ipv6ParentInterface !== undefined) updateData.ipv6ParentInterface = data.ipv6ParentInterface ?? null
   if (data.ipv6Subnet !== undefined) updateData.ipv6Subnet = data.ipv6Subnet ?? null
+  if (data.ipv6Mode !== undefined) updateData.ipv6Mode = data.ipv6Mode
   if (data.trafficResetDay !== undefined) updateData.trafficResetDay = data.trafficResetDay
   if (data.notifyPurchase !== undefined) updateData.notifyPurchase = data.notifyPurchase
   if (data.notifyRenew !== undefined) updateData.notifyRenew = data.notifyRenew
@@ -933,12 +956,18 @@ export async function selectAvailableHost(options: {
       continue
     }
 
+
     if (networkModeNeedsPublicIpv4(networkMode)) {
       const freePublicIpv4Count = await availabilityLookup(options.availabilityCache, `ipv4:${host.id}`, () => countFreePublicIpv4ForHost(prisma, host.id))
       if (freePublicIpv4Count <= 0) {
         console.log(`[selectAvailableHost] 宿主机 ` + host.name + ` 没有可用独立 IPv4 地址`)
         continue
       }
+    }
+
+    if (networkMode && (networkModeNeedsPublicIpv4(networkMode) || networkModeNeedsRoutedIpv6(networkMode))) {
+      const agentReport = await availabilityLookup(options.availabilityCache, `agent-host-report:${host.id}`, () => prisma.hostAgent.findUnique({ where: { hostId: host.id }, select: { lastReport: true } }))
+      if (!hostReportSupportsNetworkMode(agentReport?.lastReport, networkMode)) continue
     }
 
 
@@ -1157,12 +1186,18 @@ export async function selectAndReserveHostWithLock(
       continue
     }
 
+
     if (networkModeNeedsPublicIpv4(networkMode)) {
       const freePublicIpv4Count = await countFreePublicIpv4ForHost(tx as Prisma.TransactionClient, host.id)
       if (freePublicIpv4Count <= 0) {
         console.log(`[selectAndReserveHostWithLock] 宿主机 ` + host.name + ` 没有可用独立 IPv4 地址`)
         continue
       }
+    }
+
+    if (networkMode && (networkModeNeedsPublicIpv4(networkMode) || networkModeNeedsRoutedIpv6(networkMode))) {
+      const agentReport = await tx.hostAgent.findUnique({ where: { hostId: host.id }, select: { lastReport: true } })
+      if (!hostReportSupportsNetworkMode(agentReport?.lastReport, networkMode)) continue
     }
 
     // 检�?NAT 端口配额（如果需要）

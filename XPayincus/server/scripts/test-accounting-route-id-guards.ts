@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const rechargeSource = readFileSync(resolve(__dirname, '../src/routes/recharge.ts'), 'utf8')
-const balanceSource = readFileSync(resolve(__dirname, '../src/routes/balance.ts'), 'utf8')
-const affSource = readFileSync(resolve(__dirname, '../src/routes/aff.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const rechargeSource = readSource(resolve(__dirname, '../src/routes/recharge.ts'))
+const balanceSource = readSource(resolve(__dirname, '../src/routes/balance.ts'))
+const affSource = readSource(resolve(__dirname, '../src/routes/aff.ts'))
 
 function sectionBetween(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker)

@@ -6,6 +6,12 @@ const routePath = resolve(process.cwd(), 'src/routes/proxy-sites.ts')
 const source = readFileSync(routePath, 'utf8')
 const caddyClientPath = resolve(process.cwd(), 'src/lib/caddy-client.ts')
 const caddyClientSource = readFileSync(caddyClientPath, 'utf8')
+const instanceRoutePath = resolve(process.cwd(), 'src/routes/instances.ts')
+const transferRoutePath = resolve(process.cwd(), 'src/routes/transfers.ts')
+const instanceTaskWorkerPath = resolve(process.cwd(), 'src/workers/instanceTaskWorker.ts')
+const instanceRouteSource = readFileSync(instanceRoutePath, 'utf8')
+const transferRouteSource = readFileSync(transferRoutePath, 'utf8')
+const instanceTaskWorkerSource = readFileSync(instanceTaskWorkerPath, 'utf8')
 const outboundSecurityPath = resolve(process.cwd(), 'src/lib/outbound-security.ts')
 const outboundSecuritySource = readFileSync(outboundSecurityPath, 'utf8')
 
@@ -72,6 +78,18 @@ assert.ok(
   'Caddy failures must preserve the HTTP status code for exact 404 handling'
 )
 
+for (const [label, routeSource] of [
+  ['proxy sites', source],
+  ['instances', instanceRouteSource],
+  ['transfers', transferRouteSource],
+  ['instance tasks', instanceTaskWorkerSource]
+]) {
+  assert.doesNotMatch(routeSource, /createCaddyClient\s*\(\s*\{[^}]*host:\s*(?:targetHost|caddyHost|host\.(?:nat_public_ip|ip_address)|sourceHost\.(?:nat_public_ip|ip_address))/s, `${label} must never use a host IP as the Caddy management destination`)
+  assert.match(routeSource, /createCaddyClient\s*\(\s*\{[^}]*hostId:\s*[^,}]+,[^}]*host:\s*['"]127\.0\.0\.1['"],[^}]*port:\s*2019/s, `${label} Caddy calls must target loopback 2019 through the host-bound WSS dispatcher`)
+}
+
+assert.doesNotMatch(source, /site\.host\.caddy(?:Username|Password)/, 'proxy management must not require legacy Caddy credentials')
+
 assert.ok(
   caddyClientSource.includes(
     'if (!(postError instanceof CaddyApiError) || postError.statusCode !== 404)'
@@ -121,31 +139,7 @@ assert.doesNotMatch(
   'credentialed Caddy management requests must never disable TLS certificate verification'
 )
 
-assert.ok(
-  caddyClientSource.includes('caPath?: string') &&
-    caddyClientSource.includes('process.env.CADDY_CA_PATH') &&
-    caddyClientSource.includes('ca = readFileSync(caPath)') &&
-    caddyClientSource.includes('ca,') &&
-    caddyClientSource.includes("|| 'caddy-admin'") &&
-    caddyClientSource.includes('servername: serverName') &&
-    caddyClientSource.includes('rejectUnauthorized: true'),
-  'Caddy management TLS must verify the server with pinned CA trust material'
-)
-
-assert.ok(
-  caddyClientSource.includes('Caddy TLS trust material is missing') &&
-    caddyClientSource.indexOf('Caddy TLS trust material is missing') <
-      caddyClientSource.indexOf('this.agent = new Agent'),
-  'Caddy management requests must fail closed before creating a connection without trust material'
-)
-
-assert.ok(
-  caddyClientSource.includes('const caddyAgentCache = new Map<string, Agent>()') &&
-    caddyClientSource.includes('const cachedAgent = caddyAgentCache.get(agentKey)') &&
-    caddyClientSource.includes('this.agent = cachedAgent') &&
-    caddyClientSource.includes('caddyAgentCache.set(agentKey, this.agent)'),
-  'Caddy clients must reuse a module-level TLS Agent for the same host and trust configuration'
-)
+await import('./test-agent-tunnel.js')
 
 const deleteSiteSource = caddyClientSource.slice(caddyClientSource.indexOf('async deleteSite('), caddyClientSource.indexOf('async getSites('))
 assert.ok(

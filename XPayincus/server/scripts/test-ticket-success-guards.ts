@@ -2,17 +2,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const routeSource = readFileSync(resolve(process.cwd(), 'src/routes/tickets.ts'), 'utf8')
-const dbSource = readFileSync(resolve(process.cwd(), 'src/db/tickets.ts'), 'utf8')
-const schemaSource = readFileSync(resolve(process.cwd(), 'prisma/schema.prisma'), 'utf8')
-const migrationSource = readFileSync(resolve(process.cwd(), 'prisma/migrations/20260624233000_add_ticket_success_center/migration.sql'), 'utf8')
-const apiSource = readFileSync(resolve(process.cwd(), '../client/src/api/index.ts'), 'utf8')
-const adminApiSource = readFileSync(resolve(process.cwd(), '../client/src/api/admin.ts'), 'utf8')
-const ticketsViewSource = readFileSync(resolve(process.cwd(), '../client/src/views/TicketsView.vue'), 'utf8')
-const typesSource = readFileSync(resolve(process.cwd(), '../client/src/types/api.ts'), 'utf8')
-const zhCnLocale = readFileSync(resolve(process.cwd(), '../client/src/locales/zh-CN.ts'), 'utf8')
-const enLocale = readFileSync(resolve(process.cwd(), '../client/src/locales/en.ts'), 'utf8')
-const zhTwLocale = readFileSync(resolve(process.cwd(), '../client/src/locales/zh-TW.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const routeSource = readSource(resolve(process.cwd(), 'src/routes/tickets.ts'))
+const dbSource = readSource(resolve(process.cwd(), 'src/db/tickets.ts'))
+const schemaSource = readSource(resolve(process.cwd(), 'prisma/schema.prisma'))
+const migrationSource = readSource(resolve(process.cwd(), 'prisma/migrations/20260624233000_add_ticket_success_center/migration.sql'))
+const apiSource = readSource(resolve(process.cwd(), '../client/src/api/index.ts'))
+const adminApiSource = readSource(resolve(process.cwd(), '../client/src/api/admin.ts'))
+const ticketsViewSource = readSource(resolve(process.cwd(), '../client/src/views/TicketsView.vue'))
+const typesSource = readSource(resolve(process.cwd(), '../client/src/types/api.ts'))
+const zhCnLocale = readSource(resolve(process.cwd(), '../client/src/locales/zh-CN.ts'))
+const enLocale = readSource(resolve(process.cwd(), '../client/src/locales/en.ts'))
+const zhTwLocale = readSource(resolve(process.cwd(), '../client/src/locales/zh-TW.ts'))
 
 assert.ok(
   schemaSource.includes('firstResponseDueAt DateTime? @map("first_response_due_at")') &&

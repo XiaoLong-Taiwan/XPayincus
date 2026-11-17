@@ -43,6 +43,7 @@ func writeTestConfig(t *testing.T, heartbeatInterval string) string {
 	content := "panel_url: \"https://panel.example\"\n" +
 		"agent_id: \"agt_test\"\n" +
 		"agent_secret: \"ias_test\"\n" +
+		"state_dir: \"" + filepath.Join(t.TempDir(), "state") + "\"\n" +
 		"heartbeat_interval_seconds: " + heartbeatInterval + "\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("write config: %v", err)

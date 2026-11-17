@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 
 const source = readFileSync(new URL('../src/routes/agent.ts', import.meta.url), 'utf8')
-const builder = source.slice(source.indexOf('function buildAgentInstallConfig('), source.indexOf('function getAgentReleaseRepository('))
+const builder = source.slice(source.indexOf('function shellEscape('), source.indexOf('function getAgentReleaseRepository('))
 const route = source.slice(source.indexOf("  fastify.get<{ Params: AgentInstallTokenParams;"), source.indexOf('  fastify.get<{ Params: AgentBinaryParams;'))
 
 async function invoke(bootstrap: boolean, installed = false, failure = '') {
@@ -20,7 +21,7 @@ async function invoke(bootstrap: boolean, installed = false, failure = '') {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
   }).outputText
   new Function('fastify', 'consumeHostAgentInstallToken', 'prisma', 'readPanelCertificatePair',
-    'existsSync', 'join', 'dirname', '__dirname', 'shellEscape', 'createLog', 'LogModule', 'LogResult', compiled)(
+    'existsSync', 'join', 'dirname', '__dirname', 'shellEscape', 'createLog', 'LogModule', 'LogResult', 'derivePanelUrl', 'createHmac', 'getJwtSigningSecret', 'Buffer', compiled)(
     { get(_path: string, _options: unknown, callback: typeof handler) { handler = callback } },
     async () => {
       consumed++
@@ -30,7 +31,8 @@ async function invoke(bootstrap: boolean, installed = false, failure = '') {
     { host: { findUnique: async () => ({ isInstalled: installed }) } },
     () => { if (failure === 'certificate') throw new Error('private-key-marker'); return { cert: Buffer.from('fixture-certificate') } },
     () => false, (...parts: string[]) => parts.join('/'), () => '', '/fixture',
-    (value: string) => `'${value}'`, async () => {}, { HOST: 'host' }, { SUCCESS: 'success' }
+    (value: string) => `'${value}'`, async () => {}, { HOST: 'host' }, { SUCCESS: 'success' },
+    () => 'https://panel.example.org', createHmac, () => 'fixture-signing-secret', Buffer
   )
   await handler!({ params: { token: 'fixture' }, query: bootstrap ? { bootstrap: '1' } : {}, log: { info() {} } }, reply)
   return { consumed, status, payload }
@@ -42,7 +44,13 @@ for (const installed of [true, false]) {
   assert.equal(result.consumed, 1)
   assert.ok(result.payload.includes(`INCUDAL_HOST_INSTALLED='${installed}'`))
   assert.ok(result.payload.includes(`INCUDAL_PANEL_CERTIFICATE='${Buffer.from('fixture-certificate').toString('base64')}'`))
-  assert.equal(result.payload.trim().split('\n').length, 4)
+  assert.match(result.payload, /^INCUDAL_CADDY_INSTALL_URL='https:\/\/panel\.example\.org\/api\/hosts\/caddy-script\/[A-Za-z0-9_-]+'$/m)
+  assert.equal(result.payload.trim().split('\n').length, 5)
+  const scriptToken = result.payload.match(/caddy-script\/([A-Za-z0-9_-]+)/)![1]
+  const [hostId, expires, signature] = Buffer.from(scriptToken, 'base64url').toString().split(':')
+  assert.equal(hostId, '1')
+  assert.ok(Number(expires) > Date.now() && Number(expires) <= Date.now() + 30 * 60 * 1000)
+  assert.ok(timingSafeEqual(Buffer.from(signature), Buffer.from(createHmac('sha256', 'fixture-signing-secret').update(`${hostId}:${expires}`).digest('hex'))))
 }
 const legacy = await invoke(false)
 assert.equal(legacy.payload.trim().split('\n').length, 2)

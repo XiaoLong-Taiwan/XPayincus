@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const routeSource = readFileSync(resolve(process.cwd(), 'src/routes/custom-init-commands.ts'), 'utf8')
-const dbSource = readFileSync(resolve(process.cwd(), 'src/db/custom-init-commands.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const routeSource = readSource(resolve(process.cwd(), 'src/routes/custom-init-commands.ts'))
+const dbSource = readSource(resolve(process.cwd(), 'src/db/custom-init-commands.ts'))
 
 assert.ok(
   routeSource.includes('function parsePositiveRouteId(value: string): number | null') &&

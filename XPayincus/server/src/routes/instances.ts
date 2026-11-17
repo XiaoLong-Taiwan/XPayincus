@@ -3339,15 +3339,8 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         console.log(`[SyncStatus] Instance ${instanceId} IPv4 changed: ${oldIpv4} -> ${newIpv4}`)
 
         const proxySites = await getProxySitesByInstanceId(instanceId)
-        if (proxySites.length > 0 && host.caddy_enabled && host.caddy_username && host.caddy_password) {
-          const targetHost = host.nat_public_ip || host.ip_address
-          if (targetHost) {
-            const caddyClient = createCaddyClient({
-              host: targetHost,
-              port: host.caddy_port || 8444,
-              username: host.caddy_username,
-              password: host.caddy_password
-            })
+        if (proxySites.length > 0 && host.caddy_enabled) {
+          const caddyClient = createCaddyClient({ hostId: host.id, host: '127.0.0.1', port: 2019 })
 
             for (const site of proxySites) {
               if (site.status === 'active' && site.enabled) {
@@ -3361,7 +3354,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
                 }
               }
             }
-          }
         }
       }
       return reply.code(200).send({
@@ -4006,15 +3998,8 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       const proxySites = await getProxySitesByInstanceId(instanceId)
       if (proxySites.length > 0) {
         // 尝试删除 Caddy 远程配置
-        if (host.caddy_enabled && host.caddy_username && host.caddy_password) {
-          const targetHost = host.nat_public_ip || host.ip_address
-          if (targetHost) {
-            const caddyClient = createCaddyClient({
-              host: targetHost,
-              port: host.caddy_port || 8444,
-              username: host.caddy_username,
-              password: host.caddy_password
-            })
+        if (host.caddy_enabled) {
+          const caddyClient = createCaddyClient({ hostId: host.id, host: '127.0.0.1', port: 2019 })
 
             for (const site of proxySites) {
               try {
@@ -4024,7 +4009,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
                 console.error(`删除 Caddy 反代站点失败 (${site.domain}):`, errorMessage)
               }
             }
-          }
         }
       }
 
@@ -4452,6 +4436,9 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const mapping = await db.getPortMappingById(portMappingId)
     if (!mapping || mapping.instance_id !== instanceId) {
       return reply.code(404).send(apiError(ErrorCode.PORT_MAPPING_NOT_FOUND))
+    }
+    if (mapping.system_managed) {
+      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
     // 检查转移锁定

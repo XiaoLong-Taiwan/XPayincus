@@ -47,6 +47,7 @@ import authRoutes from './routes/auth.js'
 import userRoutes from './routes/users.js'
 import instanceRoutes from './routes/instances.js'
 import hostRoutes from './routes/hosts.js'
+import hostPortRoutes from './routes/host-ports.js'
 import packageRoutes from './routes/packages.js'
 import snapshotRoutes from './routes/snapshots.js'
 import backupRoutes from './routes/backups.js'
@@ -89,6 +90,7 @@ import mailRoutes from './routes/mail.js'
 import adminNotificationChannelsRoutes from './routes/admin-notification-channels.js'
 import telegramRoutes from './routes/telegram.js'
 import agentRoutes from './routes/agent.js'
+import agentTunnelRoutes from './routes/agent-tunnel.js'
 import userInviteRoutes from './routes/user-invites.js'
 import vipLevelRoutes from './routes/vip-levels.js'
 import vipBenefitRoutes from './routes/vip-benefits.js'
@@ -519,6 +521,7 @@ await fastify.register(userRoutes, { prefix: '/api/users' })
 await fastify.register(operationsRoutes, { prefix: '/api/operations' })
 await fastify.register(instanceRoutes, { prefix: '/api/instances' })
 await fastify.register(hostRoutes, { prefix: '/api/hosts' })
+await fastify.register(hostPortRoutes, { prefix: '/api/hosts' })
 await fastify.register(packageRoutes, { prefix: '/api/packages' })
 await fastify.register(snapshotRoutes, { prefix: '/api/instances' })
 await fastify.register(backupRoutes, { prefix: '/api/instances' })
@@ -563,6 +566,7 @@ await fastify.register(mailRoutes, { prefix: '/api/mail' })
 await fastify.register(adminNotificationChannelsRoutes, { prefix: '/api/admin/notification-channels' })
 await fastify.register(telegramRoutes, { prefix: '/api/telegram' })
 await fastify.register(agentRoutes, { prefix: '/api/agent' })
+await fastify.register(agentTunnelRoutes, { prefix: '/api/agent' })
 await fastify.register(userInviteRoutes, { prefix: '/api/user-invites' })
 await fastify.register(vipLevelRoutes)
 await fastify.register(vipBenefitRoutes)

@@ -1,6 +1,6 @@
 # 系统架构
 
-XPayincus 是面向 Incus/LXC/KVM 商業交付的主控面板。統一倉包含 `XPayincus/client`、`XPayincus/server` 與 `XPayincus-Agent`；RFW／ZFS 位於 `XPayincus-Agent/components/rfw`、`XPayincus-Agent/components/zfs`，整體版本以根 `VERSION` 為準，本次發行目標為 v1.0.19（發布狀態以 GitHub Release 為準）。Go Agent 不直接載入 eBPF 或 ZFS 核心模組。
+XPayincus 是面向 Incus/LXC/KVM 商業交付的主控面板。統一倉包含 `XPayincus/client`、`XPayincus/server` 與 `XPayincus-Agent`；RFW／ZFS 位於 `XPayincus-Agent/components/rfw`、`XPayincus-Agent/components/zfs`，整體版本以根 `VERSION` 為準，本次發行目標為 v1.0.20（發布狀態以 GitHub Release 為準）。Go Agent 不直接載入 eBPF 或 ZFS 核心模組。
 
 面板可使用專用 Compose，僅部署 PostgreSQL、單一 API 與雙前端；以 `deploy/compose/docker-compose.yml` 引用 `compose.yaml`，支援 Nginx、Cloudflare Tunnel 或外部 HTTPS 代理，前端預設 loopback 3000／3001。Incus、Agent、RFW、ZFS 保留宿主部署。下圖為保留的 systemd／Nginx 宿主布局，該布局的 OTA 不適用 Compose；Compose 以指定來源版本重建。API 僅允許一個 Node 程序，不支援 cluster、多 worker、多容器副本或新舊後端同寫 DB。
 
@@ -21,7 +21,7 @@ XPayincus 是面向 Incus/LXC/KVM 商業交付的主控面板。統一倉包含 
 
 后端 Node API
   -> PostgreSQL
-  -> Incus 节点 / Agent
+  <-> Agent 主動建立的 WSS 管理隧道（不直連宿主管理埠）
   -> 支付、SMTP、Telegram、Lsky、Turnstile
   -> 后台 OTA
 ```
@@ -35,7 +35,7 @@ Redis 僅由歷史一鍵安裝器保留作部署相容；核心不依賴 Redis�
 | 用户端 | `client/src` + `VITE_APP_ENTRY=user` | 用户登录、实例、终端、钱包、工单、通知、礼品卡和自助页面 |
 | 管理端 | `client/src/admin` + `VITE_APP_ENTRY=admin` | 管理后台、配置、资源、账务、交付和 OTA |
 | 后端 | `server/src` | Fastify API、鉴权、数据库、任务、支付、资源交付和审计 |
-| Agent | `../XPayincus-Agent` | 宿主心跳、資源、實例與流量回報；此表目錄相對於 `XPayincus/` |
+| Agent | `../XPayincus-Agent` | 宿主心跳、資源、實例與流量回報，以及至本機 Incus socket／Caddy admin 的出站 WSS 管理隧道；此表目錄相對於 `XPayincus/` |
 | 宿主元件 | `../XPayincus-Agent/components/rfw`、`../XPayincus-Agent/components/zfs` | eBPF/XDP 防火牆與 Debian ZFS builder，不隨 Go Agent 升級自動替換 |
 | 文档站 | `docs-site/docs` | 公开文档、API 说明和 SDK 示例 |
 

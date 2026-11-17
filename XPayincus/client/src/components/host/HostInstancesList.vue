@@ -101,6 +101,7 @@ const emit = defineEmits<{
   (e: 'sync-instance', instance: any): void
   (e: 'toggle-swap', instance: any): void
   (e: 'open-single-config', instanceId: number): void
+  (e: 'open-port-config', instanceId: number): void
   (e: 'open-price', instance: any): void
   (e: 'open-reset-traffic', instance: any): void
   (e: 'open-recreate', instance: any): void
@@ -312,6 +313,8 @@ function getDetailError(id: number): string { return props.detailConfigErrors[id
               <div class="mb-4 text-xs font-semibold uppercase tracking-[0.2em]" :class="textMuted(props.isDark)">{{ t('common.actions') }}</div>
               <div class="flex flex-wrap gap-2" @click.stop>
                 <button class="btn-secondary btn-sm" @click="emit('open-single-config', instance.id)">{{ t('host.batchConfig.button') }}</button>
+                <button class="btn-secondary btn-sm" @click="emit('open-port-config', instance.id)">{{ t('admin.hosts.portMappings') }}</button>
+                <button class="btn-secondary btn-sm" @click="emit('open-port-config', instance.id)">{{ t('admin.hosts.portMappings') }}</button>
                 <button class="btn-secondary btn-sm" :disabled="props.isInstanceSyncing(instance.id)" @click="emit('sync-instance', instance)">{{ props.isInstanceSyncing(instance.id) ? t('common.syncing') : t('admin.hosts.batchSyncStatus') }}</button>
                 <button v-if="props.getDetailConfig(instance.id)?.swap.available && props.canToggleSwap(instance)" class="btn-secondary btn-sm" :disabled="props.isSwapActionLoading(instance.id)" @click="emit('toggle-swap', instance)">{{ props.isSwapActionLoading(instance.id) ? t('common.processing') : (props.getDetailConfig(instance.id)?.swap.enabled ? t('instanceConfig.swap.disableButton') : t('instanceConfig.swap.enableButton')) }}</button>
                 <button v-if="instance.trafficData && Number(instance.trafficData.monthlyUsed) > 0" class="btn-secondary btn-sm" :disabled="props.resettingTrafficId === instance.id" @click="emit('open-reset-traffic', instance)">{{ t('admin.hosts.resetTraffic') }}</button>

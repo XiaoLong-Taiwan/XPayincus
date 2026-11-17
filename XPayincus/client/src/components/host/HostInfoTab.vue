@@ -246,6 +246,9 @@ const agentStatusInfo = computed(() => {
 
 const agentReport = computed(() => agentStatus.value?.lastReport ?? {})
 const hostResources = computed(() => agentReport.value.resources ?? {})
+const reportedHost = computed(() => agentReport.value.host ?? {})
+const reportedInterfaces = computed(() => reportedHost.value.network?.interfaces ?? [])
+const reportedPools = computed(() => reportedHost.value.storagePools ?? [])
 const hostMetrics = computed(() => agentReport.value.metrics ?? {})
 const agentHeartbeatIntervalSeconds = computed(() => {
   const value = hostMetrics.value.heartbeatIntervalSeconds
@@ -965,6 +968,37 @@ const xAxisLabels = computed(() => {
           <p class="text-lg font-semibold" :class="themeStore.isDark ? 'text-gray-200' : 'text-gray-900'">
             {{ hostResources.processCount ?? '-' }}
           </p>
+        </div>
+      </div>
+
+      <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <div class="rounded-lg p-4" :class="themeStore.isDark ? 'bg-gray-900/60' : 'bg-white border border-gray-200 shadow-sm'">
+          <p class="text-xs font-medium mb-2" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'">{{ t('admin.hosts.agentNetwork') }}</p>
+          <div v-if="reportedInterfaces.length" class="space-y-2 text-xs">
+            <div v-for="networkInterface in reportedInterfaces" :key="networkInterface.name" class="space-y-1">
+              <p class="font-mono" :class="themeStore.isDark ? 'text-gray-300' : 'text-gray-700'">{{ networkInterface.name || '-' }}</p>
+              <p class="break-words font-mono" :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">
+                {{ networkInterface.addresses?.map(address => `${address.address || '-'} /${address.prefixLength ?? '-'}`).join(', ') || '-' }}
+              </p>
+            </div>
+          </div>
+          <p v-else class="text-xs" :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">-</p>
+          <p class="mt-3 text-xs" :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">
+            {{ t('admin.hosts.agentIpv6Routing') }}:
+            <span :class="themeStore.isDark ? 'text-gray-300' : 'text-gray-700'">
+              {{ reportedHost.routedIpv6 ? (reportedHost.ipv6Prefixes?.join(', ') || '-') : t('admin.hosts.agentIpv6Disabled') }}
+            </span>
+          </p>
+        </div>
+
+        <div class="rounded-lg p-4" :class="themeStore.isDark ? 'bg-gray-900/60' : 'bg-white border border-gray-200 shadow-sm'">
+          <p class="text-xs font-medium mb-2" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'">{{ t('admin.hosts.agentStoragePools') }}</p>
+          <div v-if="reportedPools.length" class="space-y-1 text-xs">
+            <p v-for="pool in reportedPools" :key="pool.name" class="font-mono" :class="themeStore.isDark ? 'text-gray-300' : 'text-gray-700'">
+              {{ pool.name || '-' }}<span class="font-sans" :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'"> ({{ pool.driver || 'unknown' }})</span>
+            </p>
+          </div>
+          <p v-else class="text-xs" :class="themeStore.isDark ? 'text-gray-500' : 'text-gray-500'">-</p>
         </div>
       </div>
     </template>

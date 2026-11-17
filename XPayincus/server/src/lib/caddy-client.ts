@@ -1,22 +1,21 @@
 /**
  * Caddy API 客户端
- * 通过 8444 端口 Basic Auth 保护的通道调用 Caddy Admin API
+ * 通过 Agent WSS 隧道调用宿主机本机 Caddy Admin API
  */
 
-import { Agent, request as undiciRequest } from 'undici'
-import { readFileSync } from 'node:fs'
-import { formatHostForUrl, getAddressFamily, normalizeNetworkHost } from './network-address.js'
+import { Dispatcher, request as undiciRequest } from 'undici'
+import { AgentTunnelDispatcher } from './agent-tunnel-dispatcher.js'
+import { getAddressFamily, normalizeNetworkHost } from './network-address.js'
 
 // 请求超时配置（毫秒）
 const REQUEST_TIMEOUT = 30000 // 30秒
-const CONNECT_TIMEOUT = 10000 // 10秒
-const caddyAgentCache = new Map<string, Agent>()
 
 export interface CaddyClientConfig {
+  hostId?: number
   host: string // 宿主机 IP 或域名
-  port: number // Caddy API 端口 (默认 8444)
-  username: string // Basic Auth 用户名
-  password: string // Basic Auth 密码
+  port: number // 固定为本机 Caddy Admin API 端口 2019
+  username?: string
+  password?: string
   caPath?: string // Caddy 管理端 TLS CA PEM 路径（未传时使用 CADDY_CA_PATH）
   serverName?: string // TLS 证书名称（默认匹配安装脚本生成的 caddy-admin）
 }
@@ -47,43 +46,14 @@ class CaddyApiError extends Error {
  */
 export class CaddyClient {
   private baseUrl: string
-  private authHeader: string
-  private agent: Agent
+  private agent: Dispatcher
 
   constructor(config: CaddyClientConfig) {
-    this.baseUrl = `https://${formatHostForUrl(config.host)}:${config.port}`
-    this.authHeader = 'Basic ' + Buffer.from(`${config.username}:${config.password}`).toString('base64')
-
-    const caPath = config.caPath?.trim() || process.env.CADDY_CA_PATH?.trim()
-    if (!caPath) {
-      throw new Error('Caddy TLS trust material is missing: configure caPath or CADDY_CA_PATH')
-    }
-
-    let ca: Buffer
-    try {
-      ca = readFileSync(caPath)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Unable to read Caddy TLS CA: ${message}`)
-    }
-    const serverName = config.serverName?.trim() || process.env.CADDY_TLS_SERVER_NAME?.trim() || 'caddy-admin'
-    const agentKey = `${config.host}:${config.port}:${caPath}:${serverName}`
-    const cachedAgent = caddyAgentCache.get(agentKey)
-
-    // Basic Auth 凭证只能通过由固定 CA 验证的 TLS 连接发送。
-    if (cachedAgent) {
-      this.agent = cachedAgent
-    } else {
-      this.agent = new Agent({
-        connect: {
-          ca,
-          servername: serverName,
-          rejectUnauthorized: true,
-          timeout: CONNECT_TIMEOUT
-        }
-      })
-      caddyAgentCache.set(agentKey, this.agent)
-    }
+    this.baseUrl = 'http://127.0.0.1:2019'
+    this.agent = new AgentTunnelDispatcher(async () => {
+      if (!Number.isSafeInteger(config.hostId) || config.hostId! < 1) throw new Error('TUNNEL_HOST_ID_REQUIRED')
+      return config.hostId!
+    }, 'caddy')
   }
 
   /**
@@ -105,7 +75,6 @@ export class CaddyClient {
         dispatcher: this.agent,
         signal: controller.signal,
         headers: {
-          'Authorization': this.authHeader,
           'Content-Type': 'application/json'
         },
         body: body ? JSON.stringify(body) : undefined

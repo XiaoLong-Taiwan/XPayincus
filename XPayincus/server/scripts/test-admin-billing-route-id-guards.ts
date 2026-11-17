@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const source = readFileSync(resolve(__dirname, '../src/routes/admin-billing.ts'), 'utf8')
-const billingOperationsSource = readFileSync(resolve(__dirname, '../src/db/billing-operations.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const source = readSource(resolve(__dirname, '../src/routes/admin-billing.ts'))
+const billingOperationsSource = readSource(resolve(__dirname, '../src/db/billing-operations.ts'))
 const manualRefundRoute = source.slice(
   source.indexOf("app.post('/api/admin/instances/:id/refund'"),
   source.indexOf('// ==================== 管理员删除并退款 ====================')

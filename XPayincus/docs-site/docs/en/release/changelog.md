@@ -5,7 +5,14 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.19**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.20**; GitHub Releases record publication status.
+
+## v1.0.20 WSS Management and Host Fixes (Release Target)
+
+- Accept existing `admin localhost:2019` and migrate to `127.0.0.1:2019`, preserving autosaved sites with configuration validation and failure recovery cases.
+- Agents establish outbound WSS tunnels. The panel does not connect directly to host Incus/Caddy management ports. Coordinate Server and Agent upgrades: new frames have no legacy capability negotiation or direct-connection fallback. Proxies must support WebSocket Upgrade and long-lived connections; interrupted writes are not replayed automatically.
+- Use the associated `instance_data` storage pool for system-disk capacity while preserving nonzero administrator settings, and normalize amd64/arm64 architectures. Match managed port mappings by protocol and public port, report IPv4/IPv6 and instance type, and mark failures partial/unknown. This is not a scan of all host listeners.
+- Synchronize all product version sources and current documentation to v1.0.20. No tests, builds, commits, or publication were performed. See `docs-site/release-notes/v1.0.20.md`.
 
 ## v1.0.19 Recovery Guidance and Initial Trust (Release Target)
 
@@ -81,7 +88,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.18` to `v1.0.19`, without implying that the preceding version was published.
+- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.19` to `v1.0.20`, without implying that the preceding version was published.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 

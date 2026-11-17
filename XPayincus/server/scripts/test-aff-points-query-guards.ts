@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const affDbSource = readFileSync(resolve(__dirname, '../src/db/aff.ts'), 'utf8')
-const pointsDbSource = readFileSync(resolve(__dirname, '../src/db/points.ts'), 'utf8')
-const affRouteSource = readFileSync(resolve(__dirname, '../src/routes/aff.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const affDbSource = readSource(resolve(__dirname, '../src/db/aff.ts'))
+const pointsDbSource = readSource(resolve(__dirname, '../src/db/points.ts'))
+const affRouteSource = readSource(resolve(__dirname, '../src/routes/aff.ts'))
 
 function sectionBetween(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker)

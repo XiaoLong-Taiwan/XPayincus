@@ -15,6 +15,7 @@ import RecreateModal from '@/components/instance/modals/RecreateModal.vue'
 import type { InstanceConfigResponse } from '@/types/api'
 import { translateError } from '@/utils/errorHandler'
 import { instanceDetailPath } from '@/utils/app-paths'
+import { instanceDetailPath as adminInstanceDetailPath } from '@/utils/app-paths-admin'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -1245,6 +1246,13 @@ function goToInstance(id: number) {
     query: { fromHost: props.hostId.toString() }
   })
 }
+
+function goToPortConfig(id: number) {
+  router.push({
+    path: authStore.user?.role === 'admin' ? adminInstanceDetailPath(id) : instanceDetailPath(id),
+    query: { fromHost: props.hostId.toString(), tab: 'network', managePorts: '1' }
+  })
+}
 </script>
 
 <template>
@@ -1517,6 +1525,7 @@ function goToInstance(id: number) {
         @sync-instance="(instance) => { void syncSingleInstance(instance as Instance) }"
         @toggle-swap="(instance) => { void toggleInstanceSwap(instance as Instance) }"
         @open-single-config="openSingleConfigModal"
+        @open-port-config="goToPortConfig"
         @open-price="openPriceModal"
         @open-reset-traffic="openResetTrafficModal"
         @open-recreate="(instance) => { void openRecreateModal(instance as Instance) }"

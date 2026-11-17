@@ -5,7 +5,14 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.19**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.20**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.20 WSS 管理與宿主修復（發行目標）
+
+- 相容既有 `admin localhost:2019`，安全遷移至 `127.0.0.1:2019`，保留 autosave 站點，新增設定／服務驗證與失敗恢復案例。
+- Agent 建立出站 WSS 隧道，面板不直連 Incus／Caddy 管理埠；Server 與 Agent 須協調升級，沒有舊版協商或直連降級。反向代理須支援 WebSocket Upgrade 與長連線；串流斷線不自動重播寫入。
+- 系統盤容量取自關聯的 `instance_data` 儲存池，保留非零管理配置；正規化 amd64／arm64 架構。端口頁按協定及公開端口匹配受管映射，顯示 IPv4／IPv6 與實例類型，失敗標示 partial／unknown，非全部 listener 掃描。
+- 全部產品版本來源與現行文件同步至 v1.0.20。本次未執行測試、建置、提交或發布；詳見 `docs-site/release-notes/v1.0.20.md`。
 
 ## v1.0.19 恢復提示與首次信任（發行目標）
 
@@ -81,7 +88,7 @@
 ## 版本号规则 / Versioning Rule
 
 - 唯一版本來源為統一倉庫根 `VERSION`，格式為 canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]`，依根 `RELEASE.md` 契約維護。
-- Patch 不限個位數；本輪由來源版本 `v1.0.18` 遞增為 `v1.0.19`，不據此推定前版已發布。
+- Patch 不限個位數；本輪由來源版本 `v1.0.19` 遞增為 `v1.0.20`，不據此推定前版已發布。
 - 核心數字與純數字預發行識別碼不得有前導零；版本檔不得有 BOM、空白或額外行，僅允許可選的一個 LF／CRLF 結尾。
 - 歷史 tag、交接與發行說明保留原樣，第三方相依及實際 ZFS 模組版本不跟隨產品升版。
 

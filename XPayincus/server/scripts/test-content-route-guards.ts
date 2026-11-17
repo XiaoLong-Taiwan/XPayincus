@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const announcementsSource = readFileSync(resolve(process.cwd(), 'src/routes/announcements.ts'), 'utf8')
-const helpSource = readFileSync(resolve(process.cwd(), 'src/routes/help.ts'), 'utf8')
-const helpDbSource = readFileSync(resolve(process.cwd(), 'src/db/help.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const announcementsSource = readSource(resolve(process.cwd(), 'src/routes/announcements.ts'))
+const helpSource = readSource(resolve(process.cwd(), 'src/routes/help.ts'))
+const helpDbSource = readSource(resolve(process.cwd(), 'src/db/help.ts'))
 
 function sectionBetween(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker)

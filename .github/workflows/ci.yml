@@ -38,6 +38,7 @@ jobs:
           python3 scripts/test-agent-installer.py
           python3 scripts/test-panel-trust-diagnostics.py
           python3 scripts/test-host-install-trust.py
+          python3 scripts/test-caddy-install.py
           python3 scripts/test-host-shortcuts.py
           python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
   panel:
@@ -63,7 +64,21 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm rebuild esbuild
       - run: pnpm --filter server exec prisma generate
-      - run: pnpm test
+      - name: Test Agent tunnel transport
+        run: pnpm --filter server test:agent-tunnel
+      - name: Test Agent tunnel authentication
+        run: pnpm --filter server test:agent-tunnel-auth
+      - name: Test Agent tunnel streaming
+        run: pnpm --filter server test:agent-tunnel-stream
+      - name: Test Agent integration guards
+        run: pnpm --filter server test:agent-integration-guards
+      - name: Test host Agent onboarding guards
+        run: pnpm --filter server test:host-agent-onboarding-guards
+      - name: Test host port management guards
+        run: pnpm --filter server test:host-port-management-guards
+      - name: Test host Caddy behavior
+        run: pnpm --filter server test:host-caddy-behavior
+      - run: pnpm test:core
       - run: pnpm --filter server test:storage-pool-update
       - run: pnpm --filter client test:host-install-ui-guards
       - run: pnpm --filter server test:panel-backup-guards

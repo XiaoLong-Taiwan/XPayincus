@@ -6,7 +6,7 @@
 
 | 元件 | 倉庫根相對來源 | 執行／載入責任 |
 | --- | --- | --- |
-| Go Agent | `XPayincus-Agent/cmd`、`XPayincus-Agent/internal` | 心跳、只讀監控與自身二進位升級 |
+| Go Agent | `XPayincus-Agent/cmd`、`XPayincus-Agent/internal` | 心跳、監控、自身二進位升級與固定本機目的地的 WSS 管理隧道 |
 | RFW | `XPayincus-Agent/components/rfw` | 獨立 Rust 使用者空間程序管理 eBPF/XDP |
 | ZFS builder | `XPayincus-Agent/components/zfs` | 管理者在專用 Debian 編譯機執行 DKMS 建置；模組由宿主管理流程載入 |
 

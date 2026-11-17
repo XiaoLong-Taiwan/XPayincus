@@ -5,49 +5,16 @@
  */
 
 import type { WebSocket as WsWebSocket } from 'ws'
-import { Agent, request } from 'undici'
-import { readFileSync } from 'fs'
+import { Dispatcher, request } from 'undici'
+import { AgentTunnelDispatcher } from './agent-tunnel-dispatcher.js'
+import { getAgentTunnel, type TunnelSocket } from './agent-tunnel.js'
 import type { Host } from '../types/database.js'
-import { resolveCertificatePair } from './incus/certificate-paths.js'
 
 // 证书缓存（避免每次连接都读取文件）
-interface CertCache {
-    cert: Buffer
-    key: Buffer
-    lastModified: number
-}
-const certCache = new Map<string, CertCache>()
-const CERT_CACHE_TTL = 60 * 60 * 1000 // 1小时
 
 /**
  * 获取缓存的证书（避免重复 I/O 读取）
  */
-function getCachedCertificates(certPath: string, keyPath: string): { cert: Buffer; key: Buffer } {
-    const resolvedPair = resolveCertificatePair(certPath, keyPath)
-    if (!resolvedPair.certPath || !resolvedPair.keyPath) {
-        throw new Error('Failed to read certificate files: certificate or key path is missing')
-    }
-
-    const cacheKey = `${resolvedPair.certPath}:${resolvedPair.keyPath}`
-    const cached = certCache.get(cacheKey)
-    const now = Date.now()
-
-    // 缓存有效
-    if (cached && (now - cached.lastModified) < CERT_CACHE_TTL) {
-        return { cert: cached.cert, key: cached.key }
-    }
-
-    // 读取并缓存（添加异常保护）
-    try {
-        const cert = readFileSync(resolvedPair.certPath)
-        const key = readFileSync(resolvedPair.keyPath)
-        certCache.set(cacheKey, { cert, key, lastModified: now })
-        return { cert, key }
-    } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err)
-        throw new Error(`Failed to read certificate files: ${errorMessage}`)
-    }
-}
 
 // 终端会话配置
 // 保活策略：只要 WebSocket 通道正常就不断开
@@ -70,8 +37,8 @@ export interface TerminalSession {
     host: Host
     instanceName: string
     instanceType: 'container' | 'vm'
-    incusWebSocket: WsWebSocket | null
-    controlWebSocket: WsWebSocket | null  // 控制 WebSocket（用于调整终端大小）
+    incusWebSocket: TunnelSocket | null
+    controlWebSocket: TunnelSocket | null
     clientWebSocket: WsWebSocket
     heartbeatTimer: NodeJS.Timeout | null
     createdAt: number
@@ -127,6 +94,8 @@ function buildExecPayload(): Record<string, unknown> {
     }
 }
 
+class TerminalOperationError extends Error {}
+
 function buildConsolePayload(): Record<string, unknown> {
     return {
         'wait-for-websocket': true,
@@ -136,7 +105,7 @@ function buildConsolePayload(): Record<string, unknown> {
 
 async function requestTerminalOperation(
     baseUrl: string,
-    agent: Agent,
+    agent: Dispatcher,
     endpoint: string,
     payload: Record<string, unknown>
 ): Promise<{ operationId: string; fds: Record<string, string> }> {
@@ -163,7 +132,7 @@ async function requestTerminalOperation(
     }
 
     if (data.type === 'error' || (data.error_code !== undefined && data.error_code !== 0)) {
-        throw new Error(data.error || 'Failed to create terminal session')
+        throw new TerminalOperationError(data.error || 'Failed to create terminal session')
     }
 
     const operationId = data.operation?.split('/').pop() || data.metadata?.id
@@ -191,7 +160,7 @@ function safeSendClientMessage(clientWs: WsWebSocket, message: Record<string, un
     }
 }
 
-function closeIncusConnectionPair(dataWs: WsWebSocket, controlWs: WsWebSocket | null): void {
+function closeIncusConnectionPair(dataWs: TunnelSocket, controlWs: TunnelSocket | null): void {
     for (const socket of [dataWs, controlWs]) {
         if (!socket) continue
         socket.removeAllListeners()
@@ -231,11 +200,15 @@ function cleanupIncusSockets(session: TerminalSession): void {
     }
 }
 
-function bindIncusSocketHandlers(session: TerminalSession, dataWs: WsWebSocket, controlWs: WsWebSocket | null): void {
+function bindIncusSocketHandlers(session: TerminalSession, dataWs: TunnelSocket, controlWs: TunnelSocket | null): void {
     dataWs.on('message', (data: Buffer) => {
         session.lastActivity = Date.now()
         if (session.clientWebSocket.readyState === session.clientWebSocket.OPEN) {
             try {
+                if (session.clientWebSocket.bufferedAmount + data.length > 256 * 1024) {
+                    closeTerminalSession(session.id, 'Terminal consumer backpressure limit')
+                    return
+                }
                 session.clientWebSocket.send(data)
             } catch (err) {
                 console.debug('[Terminal] Failed to send terminal data to client:', err)
@@ -249,12 +222,12 @@ function bindIncusSocketHandlers(session: TerminalSession, dataWs: WsWebSocket, 
 
     dataWs.on('error', (err) => {
         console.error(`[Terminal] Incus WebSocket error for session ${session.id}:`, err.message)
-        void reconnectIncusConnection(session.id, 'Incus connection error')
+        closeTerminalSession(session.id, 'Agent tunnel connection error; reopen terminal explicitly')
     })
 
     dataWs.on('close', () => {
         console.log(`[Terminal] Incus WebSocket closed for session ${session.id}`)
-        void reconnectIncusConnection(session.id, 'Incus connection closed')
+        closeTerminalSession(session.id, 'Agent tunnel connection closed; reopen terminal explicitly')
     })
 
     if (controlWs) {
@@ -268,7 +241,7 @@ function bindIncusSocketHandlers(session: TerminalSession, dataWs: WsWebSocket, 
     }
 }
 
-async function reconnectIncusConnection(sessionId: string, reason: string): Promise<void> {
+export async function reconnectIncusConnection(sessionId: string, reason: string): Promise<void> {
     const session = activeSessions.get(sessionId)
     if (!session) return
     if (session.clientWebSocket.readyState !== session.clientWebSocket.OPEN) {
@@ -388,25 +361,12 @@ export async function createIncusConsoleConnection(
     host: Host,
     instanceName: string,
     instanceType: 'container' | 'vm' = 'container'
-): Promise<{ controlWs: WsWebSocket | null; dataWs: WsWebSocket; operationId: string; mode: 'exec' | 'console' }> {
+): Promise<{ controlWs: TunnelSocket | null; dataWs: TunnelSocket; operationId: string; mode: 'exec' | 'console' }> {
     // 构建 Incus API URL
     const baseUrl = host.url
 
-    // 创建 mTLS Agent
-    if (!host.cert_path || !host.key_path) {
-        throw new Error('Host certificate configuration missing')
-    }
-
-    // 使用缓存的证书（避免每次连接都读取文件）
-    const { cert, key } = getCachedCertificates(host.cert_path, host.key_path)
-
-    const agent = new Agent({
-        connect: {
-            cert,
-            key,
-            rejectUnauthorized: false
-        }
-    })
+    const connection = getAgentTunnel(host.id)
+    const agent = new AgentTunnelDispatcher(async () => host.id, 'incus')
 
     // 对于容器始终使用 exec。
     // 对于 VM 优先使用 exec（依赖 qemu-guest-agent，更接近 SSH 体验），失败时回退到 console。
@@ -428,6 +388,7 @@ export async function createIncusConsoleConnection(
                 fds = execResult.fds
                 mode = 'exec'
             } catch (execError) {
+                if (!(execError instanceof TerminalOperationError)) throw execError
                 console.warn(`[Terminal] VM exec unavailable for ${instanceName}, falling back to console:`, execError)
                 const consoleResult = await requestTerminalOperation(
                     baseUrl,
@@ -460,62 +421,21 @@ export async function createIncusConsoleConnection(
         throw new Error('No data file descriptor (fd 0) returned from console operation')
     }
 
-    // 构建 WebSocket URL
-    const wsBaseUrl = baseUrl.replace('https://', 'wss://').replace('http://', 'ws://')
+    const dataWsUrl = `/1.0/operations/${encodeURIComponent(operationId)}/websocket?secret=${encodeURIComponent(dataSecret)}`
 
-    // 创建数据 WebSocket（fd 0 是标准输入输出，已在上面检查过）
-    const dataWsUrl = `${wsBaseUrl}/1.0/operations/${operationId}/websocket?secret=${dataSecret}`
-
-    // 创建控制 WebSocket（用于调整终端大小等）
     const controlSecret = fds['control']
     const controlWsUrl = controlSecret 
-        ? `${wsBaseUrl}/1.0/operations/${operationId}/websocket?secret=${controlSecret}`
+        ? `/1.0/operations/${encodeURIComponent(operationId)}/websocket?secret=${encodeURIComponent(controlSecret)}`
         : null
 
     // 使用原生 WebSocket（需要 mTLS）
-    const WebSocket = (await import('ws')).default
-
-    const dataWs = new WebSocket(dataWsUrl, {
-        cert,
-        key,
-        rejectUnauthorized: false
-    })
-
-    let controlWs: WsWebSocket | null = null
-    if (controlWsUrl) {
-        controlWs = new WebSocket(controlWsUrl, {
-            cert,
-            key,
-            rejectUnauthorized: false
-        }) as WsWebSocket
-    }
+    const dataWs = await connection.openWebSocket(dataWsUrl)
+    let controlWs: TunnelSocket | null = null
 
     // 等待连接建立（带资源清理）
     try {
-        await Promise.all([
-            new Promise<void>((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('Data WebSocket connection timeout')), 10000)
-                dataWs.once('open', () => {
-                    clearTimeout(timeout)
-                    resolve()
-                })
-                dataWs.once('error', (err) => {
-                    clearTimeout(timeout)
-                    reject(err)
-                })
-            }),
-            controlWs ? new Promise<void>((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('Control WebSocket connection timeout')), 10000)
-                controlWs.once('open', () => {
-                    clearTimeout(timeout)
-                    resolve()
-                })
-                controlWs.once('error', (err) => {
-                    clearTimeout(timeout)
-                    reject(err)
-                })
-            }) : Promise.resolve()
-        ])
+        if (controlWsUrl) controlWs = await connection.openWebSocket(controlWsUrl)
+        if (dataWs.readyState !== dataWs.OPEN) throw new Error('Terminal data stream closed during setup')
     } catch (error) {
         // 连接失败时，关闭已成功的连接，避免资源泄漏
         if (dataWs.readyState === dataWs.OPEN || dataWs.readyState === dataWs.CONNECTING) {
@@ -527,7 +447,7 @@ export async function createIncusConsoleConnection(
         throw error
     }
 
-    return { controlWs, dataWs: dataWs as WsWebSocket, operationId, mode }
+    return { controlWs, dataWs, operationId, mode }
 }
 
 /**

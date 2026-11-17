@@ -31,6 +31,7 @@ INJECT_AGENT_INSTALL_TOKEN=""
 INJECT_AGENT_BINARY_URL=""
 INJECT_AGENT_BINARY_SHA256=""
 INJECT_AGENT_ENABLED="true"
+INJECT_CADDY_INSTALL_URL="${INJECT_CADDY_INSTALL_URL:-}"
 # ==============================
 
 # ========================== 全局常量 ==========================
@@ -1945,6 +1946,20 @@ SRC
     log "Incus 安装完成"
 }
 
+install_caddy() {
+    step "附加步骤  安装 Caddy 反向代理..."
+    if [[ -z "$INJECT_CADDY_INSTALL_URL" ]]; then
+        warn "未取得限时 Caddy 安装授权，跳过自动安装；可稍后在面板重新下发安装命令"
+        return 1
+    fi
+    if printf 'url = "%s"\n' "$INJECT_CADDY_INSTALL_URL" | curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 120 --config - | bash; then
+        log "Caddy 安装完成；管理 API 仅监听本机 127.0.0.1:2019"
+        return 0
+    fi
+    warn "Caddy 安装失败；Incus 与 Agent 初始化已完成，可稍后在面板重新下发安装命令"
+    return 1
+}
+
 zfs_storage_available() {
     command -v zpool >/dev/null 2>&1 && command -v zfs >/dev/null 2>&1 &&
         modprobe zfs && [[ -c /dev/zfs ]] && zpool list -H >/dev/null 2>&1
@@ -2062,6 +2077,9 @@ init_incus() {
     # 幂等性：网桥已存在则跳过
     if incus network show "$BRIDGE_NAME" &>/dev/null; then
         info "网桥 ${BRIDGE_NAME} 已存在，保留网络并检查储存池"
+        if incus config get core.https_address 2>/dev/null | grep -q '[^[:space:]]'; then
+            warn "检测到既有 Incus HTTPS listener；保留原设置，不会自动修改或关闭"
+        fi
         ensure_incus_storage || return 1
         return 0
     fi
@@ -2148,7 +2166,6 @@ EOF
     # 写入文件
     cat > "$PRESEED_FILE" <<YAML
 config:
-  core.https_address: '[::]:${LISTEN_PORT}'
 networks:
   - name: ${BRIDGE_NAME}
     type: bridge
@@ -2164,6 +2181,11 @@ cluster: null
 YAML
 
     incus admin init --preseed < "$PRESEED_FILE" || return 1
+    if incus config get core.https_address 2>/dev/null | grep -q '[^[:space:]]'; then
+        warn "检测到既有 Incus HTTPS listener；保留原设置，不会自动修改或关闭"
+    else
+        info "新安装未启用 Incus 公開 HTTPS listener；面板管理使用 Agent WSS 隧道"
+    fi
     ensure_incus_storage || return 1
     log "Incus 初始化完成"
 }
@@ -2440,6 +2462,7 @@ install_incudal_agent() {
         INCUDAL_AGENT_SECRET="$AGENT_SECRET" \
         INCUDAL_AGENT_BINARY_URL="$AGENT_BINARY_URL" \
         INCUDAL_AGENT_BINARY_SHA256="$AGENT_BINARY_SHA256" \
+        INCUDAL_CADDY_INSTALL_URL="$INJECT_CADDY_INSTALL_URL" \
         INCUDAL_HEARTBEAT_INTERVAL_SECONDS="$AGENT_HEARTBEAT_INTERVAL_SECONDS" \
         bash -s -- --host-ready --yes; then
         AGENT_INSTALL_STATUS="已安装"
@@ -4105,6 +4128,7 @@ main() {
             install_incus || return 1
         fi
         init_incus || return 1
+        install_caddy || true
         install_shortcuts || return 1
         return 0
     fi

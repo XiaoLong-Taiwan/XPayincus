@@ -1167,6 +1167,24 @@ export interface HostAgentStatus {
       diskUsagePercent?: number
       processCount?: number
     }
+    host?: {
+      network?: {
+        interfaces?: Array<{
+          name?: string
+          addresses?: Array<{
+            address?: string
+            prefixLength?: number
+          }>
+        }>
+      }
+      storagePools?: Array<{
+        name?: string
+        driver?: string
+      }>
+      ipv6Prefixes?: string[]
+      routedIpv6?: boolean
+      ipv6Interface?: string
+    }
     metrics?: {
       reportedAt?: string
       heartbeatIntervalSeconds?: number
@@ -1215,6 +1233,7 @@ export interface CreateHostResponse {
   installScriptUrl: string
   installCommand?: string
   installToken?: string
+  installTokenExpiresAt?: string
 }
 
 export interface RegenerateHostInstallResponse extends HostInstallDetails {
@@ -1234,7 +1253,7 @@ export interface HostAgentInstallCommandResponse extends HostInstallDetails {
 
 export interface CreateHostRequest {
   name: string
-  url: string
+  url?: string
   location?: string
   countryCode?: string
   tags?: string[]
@@ -1272,6 +1291,7 @@ export interface UpdateHostRequest {
   cpuAllowanceMax?: number
   memoryMax?: number
   instanceType?: 'container' | 'vm' | 'both'
+  ipv6Mode?: 1 | 3
   ipv6ParentInterface?: string
   ipv6Subnet?: string
   transferEnabled?: boolean

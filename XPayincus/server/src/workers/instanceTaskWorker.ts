@@ -2061,21 +2061,13 @@ async function executeChangeHostTask(
     })
     dbSwitched = true
 
-    if (proxySites.length > 0 && sourceHost.caddy_enabled && sourceHost.caddy_username && sourceHost.caddy_password) {
-      const caddyHost = sourceHost.nat_public_ip || sourceHost.ip_address
-      if (caddyHost) {
-        const caddyClient = createCaddyClient({
-          host: caddyHost,
-          port: sourceHost.caddy_port || 8444,
-          username: sourceHost.caddy_username,
-          password: sourceHost.caddy_password
-        })
-        for (const site of proxySites) {
-          try {
-            await caddyClient.deleteSite(site.domain)
-          } catch (err) {
-            console.warn(`[ChangeHost] 删除 Caddy 站点 ${site.domain} 失败，数据库记录已清理:`, err)
-          }
+    if (proxySites.length > 0 && sourceHost.caddy_enabled) {
+      const caddyClient = createCaddyClient({ hostId: sourceHost.id, host: '127.0.0.1', port: 2019 })
+      for (const site of proxySites) {
+        try {
+          await caddyClient.deleteSite(site.domain)
+        } catch (err) {
+          console.warn(`[ChangeHost] 删除 Caddy 站点 ${site.domain} 失败，数据库记录已清理:`, err)
         }
       }
     }
@@ -2263,7 +2255,7 @@ async function executeChangeHostTask(
 async function executeCloneTask(
   task: { id: number; userId: number; instanceId: number },
   sourceInstance: { incus_id: string; name: string; user_id: number; image: string; cpu: number; memory: number; disk: number; network_mode: string; ssh_port: number | null; root_password: string | null; package_id: number | null; package_plan_id?: number | null; host_id: number; port_limit: number | null; snapshot_limit: number | null; backup_limit: number | null; site_limit: number | null; swap_enabled?: boolean; swap_size?: number | null; storage_pool_name?: string | null },
-  host: { id: number; name: string; nat_public_ip?: string | null; ip_address?: string | null; caddy_enabled?: boolean; caddy_username?: string | null; caddy_password?: string | null; caddy_port?: number | null; nat_port_start: number | null; nat_port_end: number | null; nat_ports_used_count?: number; ipv6_subnet?: string | null; ipv6_gateway?: string | null; ipv6_parent_interface?: string | null; cpu_allowance_max?: number; memory_max?: number; instance_type?: 'container' | 'vm' | 'both' },
+  host: { id: number; name: string; nat_public_ip?: string | null; ip_address?: string | null; caddy_enabled?: boolean; nat_port_start: number | null; nat_port_end: number | null; nat_ports_used_count?: number; ipv6_subnet?: string | null; ipv6_gateway?: string | null; ipv6_parent_interface?: string | null; cpu_allowance_max?: number; memory_max?: number; instance_type?: 'container' | 'vm' | 'both' },
   client: Awaited<ReturnType<typeof getIncusClient>>
 ): Promise<void> {
   await updateInstanceTaskProgress(task.id, 'cloning')

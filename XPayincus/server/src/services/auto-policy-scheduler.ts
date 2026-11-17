@@ -43,15 +43,13 @@ function delay(ms: number): Promise<void> {
  * 获取或创建 Incus 客户端
  */
 async function getIncusClient(host: {
+    id: number
     url: string
     certPath: string | null
     keyPath: string | null
 }): Promise<IncusClient | null> {
-    if (!host.certPath || !host.keyPath) {
-        return null
-    }
-
     const client = new IncusClient({
+        hostId: host.id,
         url: host.url,
         certPath: host.certPath,
         keyPath: host.keyPath
@@ -92,6 +90,7 @@ async function executeAutoSnapshot(
             userId: number
             snapshotLimit: number | null
             host: {
+                id: number
                 url: string
                 name: string
                 certPath: string | null
@@ -277,6 +276,7 @@ async function executeLockedAutoSnapshot(candidate: { instanceId: number }): Pro
                 userId: policy.instance.userId,
                 snapshotLimit: policy.instance.snapshotLimit,
                 host: {
+                    id: policy.instance.host.id,
                     url: policy.instance.host.url,
                     name: policy.instance.host.name,
                     certPath: policy.instance.host.certPath,

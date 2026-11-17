@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'crypto'
 import { prisma } from '../db/prisma.js'
 import { generateAgentId, generateAgentSecret, hashAgentSecret } from './agent-auth.js'
 import { decryptSensitiveData, encryptSensitiveData } from './security.js'
+import { closeAgentTunnel } from './agent-tunnel.js'
 
 export interface HostAgentRecord {
   id: number
@@ -98,6 +99,7 @@ export async function rotateHostAgentCredentials(hostId: number, enabled = true)
     }
   })
 
+  closeAgentTunnel(hostId)
   return {
     host,
     agent,

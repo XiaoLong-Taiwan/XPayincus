@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const paginationSource = readFileSync(resolve(__dirname, '../src/db/pagination.ts'), 'utf8')
-const usersRouteSource = readFileSync(resolve(__dirname, '../src/routes/users.ts'), 'utf8')
-const hostsRouteSource = readFileSync(resolve(__dirname, '../src/routes/hosts.ts'), 'utf8')
-const instancesRouteSource = readFileSync(resolve(__dirname, '../src/routes/instances.ts'), 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const paginationSource = readSource(resolve(__dirname, '../src/db/pagination.ts'))
+const usersRouteSource = readSource(resolve(__dirname, '../src/routes/users.ts'))
+const hostsRouteSource = readSource(resolve(__dirname, '../src/routes/hosts.ts'))
+const instancesRouteSource = readSource(resolve(__dirname, '../src/routes/instances.ts'))
 
 function sectionBetween(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker)

@@ -63,4 +63,4 @@ Agent 默认每 60 秒上报一次，最小允许 30 秒。不要把上报间隔
 bash scripts/build-agent-release.sh
 ```
 
-產品版本取自根 `VERSION`，目前發行目標為 `v1.0.19`；`XPayincus-Agent/` 是 Go 原始碼目錄。根 release workflow 的 tag 流程在 CI、版本與映像發布成功後建立 GitHub Release；手動流程僅發布映像與 Actions artifacts。發布狀態以 GitHub Release 為準。本次文件整理未執行測試、建置或宿主升級。
+產品版本取自根 `VERSION`，目前發行目標為 `v1.0.20`；`XPayincus-Agent/` 是 Go 原始碼目錄。根 release workflow 的 tag 流程在 CI、版本與映像發布成功後建立 GitHub Release；手動流程僅發布映像與 Actions artifacts。發布狀態以 GitHub Release 為準。本次文件整理未執行測試、建置或宿主升級。

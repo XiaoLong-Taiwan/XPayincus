@@ -317,7 +317,6 @@ main "$@"
         trust = agent.split("}>('/panel-trust/:phase'", 1)[1].split("fastify.get('/install.sh'", 1)[0]
         self.assertIn('const agent = await authenticateAgentRequest(request, reply)', trust)
         self.assertIn("if (!host?.isInstalled) return reply.code(403)", trust)
-        self.assertIn('rejectUnauthorized: true', trust)
         self.assertIn('if (!agent || !agent.enabled)', agent)
         self.assertIn('verifyAgentSignature(secret,', agent)
         self.assertIn("code: 'AGENT_NONCE_REPLAY'", agent)

@@ -3,6 +3,7 @@
  */
 
 import type { IncusClient } from './incus-client.js'
+import { Readable } from 'node:stream'
 import type { IncusBackup, CreateBackupOptions } from '../../types/incus.js'
 
 /**
@@ -80,80 +81,16 @@ export async function getBackupExportStream(
     throw new Error('Incus 客户端未连接')
   }
 
-  const { Agent, request } = await import('undici')
-  const { readFileSync } = await import('fs')
-  const url = `${client.baseUrl}/1.0/instances/${instanceName}/backups/${backupName}/export`
-
-  // 为大文件传输创建专用 Agent，设置更长的超时
-  // 连接超时 60 秒，无 body 超时（流式传输）
-  let exportAgent: InstanceType<typeof Agent> | null = null
-
-  try {
-    // 读取证书（从 client 获取路径）
-    if (!client.certPath || !client.keyPath) {
-      throw new Error('Certificate path not configured')
-    }
-
-    const cert = readFileSync(client.certPath)
-    const key = readFileSync(client.keyPath)
-
-    exportAgent = new Agent({
-      connect: {
-        cert,
-        key,
-        rejectUnauthorized: false,
-        timeout: 60000 // 连接超时 60 秒
-      },
-      bodyTimeout: 0, // 禁用 body 超时，允许长时间传输
-      headersTimeout: 60000 // headers 超时 60 秒
-    })
-
-    const response = await request(url, {
-      method: 'GET',
-      dispatcher: exportAgent
-    })
-
-    if (response.statusCode !== 200) {
-      const text = await response.body.text()
-      await exportAgent.close()
-      throw new Error(`导出备份失败: ${text || response.statusCode}`)
-    }
-
-    // 获取 Content-Length（如果有）
-    const contentLengthHeader = response.headers['content-length']
-    const contentLength = contentLengthHeader ? parseInt(String(contentLengthHeader), 10) : undefined
-
-    // 保存 agent 引用以便在流结束时关闭
-    const agentToClose = exportAgent
-
-    // 将 undici 的 body 转换为 Web ReadableStream
-    const webStream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        try {
-          for await (const chunk of response.body) {
-            controller.enqueue(chunk)
-          }
-          controller.close()
-        } catch (err) {
-          controller.error(err)
-        } finally {
-          // 流结束后关闭专用 agent
-          await agentToClose.close().catch(() => { })
-        }
-      },
-      cancel() {
-        // 流被取消时也要关闭 agent
-        agentToClose.close().catch(() => { })
-      }
-    })
-
-    return { stream: webStream, contentLength }
-  } catch (err) {
-    // 出错时确保关闭 agent
-    if (exportAgent) {
-      await exportAgent.close().catch(() => { })
-    }
-    throw err
+  const response = await client.stream('GET', `/1.0/instances/${encodeURIComponent(instanceName)}/backups/${encodeURIComponent(backupName)}/export`)
+  if (response.statusCode !== 200) {
+    response.body.destroy()
+    throw new Error(`导出备份失败: HTTP ${response.statusCode}`)
+  }
+  const length = Number(response.headers['content-length'])
+  const contentLength = Number.isSafeInteger(length) && length >= 0 ? length : undefined
+  return {
+    stream: Readable.toWeb(response.body, { strategy: { highWaterMark: 64 * 1024, size: chunk => chunk.length } }) as ReadableStream<Uint8Array>,
+    contentLength
   }
 }
 

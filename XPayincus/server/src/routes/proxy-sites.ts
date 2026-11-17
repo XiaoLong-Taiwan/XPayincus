@@ -293,18 +293,14 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
 
     // 从 Caddy 删除
     try {
-      if (site.host.caddyEnabled && site.host.caddyUsername && site.host.caddyPassword) {
-        const targetHost = site.host.natPublicIp || site.host.ipAddress || ''
-        if (targetHost) {
-          const client = createCaddyClient({
-            host: targetHost,
-            port: site.host.caddyPort || 8444,
-            username: site.host.caddyUsername,
-            password: site.host.caddyPassword
-          })
+      if (site.host.caddyEnabled) {
+        const client = createCaddyClient({
+          hostId: site.instance.hostId,
+          host: '127.0.0.1',
+          port: 2019
+        })
 
-          await client.deleteSite(site.domain)
-        }
+        await client.deleteSite(site.domain)
       }
     } catch (err) {
       request.log.error(err, 'Failed to remove site from Caddy')
@@ -419,7 +415,7 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
     // DNS 正确，如果站点还是 pending 状态，自动激活
     if (site.status === 'pending') {
       try {
-        if (!site.host.caddyEnabled || !site.host.caddyUsername || !site.host.caddyPassword) {
+        if (!site.host.caddyEnabled) {
           throw new Error('Caddy 未启用')
         }
 
@@ -429,10 +425,9 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
         }
 
         const client = createCaddyClient({
-          host: expectedIp,
-          port: site.host.caddyPort || 8444,
-          username: site.host.caddyUsername,
-          password: site.host.caddyPassword
+          hostId: site.instance.hostId,
+          host: '127.0.0.1',
+          port: 2019
         })
 
         // 先删除可能存在的旧配置（防止实例删除时 Caddy 删除失败导致残留）
@@ -534,13 +529,8 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: '站点已禁用，请先启用' })
       }
 
-      if (!site.host.caddyEnabled || !site.host.caddyUsername || !site.host.caddyPassword) {
+      if (!site.host.caddyEnabled) {
         return reply.code(400).send({ error: 'Caddy 未启用' })
-      }
-
-      const targetHost = site.host.natPublicIp || site.host.ipAddress
-      if (!targetHost) {
-        return reply.code(400).send({ error: '宿主机未配置公网 IP' })
       }
 
       const instanceIp = site.instance.ipv4
@@ -549,10 +539,9 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
       }
 
       const client = createCaddyClient({
-        host: targetHost,
-        port: site.host.caddyPort || 8444,
-        username: site.host.caddyUsername,
-        password: site.host.caddyPassword
+        hostId: site.instance.hostId,
+        host: '127.0.0.1',
+        port: 2019
       })
 
       // 先删除旧路由（避免重复添加）
@@ -701,13 +690,8 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
 
     // 需要更新 Caddy 配置
     // 检查 Caddy 是否可用
-    if (!site.host.caddyEnabled || !site.host.caddyUsername || !site.host.caddyPassword) {
+    if (!site.host.caddyEnabled) {
       return reply.code(400).send({ error: 'Caddy 未启用' })
-    }
-
-    const targetHost = site.host.natPublicIp || site.host.ipAddress
-    if (!targetHost) {
-      return reply.code(400).send({ error: '宿主机未配置公网 IP' })
     }
 
     const instanceIp = site.instance.ipv4
@@ -726,10 +710,9 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
 
     try {
       const client = createCaddyClient({
-        host: targetHost,
-        port: site.host.caddyPort || 8444,
-        username: site.host.caddyUsername,
-        password: site.host.caddyPassword
+        hostId: site.instance.hostId,
+        host: '127.0.0.1',
+        port: 2019
       })
 
       // 先删除旧路由
@@ -812,23 +795,17 @@ export default async function proxySitesRoutes(fastify: FastifyInstance) {
     }
 
     // 检查 Caddy 是否启用
-    if (!site.host.caddyEnabled || !site.host.caddyUsername || !site.host.caddyPassword) {
+    if (!site.host.caddyEnabled) {
       return reply.code(400).send({ error: 'Caddy 未启用' })
-    }
-
-    const targetHost = site.host.natPublicIp || site.host.ipAddress
-    if (!targetHost) {
-      return reply.code(400).send({ error: '宿主机未配置公网 IP' })
     }
 
     const newEnabled = !site.enabled
 
     try {
       const client = createCaddyClient({
-        host: targetHost,
-        port: site.host.caddyPort || 8444,
-        username: site.host.caddyUsername,
-        password: site.host.caddyPassword
+        hostId: site.instance.hostId,
+        host: '127.0.0.1',
+        port: 2019
       })
 
       if (newEnabled) {

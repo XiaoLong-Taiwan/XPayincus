@@ -15,10 +15,11 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/config"
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/panel"
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/report"
+	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/tunnel"
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/upgrade"
 )
 
-var version = "v1.0.19"
+var version = "v1.0.20"
 var operationStatePath string
 
 func main() {
@@ -49,6 +50,7 @@ func main() {
 		return
 	}
 
+	go tunnel.Run(ctx, cfg)
 	log.Printf("incudal-agent started: panel=%s interval=%s", cfg.PanelURL, cfg.HeartbeatInterval)
 	upgradeRunner := upgrade.DefaultRunner(cfg)
 	var upgradeInProgress atomic.Bool
@@ -138,7 +140,9 @@ func scheduleAgentUpgrade(ctx context.Context, runner *upgrade.Runner, result pa
 	proceed, err := runner.Schedule(instruction, version)
 	if err != nil || !proceed {
 		upgradeInProgress.Store(false)
-		if err != nil { log.Printf("persist agent upgrade schedule failed") }
+		if err != nil {
+			log.Printf("persist agent upgrade schedule failed")
+		}
 		return
 	}
 	log.Printf("agent upgrade scheduled: version=%s", instruction.Version)

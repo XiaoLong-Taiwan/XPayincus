@@ -8,6 +8,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import api from '@/api'
+const adminApi = () => import('@/api/admin')
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
@@ -100,7 +101,6 @@ interface CustomerSelfServiceApi {
 }
 
 const customerSelfServiceApi = api as typeof api & CustomerSelfServiceApi
-const adminApi = api as typeof api & Pick<typeof import('@/api/admin').default, 'instancePorts'>
 
 // 获取返回路径：如果是从宿主机页面进入，则返回到宿主机页面
 function getReturnPath(): string {
@@ -377,6 +377,7 @@ let isComponentMounted = ref<boolean>(true)  // 组件挂载状态标志
 
 onMounted(async (): Promise<void> => {
   isComponentMounted.value = true
+  if (route.query.tab === 'network') activeTab.value = 'network'
   await configStore.loadPublicConfig()
   await loadInstance()
   // 注意：loadInstance() 内部已经处理了 loadStats() 和 loadTrafficData() 的调用
@@ -615,6 +616,10 @@ watch(() => route.params.id, async (newId, oldId) => {
       }
     }
   }
+})
+
+watch(() => route.query.tab, (tab) => {
+  if (tab === 'network') activeTab.value = 'network'
 })
 
 // 监听实例状态变化，动态管理统计信息定时器
@@ -1523,7 +1528,7 @@ async function deletePort(portId: number): Promise<void> {
   if (!instance.value || !confirm(t('instance.detail.port.confirmDelete'))) return
 
   try {
-    await (isAdminEntry ? adminApi.instancePorts.delete(instance.value.id, portId) : api.instances.deletePort(instance.value.id, portId))
+    await (isAdminEntry ? (await adminApi()).default.instancePorts.delete(instance.value.id, portId) : api.instances.deletePort(instance.value.id, portId))
     // 立即从本地数据移除，提供即时反馈
     if ((instance.value as any).port_mappings) {
       (instance.value as any).port_mappings = (instance.value as any).port_mappings.filter(
@@ -1552,7 +1557,7 @@ async function deletePorts(portIds: number[]): Promise<void> {
   try {
     for (const portId of portIds) {
       try {
-        await (isAdminEntry ? adminApi.instancePorts.delete(instance.value.id, portId) : api.instances.deletePort(instance.value.id, portId))
+        await (isAdminEntry ? (await adminApi()).default.instancePorts.delete(instance.value.id, portId) : api.instances.deletePort(instance.value.id, portId))
         // 立即从本地数据移除
         if ((instance.value as any).port_mappings) {
           (instance.value as any).port_mappings = (instance.value as any).port_mappings.filter(
@@ -1966,7 +1971,7 @@ async function handleAddPort(form: {
         batchData.remark = form.remark.trim()
       }
 
-      const response = await (isAdminEntry ? adminApi.instancePorts.addBatch(instance.value.id, batchData) : api.instances.addPortBatch(instance.value.id, batchData))
+      const response = await (isAdminEntry ? (await adminApi()).default.instancePorts.addBatch(instance.value.id, batchData) : api.instances.addPortBatch(instance.value.id, batchData))
 
       // 检查是否有冲突
       if ('conflicts' in response && response.conflicts) {
@@ -2002,7 +2007,7 @@ async function handleAddPort(form: {
           tcpPayload.remark = form.remark.trim()
         }
 
-        const tcpResponse = await (isAdminEntry ? adminApi.instancePorts.add(instance.value!.id, tcpPayload) : api.instances.addPort(instance.value!.id, tcpPayload))
+        const tcpResponse = await (isAdminEntry ? (await adminApi()).default.instancePorts.add(instance.value!.id, tcpPayload) : api.instances.addPort(instance.value!.id, tcpPayload))
         // @ts-ignore - API response structure
         const tcpMapping = tcpResponse.mapping
         if (tcpMapping && instance.value) {
@@ -2032,7 +2037,7 @@ async function handleAddPort(form: {
           udpPayload.remark = form.remark.trim()
         }
 
-        const udpResponse = await (isAdminEntry ? adminApi.instancePorts.add(instance.value!.id, udpPayload) : api.instances.addPort(instance.value!.id, udpPayload))
+        const udpResponse = await (isAdminEntry ? (await adminApi()).default.instancePorts.add(instance.value!.id, udpPayload) : api.instances.addPort(instance.value!.id, udpPayload))
         // @ts-ignore - API response structure
         const udpMapping = udpResponse.mapping
         if (udpMapping && instance.value) {
@@ -2062,7 +2067,7 @@ async function handleAddPort(form: {
           payload.remark = form.remark.trim()
         }
 
-        const response = await (isAdminEntry ? adminApi.instancePorts.add(instance.value.id, payload) : api.instances.addPort(instance.value.id, payload))
+        const response = await (isAdminEntry ? (await adminApi()).default.instancePorts.add(instance.value.id, payload) : api.instances.addPort(instance.value.id, payload))
         // @ts-ignore - API response structure
         const newMapping = response.mapping
         if (newMapping && instance.value) {
@@ -2144,7 +2149,7 @@ async function handlePortConflictConfirm(resolvedPorts: Array<{ original: number
     }
 
     // 重新提交，带上修改后的端口映射
-    const response = await (isAdminEntry ? adminApi.instancePorts.addBatch(instance.value.id, {
+    const response = await (isAdminEntry ? (await adminApi()).default.instancePorts.addBatch(instance.value.id, {
       protocol: data.protocol,
       privatePortStart: data.privatePortStart,
       privatePortEnd: data.privatePortEnd,

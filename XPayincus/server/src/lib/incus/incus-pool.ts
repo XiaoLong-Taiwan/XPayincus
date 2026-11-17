@@ -116,6 +116,7 @@ export async function getIncusClient(host: Host): Promise<IncusClient> {
   const connectPromise = (async () => {
     try {
       const client = new Client({
+        hostId: host.id,
         url: host.url,
         certPath: host.cert_path || host.certPath || null,
         keyPath: host.key_path || host.keyPath || null

@@ -1,6 +1,6 @@
 # Architecture
 
-XPayincus is a control panel for commercial Incus/LXC/KVM delivery. The unified repository contains `XPayincus/client`, `XPayincus/server`, and `XPayincus-Agent`, with RFW/ZFS sources at `XPayincus-Agent/components/rfw` and `XPayincus-Agent/components/zfs`. Root `VERSION` defines the product release, targeting v1.0.19 (publication status is recorded in GitHub Releases). The Go Agent does not directly load eBPF or ZFS kernel modules.
+XPayincus is a control panel for commercial Incus/LXC/KVM delivery. The unified repository contains `XPayincus/client`, `XPayincus/server`, and `XPayincus-Agent`, with RFW/ZFS sources at `XPayincus-Agent/components/rfw` and `XPayincus-Agent/components/zfs`. Root `VERSION` defines the product release, targeting v1.0.20 (publication status is recorded in GitHub Releases). The Go Agent does not directly load eBPF or ZFS kernel modules.
 
 Panel Compose deploys PostgreSQL, one API, and both frontends only. The entry point `deploy/compose/docker-compose.yml` includes `compose.yaml`, supporting Nginx, Cloudflare Tunnel, or an external HTTPS proxy; frontends default to loopback 3000/3001. Incus, Agent, RFW, and ZFS remain host components. The diagram below describes the retained systemd/Nginx host layout; its OTA flow does not apply to Compose, which rebuilds a selected source revision. Run exactly one Node API process, without cluster, multiple workers, container replicas, or old and new backends writing the same database.
 
@@ -21,7 +21,7 @@ Admin browser
 
 Backend Node API
   -> PostgreSQL
-  -> Incus hosts / Agent
+  <-> Outbound WSS tunnel established by Agent (no direct host management connection)
   -> Payment, SMTP, Telegram, Lsky, Turnstile
   -> Admin OTA
 ```
@@ -35,7 +35,7 @@ The legacy installer keeps Redis for deployment compatibility; the core does not
 | User portal | `client/src` + `VITE_APP_ENTRY=user` | Login, instances, terminal, wallet, tickets, notifications, gift cards and self-service pages |
 | Admin console | `client/src/admin` + `VITE_APP_ENTRY=admin` | Operations, configuration, resources, billing, delivery, and OTA |
 | Backend | `server/src` | Fastify APIs, auth, database, jobs, payment, delivery and audit |
-| Agent | `../XPayincus-Agent` | Host heartbeat, resources, instance and traffic reporting; table paths are relative to `XPayincus/` |
+| Agent | `../XPayincus-Agent` | Host heartbeat, resources, instance and traffic reporting, plus an outbound WSS management tunnel to the local Incus socket/Caddy admin; table paths are relative to `XPayincus/` |
 | Host components | `../XPayincus-Agent/components/rfw`, `../XPayincus-Agent/components/zfs` | eBPF/XDP firewall and Debian ZFS builder; not automatically replaced by Go Agent upgrades |
 | Docs site | `docs-site/docs` | Public docs, API reference, and SDK examples |
 

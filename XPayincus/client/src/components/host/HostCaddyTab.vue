@@ -11,9 +11,10 @@ const toast = useToast()
 
 interface Props {
   hostId: number
+  agentPaired: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { agentPaired: false })
 
 const loading = ref(true)
 const generating = ref(false)
@@ -33,7 +34,7 @@ const caddyStatus = ref<{
 }>({
   enabled: false,
   username: null,
-  port: 8444,
+  port: 2019,
   hasPassword: false,
   natPublicIp: null,
   sitesCount: 0
@@ -44,7 +45,7 @@ const installInfo = ref({
   command: '',
   username: '',
   password: '',
-  port: 8444
+  port: 2019
 })
 
 // 测试结果
@@ -88,7 +89,11 @@ const sitesTotal = ref(0)
 const sitesTotalPages = ref(1)
 
 onMounted(() => {
-  loadCaddyStatus()
+  if (props.agentPaired) loadCaddyStatus()
+})
+
+watch(() => props.agentPaired, (paired) => {
+  if (paired) loadCaddyStatus()
 })
 
 // 当 Caddy 启用状态变化时，加载站点列表
@@ -100,6 +105,8 @@ watch(() => caddyStatus.value.enabled, (enabled) => {
 
 // 当 hostId 变化时，重置状态并重新加载数据
 watch(() => props.hostId, () => {
+  caddyStatus.value.enabled = false
+  installInfo.value = { command: '', username: '', password: '', port: 2019 }
   // 重置分页状态
   sitesPage.value = 1
   sites.value = []
@@ -109,7 +116,7 @@ watch(() => props.hostId, () => {
   showInstallModal.value = false
   testResult.value = { connected: false, sitesCount: 0, dnsRecordType: 'A', dnsRecordValue: '' }
   // 重新加载数据
-  loadCaddyStatus()
+  if (props.agentPaired) loadCaddyStatus()
 })
 
 async function loadCaddyStatus() {
@@ -189,7 +196,7 @@ async function generateInstallCommand() {
     }
     showInstallModal.value = true
     // 刷新状态
-    await loadCaddyStatus()
+    if (props.agentPaired) await loadCaddyStatus()
   } catch (err: unknown) {
     const error = err as { message?: string }
     toast.error(t('host.caddy.generateFailed') + ': ' + (error?.message || String(err)))
@@ -215,7 +222,7 @@ async function resetCredentials() {
     showInstallModal.value = true
     toast.success(t('host.caddy.resetSuccess'))
     // 刷新状态
-    await loadCaddyStatus()
+    if (props.agentPaired) await loadCaddyStatus()
   } catch (err: unknown) {
     const error = err as { message?: string }
     toast.error(t('host.caddy.resetFailed') + ': ' + (error?.message || String(err)))
@@ -270,12 +277,23 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
 <template>
   <div class="space-y-6">
     <!-- 加载状态 -->
-    <div v-if="loading" class="flex justify-center py-12">
+    <div v-if="!agentPaired" class="card p-6">
+      <h3 class="text-lg font-medium mb-3" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
+        {{ t('host.caddy.title') }}
+      </h3>
+      <p class="text-sm mb-4" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'">
+        {{ t('host.caddy.notInstalled') }}
+      </p>
+      <button :disabled="generating" class="btn-primary" @click="generateInstallCommand">
+        {{ generating ? t('common.loading') : t('host.caddy.generateCommand') }}
+      </button>
+    </div>
+    <div v-else-if="loading && agentPaired" class="flex justify-center py-12">
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
     </div>
 
     <!-- Caddy 状态卡片 -->
-    <div v-else class="card p-6">
+    <div v-else-if="agentPaired" class="card p-6">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-medium" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
           {{ t('host.caddy.title') }}
@@ -295,7 +313,7 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
       </p>
 
       <!-- 未启用状态 -->
-      <div v-if="!isEnabled" class="space-y-4">
+      <div v-if="!isEnabled && agentPaired" class="space-y-4">
         <div 
           class="border-2 border-dashed rounded-lg p-6 text-center"
           :class="themeStore.isDark ? 'border-gray-700' : 'border-gray-300'"
@@ -324,18 +342,12 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
       </div>
 
       <!-- 已启用状态 -->
-      <div v-else class="space-y-4">
+      <div v-else-if="isEnabled && agentPaired" class="space-y-4">
         <dl class="grid grid-cols-2 gap-4 text-sm">
           <div>
             <dt class="text-gray-500">{{ t('host.caddy.apiPort') }}</dt>
             <dd class="font-mono" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
               {{ caddyStatus.port }}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-gray-500">{{ t('host.caddy.username') }}</dt>
-            <dd class="font-mono" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
-              {{ caddyStatus.username || '-' }}
             </dd>
           </div>
           <div>
@@ -393,7 +405,7 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
     </div>
 
     <!-- 反代站点列表 -->
-    <div v-if="!loading && isEnabled" class="card p-6">
+    <div v-if="agentPaired && !loading && isEnabled" class="card p-6">
       <div class="flex items-center justify-between mb-4">
         <h3 class="text-lg font-medium" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
           {{ t('host.caddy.sitesList') }}
@@ -502,28 +514,9 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
             </h3>
 
             <!-- 凭据信息 -->
-            <div class="mb-4 p-4 rounded-lg" :class="themeStore.isDark ? 'bg-gray-800' : 'bg-gray-100'">
-              <dl class="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <dt class="text-gray-500">{{ t('host.caddy.username') }}</dt>
-                  <dd class="font-mono font-medium" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
-                    {{ installInfo.username }}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">{{ t('host.caddy.password') }}</dt>
-                  <dd class="font-mono font-medium" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
-                    {{ installInfo.password }}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">{{ t('host.caddy.apiPort') }}</dt>
-                  <dd class="font-mono font-medium" :class="themeStore.isDark ? 'text-white' : 'text-gray-900'">
-                    {{ installInfo.port }}
-                  </dd>
-                </div>
-              </dl>
-            </div>
+            <p class="mb-4 text-sm" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'">
+              {{ t('host.caddy.apiPort') }}: 127.0.0.1:2019
+            </p>
 
             <!-- 安装命令 -->
             <div class="mb-4">

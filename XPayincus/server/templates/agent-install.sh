@@ -26,6 +26,8 @@ HOST_READY="0"
 HOST_SCRIPT=""
 BOOTSTRAP_CERTIFICATE=""
 BOOTSTRAP_HOST_INSTALLED=""
+INCUDAL_CADDY_INSTALL_URL="${INCUDAL_CADDY_INSTALL_URL:-}"
+CADDY_SCRIPT=""
 
 usage() {
   printf '%s\n' 'Usage: bash agent-install.sh [--panel-url URL] [--token-file FILE] [--yes] [--reinstall] [--version latest|vSemVer] [--binary FILE --sha256 HEX]' \
@@ -506,12 +508,15 @@ fetch_agent_install_config() {
       BOOTSTRAP_CERTIFICATE="${BASH_REMATCH[1]}"
     elif [[ "${line}" =~ ^INCUDAL_HOST_INSTALLED=\'(true|false)\'$ ]] && [ "${count}" = "3" ]; then
       BOOTSTRAP_HOST_INSTALLED="${BASH_REMATCH[1]}"
+    elif [[ "${line}" =~ ^INCUDAL_CADDY_INSTALL_URL=\'(https?://[^[:space:]\']+/api/hosts/caddy-script/[A-Za-z0-9_-]+)\'$ ]] && [ "${count}" = "4" ]; then
+      INCUDAL_CADDY_INSTALL_URL="${BASH_REMATCH[1]}"
+      [[ "${INCUDAL_CADDY_INSTALL_URL}" == "${PANEL_BASE_URL}/api/hosts/caddy-script/"* ]] || fail "invalid Caddy installer origin"
     else
       fail "invalid Agent install config response"
     fi
     count=$((count + 1))
   done < "${INSTALL_CONFIG_PATH}"
-  [ "${count}" = "4" ] || fail "incomplete Agent bootstrap config response; update the panel before retrying"
+  [ "${count}" = "5" ] || fail "incomplete Agent bootstrap config response; update the panel before retrying"
   rm -f "${INSTALL_CONFIG_PATH}"
   INSTALL_CONFIG_PATH=""
   unset INCUDAL_AGENT_INSTALL_TOKEN
@@ -575,6 +580,7 @@ cleanup() {
     rm -f "${MANIFEST_PATH}"
   fi
   [ -z "${HOST_SCRIPT:-}" ] || rm -f "${HOST_SCRIPT}"
+  [ -z "${CADDY_SCRIPT:-}" ] || rm -f "${CADDY_SCRIPT}"
 }
 trap cleanup EXIT
 
@@ -658,8 +664,12 @@ if [ "${REINSTALL}" != 1 ] && [ "${HOST_READY}" != 1 ] && [ "${DRY_RUN}" != 1 ] 
   prepare_host_script
   INCUS_STORAGE_DRIVER="${INCUS_STORAGE_DRIVER:-zfs}" bash "${HOST_SCRIPT}" --prepare-agent-host --yes </dev/null
 fi
-
 fetch_agent_install_config
+if [ "${REINSTALL}" != 1 ] && [ "${DRY_RUN}" != 1 ] && [ -n "${INCUDAL_CADDY_INSTALL_URL}" ]; then
+  CADDY_SCRIPT="$(mktemp)"
+  printf 'url = "%s"\n' "${INCUDAL_CADDY_INSTALL_URL}" | curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 120 --config - -o "${CADDY_SCRIPT}" 2>/dev/null || fail 'Caddy installer download failed'
+  bash "${CADDY_SCRIPT}" </dev/null || fail 'Caddy installation failed; Agent installation stopped'
+fi
 if [ -n "${BOOTSTRAP_CERTIFICATE}" ]; then
   [ -n "${HOST_SCRIPT}" ] || prepare_host_script
   bash "${HOST_SCRIPT}" --install-shortcuts || fail 'host shortcut installation failed'

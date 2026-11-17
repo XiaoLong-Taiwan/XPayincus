@@ -1,8 +1,8 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.19`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.20`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
 
-本輪同步 v1.0.19 產品版本、Compose 標籤與現行文件，記載更新恢復命令提示與 Agent bootstrap 首次信任流程，現行最低 updater 維持 v1.0.3，詳見 [v1.0.19 發行目標](../RELEASE.md#v1019-發行目標)。跨版本升級仍須交付完整 migration。本次未執行測試、型別檢查、建置、提交或推送；後續驗證由 GitHub Actions 執行。
+本輪整合 Agent 出站 WSS 管理隧道，面板不直連宿主 Incus／Caddy 管理埠，Server 與 Agent 須協調升級；另修正容量、CPU 架構、受管端口顯示及 Caddy admin 遷移與 autosave 恢復。產品版本與現行文件同步至 v1.0.20，現行最低 updater 維持 v1.0.3，詳見 [v1.0.20 發行目標](../RELEASE.md#v1020-發行目標)。跨版本升級仍須交付完整 migration。本次未執行測試、型別檢查、建置、提交或推送；驗證由 GitHub Actions 執行。
 
 ## 目錄與能力
 
@@ -18,7 +18,7 @@
 | `../XPayincus-Agent/` | Go 宿主監控與自升級元件 |
 | `../XPayincus-Agent/components/rfw/`、`../XPayincus-Agent/components/zfs/` | 宿主防火牆與儲存建置元件；Go Agent 不直接載入核心模組 |
 
-面板提供 Incus LXC／KVM 管理、NAT 與流量、方案購買與續費、錢包與訂單、支付回調、工單通知、管理後台、OAuth 及 `/api/v1` Public API。Agent 以 HMAC 心跳回報宿主資源、實例狀態和流量；不執行建立、銷毀或啟停實例的下發任務。
+面板提供 Incus LXC／KVM 管理、NAT 與流量、方案購買與續費、錢包與訂單、支付回調、工單通知、管理後台、OAuth 及 `/api/v1` Public API。Agent 以 HMAC 心跳回報宿主資源、實例狀態和流量，並建立出站 WSS 隧道，將已認證的面板管理請求轉送至固定本機 Incus socket 與 Caddy admin API；協定與限制見 [隧道說明](../XPayincus-Agent/TUNNEL.md)。
 
 歷史版本已移除插件／主題平台等模組，舊 release notes 中的功能僅代表當時狀態。API 實際行為以 `server/src/routes` 與 OpenAPI 為準。
 

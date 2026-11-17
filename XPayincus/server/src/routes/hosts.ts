@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
-import { Agent, request as undiciRequest } from 'undici'
+import { getAgentTunnel } from '../lib/agent-tunnel.js'
 import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
 import { checkHostingAccess } from '../lib/hosting-access.js'
@@ -955,7 +955,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     schema: {
       body: {
         type: 'object',
-        required: ['name', 'url'],
+        required: ['name'],
         properties: {
           name: { type: 'string', minLength: 2 },
           url: { type: 'string' },
@@ -1050,14 +1050,13 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const urlValidation = validateUrl(url, 'Host URL')
-    if (!urlValidation.valid) {
-      return reply.code(400).send({ error: urlValidation.message })
-    }
-
-    const hostAddressValidation = validateIpOrDomain(new URL(urlValidation.sanitized || url).hostname, 'Host address')
-    if (!hostAddressValidation.valid) {
-      return reply.code(400).send({ error: hostAddressValidation.message })
+    const agentOnlyOnboarding = !url && !certPath && !keyPath
+    const normalizedHostUrl = url || 'https://agent-managed.invalid'
+    if (url) {
+      const urlValidation = validateUrl(url, 'Host URL')
+      if (!urlValidation.valid) return reply.code(400).send({ error: urlValidation.message })
+      const hostAddressValidation = validateIpOrDomain(new URL(urlValidation.sanitized || url).hostname, 'Host address')
+      if (!hostAddressValidation.valid) return reply.code(400).send({ error: hostAddressValidation.message })
     }
 
     if (location) {
@@ -1182,13 +1181,13 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     let hostId: number
     try {
       hostId = await withHostAddressRegistryLock(async () => {
-        const lockedSnapshot = await prepareHostAddressSnapshotForWrite(url)
+        const lockedSnapshot = url ? await prepareHostAddressSnapshotForWrite(normalizedHostUrl) : null
 
         return prisma.$transaction(async tx => {
           const createdHostId = await db.createHost({
             userId: request.user.id,  // 所有者为当前用户
             name,
-            url,
+            url: normalizedHostUrl,
             location,
             countryCode: countryCode || 'us',
             tags: tags || [],
@@ -1204,8 +1203,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
             storageDriver: storageDriver || 'zfs',
             storageType: storageType || 'loop',
             storagePath: storagePath || null,
-            storageSize: storageSize || 60,
-            ipv6Mode: ipv6Mode || 1,
+            storageSize: agentOnlyOnboarding ? 0 : (storageSize || 60),
+            ipv6Mode: agentOnlyOnboarding ? 3 : (ipv6Mode || 1),
             ipv6Subnet: normalizedIpv6Subnet,
             ipv6Gateway: ipv6Gateway || null,
             ipv6ParentInterface: normalizedIpv6ParentInterface,
@@ -1228,14 +1227,14 @@ export default async function hostRoutes(fastify: FastifyInstance) {
             })
           }
 
-          await persistHostAddressSnapshot(createdHostId, lockedSnapshot, 'create', tx)
+          if (lockedSnapshot) await persistHostAddressSnapshot(createdHostId, lockedSnapshot, 'create', tx)
           return createdHostId
         })
       })
     } catch (error) {
       if (error instanceof HostAddressRegistryError) {
         if (error.errorCode === ErrorCode.HOST_ADDRESS_UNRESOLVABLE) {
-          await logHostAddressResolutionFailure(request.user.id, `${name}(create)`, url, 'create', error)
+          await logHostAddressResolutionFailure(request.user.id, `${name}(create)`, normalizedHostUrl, 'create', error)
         }
         return reply.code(400).send(apiError(error.errorCode as ErrorCodeType, error.details))
       }
@@ -1249,10 +1248,11 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     let resourceInfo: { cpuTotal: number; memoryTotalGB: number; diskTotalGB: number } | null = null
     let detectedArchitecture: 'x86_64' | 'aarch64' = 'x86_64'
 
-    if (!needsInitialization && certPath && keyPath) {
+    if (!agentOnlyOnboarding && !needsInitialization && certPath && keyPath) {
       try {
         const client = new IncusClient({
-          url,
+          hostId,
+          url: normalizedHostUrl,
           certPath,
           keyPath
         })
@@ -1335,7 +1335,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       request.user.id,
       'host',
       'host.create',
-      `Created host "${name}" [url: ${url}, location: ${location || 'N/A'}, country: ${countryCode || 'us'}, storage: ${storageDriver || 'zfs'}/${storageType || 'loop'} ${storageSize || 60}GB, instanceType: ${instanceType || 'container'}]`,
+      `Created host "${name}" [agentOnboarding: ${agentOnlyOnboarding}, location: ${location || 'N/A'}, country: ${countryCode || 'us'}, instanceType: ${instanceType || 'container'}]`,
       'success'
     )
 
@@ -1365,6 +1365,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       installCommand = buildHostInstallCommand(panelUrl)
     }
 
+    const agentInstall = agentOnlyOnboarding ? await issueHostAgentInstallToken(hostId) : null
+    const responsePanelUrl = derivePanelUrl(request)
     reply.code(201).send({
       message: needsInitialization
         ? 'Host added, please run install script to complete initialization'
@@ -1372,16 +1374,17 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       host: {
         id: hostId,
         name,
-        url,
+        url: agentOnlyOnboarding ? null : normalizedHostUrl,
         architecture: detectedArchitecture,
         status: autoConnected ? 'online' : 'offline',
         location,
         resources: resourceInfo
       },
-      installCommand: installCommand || undefined,
-      panelUrl,
-      installScriptUrl: `${panelUrl}/api/agent/install.sh`,
-      installToken: installToken || undefined
+      installCommand: agentInstall ? `curl -fsSL '${responsePanelUrl}/api/agent/install.sh' | sudo env INCUDAL_PANEL_URL='${responsePanelUrl}' bash` : installCommand || undefined,
+      panelUrl: responsePanelUrl,
+      installScriptUrl: `${responsePanelUrl}/api/agent/install.sh`,
+      installToken: agentInstall?.installToken || installToken || undefined,
+      installTokenExpiresAt: agentInstall?.installTokenExpiresAt.toISOString()
     })
   })
 
@@ -1466,6 +1469,11 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       // 注入面板地址（与 INJECT_TOKEN 使用相同的行锚定注入方式）
       const frontendUrl = derivePanelUrl(request)
       script = injectInstallVariable(script, 'INJECT_PANEL_URL', frontendUrl)
+      script = injectInstallVariable(
+        script,
+        'INJECT_CADDY_INSTALL_URL',
+        `${frontendUrl}/api/hosts/caddy-script/${generateCaddyScriptToken(host.id)}`
+      )
 
       // 将 token 注入脚本，用户无需手动输入
       script = injectInstallVariable(script, 'INJECT_TOKEN', token)
@@ -1626,81 +1634,14 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: '安装会话已过期，请删除宿主机后重新创建' })
     }
 
-    // 直接使用存储的 url 字段，无需重新拼接（避免 IPv6 地址丢失方括号的问题）
-    const urlObj = new URL(host.url)
-    const hostPort = urlObj.port || '8443'
-    const baseUrl = `${urlObj.protocol}//${urlObj.host}`
-
-    // 准备证书路径
-    const { certPath, keyPath } = getPanelCertificatePaths()
-
-    let cert: Buffer
-    let key: Buffer
-
     try {
-      const pair = readPanelCertificatePair(certPath, keyPath)
-      cert = pair.cert
-      key = pair.key
-    } catch {
-      request.log.error('Panel Incus certificate pair validation failed')
-      return reply.code(500).send({ error: PANEL_CERTIFICATE_ERROR, code: 'PANEL_CERTIFICATE_INVALID' })
-    }
-
-    // 创建 undici Agent（携带面板的 Client 证书）
-    const panelAgent = new Agent({
-      connect: {
-        cert,
-        key,
-        rejectUnauthorized: false  // 首次连接必须忽略宿主机的自签名证书错误
-      }
-    })
-
-    try {
-      // 证书模式：证书已在安装脚本中导入，直接测试连接
-      request.log.info(`Attempting to verify host at ${baseUrl}`)
-
-      // 直接获取资源信息（测试连接）
-      const resourcesUrl = `${baseUrl}/1.0/resources`
-      const serverInfoUrl = `${baseUrl}/1.0`
-      
-      const resourcesRes = await undiciRequest(resourcesUrl, {
-        method: 'GET',
-        dispatcher: panelAgent
-      })
-      const resourcesText = await resourcesRes.body.text()
-      
-      // 只在解析失败时记录错误日志
-      let resourcesData
-      try {
-        resourcesData = JSON.parse(resourcesText)
-      } catch {
-        console.error('[Incus API Error]', {
-          method: 'GET',
-          url: resourcesUrl,
-          statusCode: resourcesRes.statusCode,
-          error: `解析响应失败: ${resourcesText.substring(0, 200)}`
-        })
-        throw new Error(`无效的响应: ${resourcesText.substring(0, 100)}`)
-      }
+      const connection = getAgentTunnel(hostId)
+      const resourcesResult = await connection.request('incus', 'GET', '/1.0/resources')
+      const serverInfoResult = await connection.request('incus', 'GET', '/1.0')
+      const resourcesData = JSON.parse(resourcesResult.body.toString('utf8'))
+      const serverInfoData = JSON.parse(serverInfoResult.body.toString('utf8'))
+      if (resourcesData.type === 'error' || serverInfoData.type === 'error') throw new Error('Agent tunnel Incus verification failed')
       const resources = resourcesData?.metadata || {}
-
-      const serverInfoRes = await undiciRequest(serverInfoUrl, {
-        method: 'GET',
-        dispatcher: panelAgent
-      })
-      const serverInfoText = await serverInfoRes.body.text()
-      let serverInfoData
-      try {
-        serverInfoData = JSON.parse(serverInfoText)
-      } catch {
-        console.error('[Incus API Error]', {
-          method: 'GET',
-          url: serverInfoUrl,
-          statusCode: serverInfoRes.statusCode,
-          error: `解析响应失败: ${serverInfoText.substring(0, 200)}`
-        })
-        throw new Error(`无效的服务器信息响应: ${serverInfoText.substring(0, 100)}`)
-      }
       const hostArchitecture = normalizeArchitecture(
         serverInfoData?.metadata?.environment?.kernel_architecture ||
         serverInfoData?.metadata?.environment?.architectures?.[0]
@@ -1736,8 +1677,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         installTokenExpire: null,
         certDownloadCount: 0,  // 重置下载次数
         certDownloadExpire: null,  // 清空证书下载有效期
-        certPath: certPath,
-        keyPath: keyPath,
         architecture: hostArchitecture
       }
       // 仅在检测到 IPv6 且当前未手动配置时自动填入
@@ -1777,31 +1716,11 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     } catch (err: any) {
       const errorMessage = err.message || String(err)
-      request.log.error({ err, baseUrl }, 'Host verification failed')
-
-      // 根据错误类型返回友好提示
-      if (errorMessage.includes('ECONNREFUSED')) {
-        return reply.code(400).send({
-          error: `连接被拒绝：请检查宿主机防火墙是否放行 TCP ${hostPort} 端口，以及 Incus 服务是否正在运行`
-        })
-      }
-      if (errorMessage.includes('ETIMEDOUT') || errorMessage.includes('ECONNRESET')) {
-        return reply.code(400).send({
-          error: '连接超时：请检查网络连通性和防火墙设置'
-        })
-      }
-      if (errorMessage.includes('not authorized') || errorMessage.includes('certificate') || errorMessage.includes('unauthorized')) {
-        return reply.code(400).send({
-          error: '认证失败：证书未正确导入，请确认安装脚本已正确执行并成功导入面板证书'
-        })
-      }
+      request.log.error({ err, hostId }, 'Host verification failed')
 
       return reply.code(400).send({
         error: `连接失败：${errorMessage}`
       })
-    } finally {
-      // 关闭 agent
-      await panelAgent.close()
     }
   })
 
@@ -1900,19 +1819,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
-    if (!host.cert_path || !host.key_path) {
-      return reply.code(400).send(apiError(ErrorCode.HOST_CERT_NOT_CONFIGURED))
-    }
-
     try {
-      const client = new IncusClient({
-        url: host.url,
-        certPath: host.cert_path,
-        keyPath: host.key_path
-      })
-
-      // 仅测试连通性：尝试连接并获取服务器信息
-      const serverInfo = await client.connect() as {
+      // 透過 Agent tunnel 測試 Incus 管理 API
+      const serverInfoResponse = await getAgentTunnel(hostId).request('incus', 'GET', '/1.0')
+      const envelope = JSON.parse(serverInfoResponse.body.toString('utf8'))
+      if (envelope.type === 'error') throw new Error(envelope.error || 'Agent tunnel verification failed')
+      const serverInfo = envelope.metadata as {
         api_version?: string
         environment?: {
           server_name?: string
@@ -1929,8 +1841,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       await db.updateHostResources(hostId, {
         architecture: hostArchitecture
       })
-
-      await client.close()
 
       return {
         success: true,
@@ -2223,6 +2133,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       instanceType?: 'container' | 'vm' | 'both'
       ipv6ParentInterface?: string
       ipv6Subnet?: string
+      ipv6Mode?: number
       transferEnabled?: boolean
       trafficResetDay?: number
       enableResourcePool?: boolean
@@ -2247,6 +2158,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           instanceType: { type: 'string', enum: ['container', 'vm', 'both'] },
           ipv6ParentInterface: { type: 'string' },
           ipv6Subnet: { type: 'string' },
+          ipv6Mode: { type: 'integer', enum: [1, 3] },
           transferEnabled: { type: 'boolean' },
           trafficResetDay: { type: 'integer', minimum: 1, maximum: 28 },
           notifyPurchase: { type: 'boolean' },
@@ -2268,6 +2180,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       instanceType?: 'container' | 'vm' | 'both'
       ipv6ParentInterface?: string
       ipv6Subnet?: string
+      ipv6Mode?: number
       transferEnabled?: boolean
       trafficResetDay?: number
       notifyPurchase?: boolean
@@ -2434,7 +2347,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const nextIpv6Mode = host.ipv6_mode ?? 1
+    const nextIpv6Mode = updates.ipv6Mode ?? host.ipv6_mode ?? 1
     const nextIpv6Subnet = normalizedIpv6Subnet !== undefined ? normalizedIpv6Subnet : (host.ipv6_subnet ?? null)
     const nextIpv6ParentInterface = normalizedIpv6ParentInterface !== undefined
       ? normalizedIpv6ParentInterface
@@ -2442,6 +2355,15 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     if (nextIpv6Mode === 1 && (!nextIpv6Subnet || !nextIpv6ParentInterface)) {
       return reply.code(400).send(apiError(ErrorCode.HOST_IPV6_ROUTE_REQUIRES_CONFIG))
+    }
+
+    if (nextIpv6Mode === 1 && (updates.ipv6Mode === 1 || updates.ipv6Subnet !== undefined || updates.ipv6ParentInterface !== undefined)) {
+      const agent = await prisma.hostAgent.findUnique({ where: { hostId }, select: { lastReport: true } })
+      const report = agent?.lastReport && typeof agent.lastReport === 'object' && !Array.isArray(agent.lastReport) ? agent.lastReport as Record<string, unknown> : {}
+      const hostReport = report.host && typeof report.host === 'object' && !Array.isArray(report.host) ? report.host as Record<string, unknown> : {}
+      const prefixes = Array.isArray(hostReport.ipv6Prefixes) ? hostReport.ipv6Prefixes : []
+      const hasReportedRoute = hostReport.routedIpv6 === true && prefixes.some(value => typeof value === 'string' && /^\s*[0-9a-f:]+\/(?:[1-9]|[1-5][0-9]|6[0-4])\s*$/i.test(value))
+      if (!hasReportedRoute) return reply.code(400).send({ error: 'Agent has not reported a routed IPv6 prefix', code: 'HOST_IPV6_ROUTE_UNAVAILABLE' })
     }
 
     if (updates.instanceType !== undefined && updates.instanceType !== host.instance_type) {
@@ -2475,6 +2397,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
               natPortEnd: updates.natConfig?.portRangeEnd,
               ipv6ParentInterface: normalizedIpv6ParentInterface,
               ipv6Subnet: normalizedIpv6Subnet,
+              ipv6Mode: updates.ipv6Mode,
               trafficResetDay: updates.trafficResetDay,
               notifyPurchase: updates.notifyPurchase,
               notifyRenew: updates.notifyRenew,
@@ -2553,6 +2476,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
             natPortEnd: updates.natConfig?.portRangeEnd,
             ipv6ParentInterface: normalizedIpv6ParentInterface,
             ipv6Subnet: normalizedIpv6Subnet,
+            ipv6Mode: updates.ipv6Mode,
             trafficResetDay: updates.trafficResetDay,
             notifyPurchase: updates.notifyPurchase,
             notifyRenew: updates.notifyRenew,
@@ -3014,14 +2938,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         const proxySites = await getProxySitesByInstanceId(instance.id)
         if (proxySites.length > 0) {
           // 仅完整删除模式尝试删除 Caddy 远程配置；DB-only 无论宿主机是否在线都不碰远端。
-          if (!databaseOnly && host.caddy_enabled && host.caddy_username && host.caddy_password) {
-            const targetHost = host.nat_public_ip || host.ip_address
-            if (targetHost) {
+          if (!databaseOnly && host.caddy_enabled) {
+            {
               const caddyClient = createCaddyClient({
-                host: targetHost,
-                port: host.caddy_port || 8444,
-                username: host.caddy_username,
-                password: host.caddy_password
+                hostId: host.id,
+                host: '127.0.0.1',
+                port: 2019
               })
               for (const site of proxySites) {
                 try {
@@ -4114,7 +4036,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     return {
       enabled: host.caddy_enabled || false,
       username: host.caddy_username || null,
-      port: host.caddy_port || 8444,
+      port: 2019,
       // 不返回密码，只返回是否已配置
       hasPassword: !!host.caddy_password,
       natPublicIp: host.nat_public_ip || host.ip_address || null,
@@ -4153,7 +4075,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     // 如果已有凭据，复用现有的；否则生成新的
     let username = host.caddy_username
     let password = host.caddy_password
-    const port = host.caddy_port || 8444
+    const port = 2019
     let isNewCredentials = false
 
     if (!username || !password) {
@@ -4188,7 +4110,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       : 'https://incudal.com'
     // 生成带鉴权 token 的脚本下载 URL
     const scriptToken = generateCaddyScriptToken(hostId)
-    const installCommand = `curl -fsSL "${panelUrl}/api/hosts/caddy-script/${scriptToken}" | sudo bash -s -- --username "${username}" --port ${port}`
+    const installCommand = `curl -fsSL "${panelUrl}/api/hosts/caddy-script/${scriptToken}" | sudo bash`
 
     return {
       installCommand,
@@ -4229,7 +4151,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     // 强制生成新凭据
     const username = 'caddy_' + generateRandomString(8)
     const password = generateRandomString(24)
-    const port = host.caddy_port || 8444
+    const port = 2019
 
     // 更新数据库，同时禁用 Caddy（需要重新安装）
     await prisma.host.update({
@@ -4248,7 +4170,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       : 'https://incudal.com'
     // 生成带鉴权 token 的脚本下载 URL
     const scriptToken = generateCaddyScriptToken(hostId)
-    const installCommand = `curl -fsSL "${panelUrl}/api/hosts/caddy-script/${scriptToken}" | sudo bash -s -- --username "${username}" --port ${port}`
+    const installCommand = `curl -fsSL "${panelUrl}/api/hosts/caddy-script/${scriptToken}" | sudo bash`
 
     await createLog(
       user.id,
@@ -4294,31 +4216,20 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
-    if (!host.caddy_username || !host.caddy_password) {
-      request.log.warn({ hostId, hostName: host.name }, '[Caddy Confirm] 缺少凭据，请先生成安装命令')
-      return reply.code(400).send({ error: '请先生成安装命令' })
-    }
-
     // 尝试连接测试
-    const targetHost = host.nat_public_ip || host.ip_address
-    if (!targetHost) {
-      request.log.warn({ hostId, hostName: host.name }, '[Caddy Confirm] 宿主机未配置公网 IP')
-      return reply.code(400).send({ error: '宿主机未配置公网 IP' })
-    }
+    const targetHost = '127.0.0.1'
 
     request.log.info({
       hostId,
       hostName: host.name,
       targetHost,
-      port: host.caddy_port || 8444,
-      username: host.caddy_username
+      port: 2019,
     }, '[Caddy Confirm] 开始测试连接')
 
     const client = createCaddyClient({
+      hostId: host.id,
       host: targetHost,
-      port: host.caddy_port || 8444,
-      username: host.caddy_username,
-      password: host.caddy_password
+      port: 2019,
     })
 
     const connected = await client.testConnection()
@@ -4357,6 +4268,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
    * GET /hosts/caddy-script/:token
    */
   fastify.get<{ Params: { token: string } }>('/caddy-script/:token', {
+    logLevel: 'silent',
     config: {
       rateLimit: {
         max: 10,
@@ -4382,22 +4294,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       request.log.warn(`Caddy script download failed: host ${hostId} not found`)
       return reply.code(404).send('# Error: Host not found')
     }
-    if (!host.caddyPassword) {
-      request.log.warn(`Caddy script download failed: host ${hostId} has no Caddy password`)
-      return reply.code(409).send('# Error: Caddy credentials are not configured')
-    }
-
     try {
       const scriptPath = join(__dirname, '../../templates/caddy.sh')
       const scriptContent = readFileSync(scriptPath, 'utf-8')
-      const passwordInjection = `INJECT_CADDY_PASSWORD_B64="${Buffer.from(host.caddyPassword, 'utf8').toString('base64')}"`
-      if (!scriptContent.includes('INJECT_CADDY_PASSWORD_B64=""')) {
-        throw new Error('Caddy script password injection marker is missing')
-      }
-      const renderedScript = scriptContent.replace('INJECT_CADDY_PASSWORD_B64=""', passwordInjection)
       request.log.info(`Caddy script downloaded for host ${host.name}`)
       reply.header('Cache-Control', 'no-store')
-      reply.type('text/plain').send(renderedScript)
+      reply.type('text/plain').send(scriptContent)
     } catch (err) {
       request.log.error(err, 'Failed to read caddy.sh')
       return reply.code(500).send('# Error: Failed to read script')
@@ -4431,20 +4333,16 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
-    if (!host.caddy_enabled || !host.caddy_username || !host.caddy_password) {
+    if (!host.caddy_enabled) {
       return reply.code(400).send({ error: 'Caddy 未启用' })
     }
 
-    const targetHost = host.nat_public_ip || host.ip_address
-    if (!targetHost) {
-      return reply.code(400).send({ error: '宿主机未配置公网 IP' })
-    }
+    const targetHost = '127.0.0.1'
 
     const client = createCaddyClient({
+      hostId: host.id,
       host: targetHost,
-      port: host.caddy_port || 8444,
-      username: host.caddy_username,
-      password: host.caddy_password
+      port: 2019,
     })
 
     const connected = await client.testConnection()
@@ -4456,8 +4354,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       connected,
       sitesCount: sites.length,
       // 返回 DNS 解析类型提示
-      dnsRecordType: getDnsRecordType(targetHost),
-      dnsRecordValue: targetHost
+      dnsRecordType: getDnsRecordType(host.nat_public_ip || host.ip_address || ''),
+      dnsRecordValue: host.nat_public_ip || host.ip_address || ''
     }
   })
 
@@ -4706,14 +4604,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           console.log(`[BatchSyncStatus] Instance ${instance.id} IPv4 changed: ${oldIpv4} -> ${newIpv4}`)
 
           const proxySites = await getProxySitesByInstanceId(instance.id)
-          if (proxySites.length > 0 && host.caddy_enabled && host.caddy_username && host.caddy_password) {
-            const targetHost = host.nat_public_ip || host.ip_address
-            if (targetHost) {
+          if (proxySites.length > 0 && host.caddy_enabled) {
+            {
               const caddyClient = createCaddyClient({
-                host: targetHost,
-                port: host.caddy_port || 8444,
-                username: host.caddy_username,
-                password: host.caddy_password
+                hostId: host.id,
+                host: '127.0.0.1',
+                port: 2019
               })
 
               for (const site of proxySites) {
