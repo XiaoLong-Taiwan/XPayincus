@@ -5,7 +5,14 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.20**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.21**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.21 宿主驗證與管理入口（發行目標）
+
+- 已安裝宿主可重新驗證並保留維護狀態；Caddy 經 Agent WSS 驗證本機設定，區分隧道離線與 API 失敗，提供驗證並啟用入口。
+- Dashboard／Compose 短入口支援更新計畫、診斷、恢復與同版容器重建，核對可信部署路徑權限；Agent 選單傳遞本機 binary SHA256 並統一設定路徑優先順序。
+- 補齊安裝、容量規劃、同版修復、失敗恢復及備份文件。同步全部必要版本來源、Compose tags／labels、fixture 與現行文件至 v1.0.21，保留 v1.0.20 歷史及第三方版本，最低 updater 維持 `v1.0.3`。
+- 本次僅同步版本與編輯文件，保留既有功能修改；未執行測試、型別檢查、建置、提交、推送或發布。完整說明位於 `docs-site/release-notes/v1.0.21.md`。
 
 ## v1.0.20 WSS 管理與宿主修復（發行目標）
 
@@ -88,7 +95,7 @@
 ## 版本号规则 / Versioning Rule
 
 - 唯一版本來源為統一倉庫根 `VERSION`，格式為 canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]`，依根 `RELEASE.md` 契約維護。
-- Patch 不限個位數；本輪由來源版本 `v1.0.19` 遞增為 `v1.0.20`，不據此推定前版已發布。
+- Patch 不限個位數；本輪由來源版本 `v1.0.20` 遞增為 `v1.0.21`，不據此推定前版已發布。
 - 核心數字與純數字預發行識別碼不得有前導零；版本檔不得有 BOM、空白或額外行，僅允許可選的一個 LF／CRLF 結尾。
 - 歷史 tag、交接與發行說明保留原樣，第三方相依及實際 ZFS 模組版本不跟隨產品升版。
 

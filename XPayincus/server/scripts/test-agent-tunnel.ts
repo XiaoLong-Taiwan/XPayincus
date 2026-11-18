@@ -74,13 +74,19 @@ try {
   while (!received.some(frame => frame.type === 'cancel')) await once(agent, 'message')
   const canceledId = received.find(frame => frame.type === 'cancel')!.id
   assert.equal(received.filter(frame => frame.type === 'request' && frame.id === canceledId).length, 1)
-  const pending = Array.from({ length: 8 }, () => connection.request('incus', 'POST', '/1.0/instances'))
+  const caddyRequests = received.filter(frame => frame.type === 'request' && frame.target === 'caddy').length
+  const disconnectedCaddy = assert.rejects(caddy.getConfig(), (error: unknown) =>
+    error instanceof AgentTunnelError && error.code === 'TUNNEL_DISCONNECTED' && error.outcomeUnknown)
+  while (received.filter(frame => frame.type === 'request' && frame.target === 'caddy').length === caddyRequests) await once(agent, 'message')
+  const pending = Array.from({ length: 7 }, () => connection.request('incus', 'POST', '/1.0/instances'))
   const settled = Promise.allSettled(pending)
   await assert.rejects(connection.request('incus', 'GET', '/1.0'), /CAPACITY/)
   agent.terminate()
   const results = await settled
+  await disconnectedCaddy
   assert.ok(results.every(result => result.status === 'rejected' && result.reason instanceof AgentTunnelError && result.reason.outcomeUnknown))
   assert.throws(() => getAgentTunnel(1), /OFFLINE/)
+  await assert.rejects(caddy.getConfig(), (error: unknown) => error instanceof AgentTunnelError && error.code === 'TUNNEL_OFFLINE')
   await client.close()
   console.log('agent tunnel HTTP/WS, clients, bounds and disconnect behavior tests passed')
 } finally {

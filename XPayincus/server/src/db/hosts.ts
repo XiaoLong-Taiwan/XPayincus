@@ -139,6 +139,7 @@ export async function getHostById(id: number): Promise<Host | null> {
   return {
     id: host.id,
     user_id: host.userId,
+    is_installed: host.isInstalled,
     name: host.name,
     url: host.url,
     location: host.location,

@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -150,6 +151,157 @@ class HostShortcutTests(unittest.TestCase):
         self.assertIn('bash "${HOST_SCRIPT}" --install-shortcuts || fail', agent)
         result = subprocess.run([BASH, '-n', shell_path(SOURCE)], capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class AgentMenuTests(unittest.TestCase):
+    tool = HostShortcutTests.tool
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='agent menu ')
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.bin = self.base / 'bin'
+        self.bin.mkdir()
+        self.config = self.base / 'config.yaml'
+        self.config.write_text('panel_url: "https://panel.example.org"\n', encoding='utf-8')
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith('INCUDAL_')}
+        self.env.update(TEST_BASE=shell_path(self.base), TEST_TOOLS=shell_path(self.bin),
+                        INCUDAL_CONFIG_FILE=shell_path(self.config), FETCH_STATUS='0',
+                        PAYLOAD='printf "%s\\n" "$@" > "$TEST_BASE/installer-args"\n')
+        self.tool('id', 'echo 0\n')
+        fetch = ('printf "%s\\n" "$@" > "$TEST_BASE/download-args"\n'
+                 'while (($#)); do case "$1" in -o|-O) target="$2"; shift 2;; *) shift;; esac; done\n'
+                 'printf "%s" "$target" > "$TEST_BASE/download-target"\n'
+                 'printf "%s" "$PAYLOAD" > "$target"\nexit "$FETCH_STATUS"\n')
+        self.tool('curl', fetch)
+        self.tool('wget', fetch)
+        self.tool('systemctl', 'touch "$TEST_BASE/status-called"\n')
+        self.tool('journalctl', 'touch "$TEST_BASE/logs-called"\n')
+
+    def run_menu(self, *args, wget=False):
+        command = 'export PATH="$TEST_TOOLS:$PATH"; '
+        if wget:
+            command += 'command() { if [[ "$*" == "-v curl" ]]; then return 1; else builtin command "$@"; fi; }; '
+        result = subprocess.run([BASH, '-c', command + 'source "$@"', 'menu-test',
+                                 shell_path(ROOT / 'scripts/agent-menu.sh'), *args],
+                                env=self.env, capture_output=True, text=True, timeout=15)
+        target = self.base / 'download-target'
+        if target.exists():
+            cleanup = subprocess.run([BASH, '-c', 'test ! -e "$1" && test ! -d "${1%/*}"',
+                                      'cleanup-test', target.read_text()], capture_output=True, text=True)
+            self.assertEqual(cleanup.returncode, 0, cleanup.stderr)
+        return result
+
+    def installer_args(self):
+        return (self.base / 'installer-args').read_text().splitlines()
+
+    def test_local_forwards_checksum_binary_version_and_confirmation(self):
+        digest = 'aB09' * 16
+        binary = shell_path(self.base / 'local binary;$(false)')
+        result = self.run_menu('--action', 'local', '--binary', binary, '--sha256', digest,
+                               '--version', 'v1.2.3', '--yes')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.installer_args(), ['--reinstall', '--binary', binary, '--sha256', digest.lower(),
+                                                '--version', 'v1.2.3', '--yes'])
+        self.assertEqual((self.base / 'download-args').read_text().splitlines()[-1],
+                         'https://panel.example.org/api/agent/install.sh')
+
+    def test_local_checksum_uses_real_installer_verification(self):
+        source = (ROOT / 'XPayincus/server/templates/agent-install.sh').read_text(encoding='utf-8')
+        functions = '\n'.join(re.search(r'^' + name + r'\(\) \{.*?^\}', source, re.M | re.S)[0]
+                              for name in ['sha256_file', 'verify_sha256'])
+        self.env['PAYLOAD'] = ('fail() { exit 1; }\n' + functions + '\n'
+                               'while (($#)); do case "$1" in '
+                               '--binary) binary="$2"; shift 2;; '
+                               '--sha256) digest="$2"; shift 2;; *) shift;; esac; done\n'
+                               'verify_sha256 "$binary" "$digest"\n')
+        binary = self.base / 'local binary'
+        binary.write_bytes(b'local Agent checksum fixture\n')
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        for value in [digest, digest.upper(), ''.join(c.upper() if i % 2 else c for i, c in enumerate(digest))]:
+            with self.subTest(digest=value):
+                result = self.run_menu('--action', 'local', '--binary', shell_path(binary), '--sha256', value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_menu('--action', 'local', '--binary', shell_path(binary), '--sha256', '0' * 64)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('sha256 mismatch', result.stderr)
+
+    def test_update_and_install_preserve_confirmation_and_token_arguments(self):
+        result = self.run_menu('--action', 'update')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.installer_args(), ['--reinstall', '--version', 'latest'])
+        token = shell_path(self.base / 'private token')
+        result = self.run_menu('--action', 'install', '--panel-url', 'https://new.example.org',
+                               '--token-file', token, '--yes')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.installer_args(), ['--panel-url', 'https://new.example.org', '--token-file',
+                                                token, '--version', 'latest', '--yes'])
+
+    def test_checksum_rejects_other_actions_before_download_or_status(self):
+        for action in ['install', 'reinstall', 'update', 'status', 'logs']:
+            with self.subTest(action=action):
+                result = self.run_menu('--action', action, '--sha256', 'a' * 64)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('--sha256 僅適用 local', result.stderr)
+        for name in ['download-args', 'installer-args', 'status-called', 'logs-called']:
+            self.assertFalse((self.base / name).exists())
+
+    def test_invalid_or_missing_checksum_stops_before_download(self):
+        for values in [[], [''], ['a' * 63], ['a' * 65], ['g' * 64], ['$(false)']]:
+            with self.subTest(values=values):
+                result = self.run_menu('--action', 'local', '--binary', '/local-agent', '--sha256', *values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.base / 'download-args').exists())
+
+    def test_help_explains_trusted_local_checksum(self):
+        result = self.run_menu('--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--sha256 HASH', result.stdout)
+        self.assertIn('可信來源', result.stdout)
+        self.assertIn('僅適用 local', result.stdout)
+
+    def test_config_file_precedes_config_dir_and_dir_is_fallback(self):
+        directory = self.base / 'custom config'
+        directory.mkdir()
+        (directory / 'config.yaml').write_text('panel_url: "https://directory.example.org"\n', encoding='utf-8')
+        self.env['INCUDAL_CONFIG_DIR'] = shell_path(directory)
+        for file_override, origin in [(True, 'panel'), (False, 'directory')]:
+            with self.subTest(file_override=file_override):
+                if not file_override:
+                    del self.env['INCUDAL_CONFIG_FILE']
+                result = self.run_menu('--action', 'update')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.base / 'download-args').read_text().splitlines()[-1],
+                                 f'https://{origin}.example.org/api/agent/install.sh')
+
+    def test_reinstall_rejects_new_credentials_and_force(self):
+        for action in ['reinstall', 'update', 'local']:
+            for extra in [['--panel-url', 'https://new.example.org'], ['--token-file', '/new-token']]:
+                with self.subTest(action=action, extra=extra):
+                    result = self.run_menu('--action', action, *extra)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('重裝不接受新地址或 TOKEN', result.stderr)
+        result = self.run_menu('--action', 'update', '--force')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.base / 'download-args').exists())
+
+    def test_download_failures_empty_and_invalid_scripts_never_execute(self):
+        valid = self.env['PAYLOAD']
+        for wget in [False, True]:
+            for status, payload in [('22', valid), ('6', valid), ('60', valid), ('28', valid),
+                                    ('0', ''), ('0', valid + 'if then\n')]:
+                with self.subTest(wget=wget, status=status, payload=payload):
+                    self.env.update(FETCH_STATUS=status, PAYLOAD=payload)
+                    result = self.run_menu('--action', 'update', wget=wget)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((self.base / 'installer-args').exists())
+                    if status == '0':
+                        self.assertIn('為空' if not payload else '語法檢查失敗', result.stderr)
+
+    def test_wget_success_executes_installer(self):
+        result = self.run_menu('--action', 'update', wget=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.installer_args(), ['--reinstall', '--version', 'latest'])
 
 
 if __name__ == '__main__':

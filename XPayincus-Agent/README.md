@@ -1,23 +1,120 @@
 # XPayincus Host Agent
 
-統一倉庫的 Go 宿主 Agent，部署於 Incus 宿主機，以 HMAC-SHA256 簽名呼叫 `POST /api/agent/heartbeat`，回報資源、實例狀態與流量，並依已授權的心跳回應升級。Agent 主動建立出站 WSS 管理隧道，將面板請求轉送至固定本機 Incus socket 與 Caddy admin API；面板不直連宿主管理埠。Agent 維持宿主部署，不放入面板 Compose。
+Go Agent 部署在 Incus 宿主機，負責資源、實例狀態、流量與監控歷史回報，透過 HMAC-SHA256 認證連線面板，並建立出站 WSS 管理隧道。Agent、Incus、Caddy、RFW 與 ZFS 均在宿主執行，不放進面板 Compose。
 
-產品版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.20`（發布狀態以 GitHub Release 為準），本目錄 `VERSION` 與 Go main 預設版本同步。Server 與 Agent 須協調升級，新隧道 frame 沒有舊版能力協商或直連降級；反向代理須支援 WebSocket Upgrade 與長連線。協定及失敗語意見 [TUNNEL.md](TUNNEL.md)，統一發行入口及限制見 [RELEASE.md](../RELEASE.md)。
+本文依目前來源樹實作整理；根 [VERSION](../VERSION) 的 `v1.0.21` 是發行目標，正式可下載版本與功能以實際 GitHub Release、面板提供的安裝器及已部署的 Server／Agent 為準。`main` 腳本可能領先穩定版，不能據此推定功能已發布。新的隧道 frame 要求 Server／Agent 協調更新，沒有舊版能力協商或直連降級。操作指南另見 [Agent 安裝](../XPayincus/docs-site/docs/agent/install.md)。
 
-v1.0.12 加入 schemaVersion 2 宿主／實例監控歷史、Linux PSI、累計計數器差值與重設辨識，以及 RFW／ZFS 狀態事件，詳見 [v1.0.12 歷史紀錄](../RELEASE.md#v1012-歷史版本準備紀錄已正式發布) 與 [宿主元件管理](components/README.md)。監控提供 avg／min／max／count／coverage；缺少 PSI 或實例指標時不補成零，資料受採樣、spool 與後端容量限制。後端最多保留 30 天，樣本最多 8192 筆或 1536 KiB、元件事件最多 512 筆或 256 KiB，超限會提早截斷，不能保證完整 30 天。須持久掛載 Agent state 與後端私人 state 目錄；後端仍只支援單一 Node 程序。v1.0.14 安裝入口修正與 TOKEN 分欄見 [歷史發行稿](../XPayincus/docs-site/release-notes/v1.0.14.md)；v1.0.15 監控 HTTP client 與宿主捷徑變更見 [歷史發行目標](../RELEASE.md#v1015-發行目標)。本次首次信任流程見 [v1.0.19 發行目標](../RELEASE.md#v1019-發行目標)；CI 與隔離宿主驗收待後續確認。
+## 元件分工與需求
 
-## 宿主元件整合
+| 元件 | 責任與邊界 |
+| --- | --- |
+| Go Agent | 心跳、採樣、歷史 spool、經授權的自身 binary 升級；轉送管理請求到固定本機 Incus socket／Caddy admin API。 |
+| Incus | 容器／虛擬機生命週期、映像、網路、儲存池及實例 API。Agent 需有本機 socket 權限，安裝 unit 以 root 執行。 |
+| ZFS | 宿主核心模組、pool／dataset 與快照儲存；新裝預設使用 ZFS，既有池沿用、不自動轉換 driver。 |
+| Caddy | 宿主網站反向代理及憑證服務；Agent 只連本機原生 admin API `127.0.0.1:2019`。新裝依 bootstrap 提供的同源 URL 安裝 Caddy。 |
+| RFW | 獨立 Rust/eBPF/XDP 防火牆工具；Go Agent 不自動啟停 RFW、不下載或載入 eBPF，也不執行 DKMS／`modprobe`。 |
 
-Agent 來源樹納入 [RFW](components/rfw/README.md) 與 [ZFS builder](components/zfs/README.md)，實體路徑分別為 `components/rfw` 與 `components/zfs`。以宿主元件 bundle 與 [管理文件](components/README.md) 整合，保留獨立工具鏈及既有資產名稱，不將 Rust/eBPF 或 ZFS 核心功能嵌入 Go Agent。
+[RFW／ZFS 宿主元件](components/README.md) 位於 `components/rfw`、`components/zfs`，保留獨立工具鏈與資產名稱。bundle 是統一 Release 的邏輯元件集合，不代表 Agent 自升級會安裝全部元件。
 
-Go 程序負責監控、心跳、自身二進位升級與固定本機目的地的管理隧道轉送；不自動啟停 RFW、不下載或載入 eBPF、不執行 DKMS／`modprobe`。bundle 是同一統一 Release 的邏輯元件集合，不新增封裝資產，不代表 Agent 安裝器或自升級會安裝全部元件。宿主權限、核心相容性、規則、服務與回復由管理者分別控管。
+- 安裝器支援 Linux `amd64`（x86_64）／`arm64`（aarch64），宿主準備腳本限定 Ubuntu／Debian。建議 Ubuntu 22.04+、Debian 12／13；Debian 11 保留相容能力，Debian 10 以下拒絕。其他 Linux 即使能編譯 Go Agent，也不等於整套安裝流程受支援。
+- 使用 root、Bash、運作中的 systemd、curl、CA 憑證、SHA256 工具；下載 `.gz` 需 gzip。manifest／版本驗證需 python3；目前首次 `ait_` 安裝缺少 python3 時會透過 apt-get 準備，重裝缺少時會停止。選單可用 wget 下載模板，但 installer 仍需要 curl。
+- Incus 所需核心功能、ZFS 工具／模組與 `/dev/zfs` 必須可用；虛擬機另需可用的硬體虛擬化／KVM。受限容器或不允許載入核心模組的 VPS 不能當作完整宿主保證。
+- **小型部署建議起點，未做容量壓測**：宿主 2 核、4 GiB RAM、40 GiB 系統碟，另預留容器／映像／快照／備份空間。實際需求依實例數、負載、ZFS ARC、磁碟 I/O 與保留政策估算。unit 的 `MemoryMax=256M` 是 Agent 程序上限，不是宿主最低 RAM；ARC 限制也不是 ZFS 總記憶體硬上限。
 
-## 設定與執行
+## 網路與協定
 
-預設設定檔為 `/etc/incudal-agent/config.yaml`，內容參考 `config.example.yaml`：
+正式部署使用可驗證憑證的 HTTPS 面板 origin，例如 `https://panel.example.org:8443`，不能帶帳密、路徑或 query。Agent 對該 origin 呼叫 `POST /api/agent/heartbeat`，並主動連線 **`wss://panel.example.org:8443/api/agent/tunnel`**，子協定 `xpayincus-tunnel-v1`。隧道要求 HTTPS；安裝輸入接受 HTTP 不代表 WSS 管理可用。
+
+宿主需能解析面板 DNS、連出面板 HTTPS／WSS，安裝時還需連到套件來源；面板端需能取得 Release，或有完整可信本地資產。反向代理／WAF 必須允許 WebSocket Upgrade、長連線及 Agent 的 HMAC headers，避免把 API 改寫成登入頁。正常管理不要求面板直連宿主 Incus 8443 或 Caddy 2019；實例 SSH、NAT 映射與網站對外埠依服務需求另行開放。
+
+隧道握手以 GET、固定路徑及空 body SHA256 簽名，使用 `x-incudal-agent-id`、`x-incudal-timestamp`、`x-incudal-nonce`、`x-incudal-body-sha256`、`x-incudal-signature`；timestamp／nonce 會驗證，需同步宿主與面板時間。拒絕 Origin header，每個 host 一條隧道；停用或輪換憑證會使連線失效。後端連線 registry 為程序內狀態，只支援單一 Node 程序。
+
+固定轉送目的地為 `/var/lib/incus/unix.socket` 的 `/1.0` API 與 `127.0.0.1:2019` 的 `/config/...`、`/id/...`。不接受任意代理 URL、宿主 shell frame 或 redirect；原遠端 Caddy TLS／Basic Auth 不會轉送至本機 API。Incus 本身仍具實例 exec 等管理能力。一般 body 上限 512 KiB，串流每塊 64 KiB、每 host 最多 8 個工作；有界 HTTP 串流、終端 ACK、重連與未知結果語意見 [TUNNEL.md](TUNNEL.md)。斷線不重播寫入，timeout 後應查 operation／資源狀態再決定下一步。
+
+IPv4 NAT 與 IPv6 routed 是不同配置。IPv6 需供應商真正路由到宿主的可用前綴、正確轉送與防火牆；只有一個宿主 IPv6 地址不等於有可分配的 `/64`。Agent 只有回報明確 routed 能力及合法前綴，面板才會據此啟用 routed 模式；舊 IPv6 NAT 值僅留作歷史相容。純 IPv6 宿主仍須能到達面板、套件來源與下載來源；宿主腳本的 WARP 準備可能失敗，不能保證補足 IPv4 出站。
+
+## 首次名稱 onboarding 與安裝
+
+目前來源樹的新節點流程只要求名稱：管理員填完整名稱，一般使用者填 `PEER<使用者ID>-` 後綴；完整名稱長度 2–64，只使用英數、底線、連字號。建立後取得分開顯示的面板 endpoint 與一次性 TOKEN，首次不要求公開宿主 IP／Incus API 埠。舊部署畫面若不同，先核對面板版本。
+
+確認 endpoint 是這台宿主要加入的可信面板，TOKEN 對應正確節點，再下載並執行安裝器。`ait_` TOKEN 有效 30 分鐘、只能兌換一次；重新產生會輪換 Agent 憑證，使舊憑證失效。相容的 UUID 宿主 TOKEN 走宿主初始化再安裝 Agent，與 `ait_` 流程不同。
+
+以下為 **Linux root shell** 指令（需要時先 `sudo -i`）。以私人暫存目錄下載完整檔案，下載成功才執行；結束清除暫存。不要將 TOKEN 寫入 URL、命令列或 shell 歷史。
+
+```bash
+(
+  umask 077
+  work="$(mktemp -d)" || exit 1
+  trap 'rm -rf -- "$work"' EXIT
+  curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 60 \
+    https://panel.example.org/api/agent/install.sh -o "$work/agent-install.sh" &&
+  bash "$work/agent-install.sh"
+)
+```
+
+依提示分開輸入 endpoint 與隱藏 TOKEN，核對摘要中的面板、版本及儲存計畫，再確認開始。`--yes` 只略過確認，不補齊缺少輸入。無 TTY 自動化使用 `--panel-url https://panel.example.org --token-file /root/agent-install.token --yes`；TOKEN 檔案必須是目前執行者擁有、權限 0600 的一般檔案，不可是 symlink，執行後由管理者移除。不提供明文 `--token`；仍相容 `INCUDAL_PANEL_URL`／`INCUDAL_AGENT_INSTALL_TOKEN` 環境變數。
+
+目前 `ait_` 新裝先預檢、依 manifest 下載並驗證 binary，再呼叫宿主 `--prepare-agent-host` 準備 Incus／ZFS，之後兌換 TOKEN。預設新池為 ZFS loop、10 GiB；這不是生產容量建議，可事先設定 `INCUS_STORAGE_SIZE=40GiB` 等適當容量。可用 `INCUS_STORAGE_POOL` 選既有池、`INCUS_STORAGE_DRIVER=zfs|dir|auto` 控制新池；已有 default profile root 時沿用其 pool，不更換 root，也不接受任意磁碟／source 參數。
+
+TOKEN 以 `/api/agent/install-config/:token?bootstrap=1` 兌換，目前嚴格解析五行：Agent ID、secret、base64 面板憑證、宿主安裝狀態、同源 Caddy installer URL；不執行回應程式碼。憑證配對檢查失敗會回 503 且不消耗 TOKEN；舊兩／四行回應須更新面板。兌換 URL 不跟隨轉址，代理存取日誌應遮蔽 TOKEN 路徑。
+
+後續安裝 Caddy 與宿主捷徑、必要時匯入首次 Incus trust，使用暫存設定跑 `-once` 冒煙後才原子替換 binary、設定與 unit。服務啟動後再檢查；失敗會嘗試回復原 Agent 檔案及服務狀態，**不會回復先前的宿主初始化、Caddy 安裝或面板憑證輪換**。首次顯示「待驗證」時，回面板確認 Agent 在線及管理功能；目前新建頁驗證看 Agent 心跳，不直連宿主 API。依畫面完成驗證後，必要時執行 `incudal --refresh-agent-trust`，不要提前移除舊 trust。
+
+## 管理選單、更新與同版修復
+
+根 `scripts/agent-menu.sh` 提供 install、reinstall、update、local、status、logs 六個動作，可由統一管理入口呼叫或獨立執行。選單從指定面板取得 `/api/agent/install.sh`，實際宿主準備由 installer 執行。使用已審閱且與面板相容的版本；以下 **main 是來源樹入口，可能含尚未發布能力**，若要固定版本，改用已確認含此腳本的 Release tag／commit。
+
+```bash
+(
+  umask 077
+  work="$(mktemp -d)" || exit 1
+  trap 'rm -rf -- "$work"' EXIT
+  curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 60 \
+    https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh \
+    -o "$work/agent-menu.sh" &&
+  bash "$work/agent-menu.sh"
+)
+```
+
+以下假設已將審閱過的腳本保存在 `/root/agent-menu.sh` 與 `/root/agent-install.sh`：
+
+```bash
+bash /root/agent-menu.sh --action status
+bash /root/agent-menu.sh --action logs
+bash /root/agent-menu.sh --action update --version latest
+bash /root/agent-menu.sh --action reinstall --version v1.0.21
+bash /root/agent-menu.sh --action local --binary /root/build/incudal-agent \
+  --sha256 '<可信的64位SHA256>'
+bash /root/agent-install.sh --reinstall --binary /root/build/incudal-agent --sha256 '<可信的64位SHA256>'
+```
+
+版本號僅為用法範例，須已存在可用 Release。`update` 與 `reinstall` 都走 installer `--reinstall`：保留原設定／憑證，重新下載、驗證、覆寫 binary 與 unit 並重啟。**同版也會重新安裝，可用來強制修復同版檔案或套用新 unit，不需要也沒有 `--force`。** 重裝不接受新 endpoint／TOKEN，不準備 Incus／ZFS、不重做 bootstrap，無既有設定不能使用。`status` 是 systemd 狀態；`logs` 顯示最近 100 行，不是持續追蹤。
+
+目前來源樹的選單已支援 `--action local --binary FILE --sha256 HASH`，並將雜湊傳給 installer；選單的 `--sha256` 僅適用 `local`，HASH 必須是可信來源的 64 位十六進位 SHA256。舊選單腳本需更新後才能使用此參數。本機檔案需是已編譯、未壓縮、符合宿主 Linux 架構的 binary；不下載 manifest／binary，也不編譯，仍需連面板做心跳冒煙。未指定可信雜湊時，自行計算的 SHA256 只驗證複製一致性，不證明來源可信。本機模式不提供遠端 manifest 的版本防降級保護，管理者需自行核對。
+
+`reinstall`／安裝器 `--reinstall` 未指定 `--version` 時仍選擇 `latest`，可能升版，不會自動固定目前版本。同版修復必須先確認已安裝版本，再以 `--version` 指定該版本。
+
+遠端安裝依 canonical SemVer 檢查既有 `-version`、目標版本及 `minimumUpdaterVersion`；拒絕降版，若舊 binary 不支援版本辨識，需先核對可信本機 binary 再修復。顯式 `--version` 固定版本 manifest 與 SHA256。使用快取會顯示實際版本及「無法確認最新」，不能當成已取得最新穩定版。
+
+## 設定、路徑與保留範圍
+
+| 項目 | 預設絕對路徑 |
+| --- | --- |
+| Agent binary／自升級備份 | `/usr/local/bin/incudal-agent`／`/usr/local/bin/incudal-agent.bak` |
+| 設定（root:root、0600） | `/etc/incudal-agent/config.yaml` |
+| systemd unit／日誌 | `/etc/systemd/system/incudal-agent.service`／`journalctl -u incudal-agent` |
+| 私人 state（0700） | `/var/lib/incudal-agent` |
+| 舊歷史／v2 監控 spool | `/var/lib/incudal-agent/history`／`/var/lib/incudal-agent/monitoring-v2` |
+| 升級狀態／鎖 | `/var/lib/incudal-agent/upgrade.json`／`/run/incudal-agent-upgrade.lock` |
+| 本機管理 API | `/var/lib/incus/unix.socket`／`http://127.0.0.1:2019` |
+| 宿主捷徑 | `/usr/local/bin/incudal`、`/usr/local/bin/k` |
+| 元件狀態來源 | `/run/xpayincus/rfw-status.json`、`/run/xpayincus/zfs-status.json` |
+| ZFS ARC 設定 | `/etc/modprobe.d/99-zfs-arc.conf` |
+
+目前來源樹的選單與 installer 都優先使用 `INCUDAL_CONFIG_FILE` 指定的設定檔，其次使用 `${INCUDAL_CONFIG_DIR}/config.yaml`，皆未指定時預設為 `/etc/incudal-agent/config.yaml`。舊選單與 installer 腳本需更新，以確保使用相同的設定路徑優先順序。binary／unit 可用 `INCUDAL_INSTALL_DIR`、`INCUDAL_AGENT_BIN`、`INCUDAL_SERVICE_FILE` 覆寫。宿主信任工具則使用 `INCUDAL_AGENT_CONFIG_FILE`，不要混淆。自訂路徑需讓 unit、選單與信任工具使用同一檔案。重裝擷取 endpoint 依安裝器產生的 `panel_url: "…"` 單行格式，任意 YAML 排版不保證相容。
 
 ```yaml
-panel_url: "https://pay.example.org"
+panel_url: "https://panel.example.org"
 agent_id: "<面板產生的 Agent ID>"
 agent_secret: "<面板產生的私密金鑰>"
 heartbeat_interval_seconds: 60
@@ -27,110 +124,51 @@ spool_max_bytes: 16777216
 spool_retention_hours: 72
 ```
 
-請使用面板產生的設定，限制檔案權限，不要提交金鑰。可用 `INCUDAL_PANEL_URL`、`INCUDAL_AGENT_ID`、`INCUDAL_AGENT_SECRET`、`INCUDAL_HEARTBEAT_INTERVAL_SECONDS`、`INCUDAL_REQUEST_TIMEOUT_SECONDS` 覆寫。
+執行期支援 `INCUDAL_PANEL_URL`、`INCUDAL_AGENT_ID`、`INCUDAL_AGENT_SECRET`、`INCUDAL_HEARTBEAT_INTERVAL_SECONDS`、`INCUDAL_REQUEST_TIMEOUT_SECONDS`、`INCUDAL_AGENT_STATE_DIR`、`INCUDAL_AGENT_SPOOL_MAX_BYTES`、`INCUDAL_AGENT_SPOOL_RETENTION_HOURS` 覆寫。設定為簡單 `key: value`，不是完整 YAML 引擎。請持久保留私人 state，勿分享設定內容或備份中的 secret。
 
-以下從本目錄執行，需要 Go 1.22+：
+預設心跳 60 秒、允許 30–3600 秒；單次最多 500 個實例，狀態讀取並發 3，非執行中不額外讀 `/state`。成功日誌首筆及約每 10 分鐘一次，失敗首筆及約每分鐘一次。unit 限制 `CPUQuota=20%`、`MemoryMax=256M`、`TasksMax=128`、journal 每 30 秒最多 120 筆。binary 自升級不改 unit；保留設定重裝才會套用當前模板限制。
 
-```bash
-go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml -once
-go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml
-```
+## 面板授權自升級
 
-`-once` 只執行一次心跳，不執行自動升級。這些是參考指令，本次文件整理未執行。
+面板在 Agent 在線、啟用、版本可辨識且有較新相容版本時，允許擁有者／管理員明確確認升級。`POST /api/agent/hosts/:hostId/upgrade` 使用 `{ "confirm": true, "targetVersion": "v1.0.21" }`（版本為範例）；Server 重新驗證版本、平台及最低 updater，固定 manifest 版本／雜湊／同源 URL。未授權心跳不自動推新版，同版自升級不替換檔案；同版修復請用 installer 重裝。
 
-## 安裝與資源限制
+Agent 最多隨機等待 5 分鐘，執行逾時 10 分鐘；只接受 `panel_url` 同源 URL 與轉址，下載／解壓上限各 64 MiB，先檢查 SHA256／大小再解壓、備份、原子替換並安排服務重啟。此流程只更換 Agent binary，不更新 unit、Incus、Caddy、RFW 或 ZFS。不要把 `.bak` 的存在視為健康失敗後一定自動回復的保證。
 
-從管理後台產生 **Agent** 安裝 TOKEN（`ait_`，30 分鐘有效、只能兌換一次），在目標宿主機執行。此 TOKEN 與宿主初始化 TOKEN 不同；產生新 Agent TOKEN 會輪換 Agent 憑證，使舊 Agent 憑證失效。安裝模板位於 `../XPayincus/server/templates/agent-install.sh`，由面板 `/api/agent/install.sh` 提供。
+目前支援 `upgrade-status-v1` 的實作以 operation ID 去重，記錄 downloading、verifying、replacing、awaiting-health 等階段，重啟後成功資源心跳確認 healthy；舊 Agent 維持一次下發相容行為。Server 狀態含 pending、delivered、succeeded、failed、unconfirmed，等待視窗為兩次心跳加 20 分鐘；HTTP 成功／已下發不代表升級成功。已部署版本是否提供細分狀態，需核對 Release。
 
-安裝器從面板同源 `/api/agent/manifest.json` 選擇 amd64／arm64，下載、核對 SHA256 後原子安裝至 `/usr/local/bin/incudal-agent`，建立設定及 systemd 服務，執行單次心跳後啟動服務。自訂 `INCUDAL_AGENT_BINARY_URL` 必須同時提供 `INCUDAL_AGENT_BINARY_SHA256`。
+API 的授權 journal 需使用倉庫外私人可寫絕對目錄 `INCUDAL_AGENT_STATE_DIR`，預設服務帳號 `~/.local/state/xpayincus/agent`；此為面板端設定，與宿主 Agent 的同名環境變數分屬不同程序。Compose 需持久掛載，檔案 journal 不提供跨程序鎖，禁止多 API 副本。重啟 API 不取消已下發工作，憑證輪換後不沿用舊授權，稽核事件為 `host.agent_upgrade_request`。
 
-一次性 TOKEN 透過 `/api/agent/install-config/:token?bootstrap=1` 兌換 Agent 認證、base64 面板憑證與宿主已安裝狀態；面板先檢查憑證配對，失敗回傳 503 且不消耗 TOKEN。安裝器嚴格解析四行設定，不執行回傳程式碼；舊兩行回應須先更新面板。兌換後安裝宿主捷徑；首次節點在替換／啟動 Agent 前匯入初始面板憑證，失敗即停止。若宿主尚未準備完成，仍會進入既有 Incus／ZFS 準備流程。
+## 監控與除錯
 
-首次節點啟動後顯示「待驗證」，不立即執行 HMAC 信任刷新或移除舊 trust。請由擁有者／管理員在面板執行連線驗證，成功後再於宿主執行 `incudal --refresh-agent-trust`。已安裝節點仍使用 HMAC 刷新，403 等認證錯誤會失敗，不會轉成首次安裝成功；首次匯入不代表面板已完成驗證。
+監控 schemaVersion 2 包含宿主／實例歷史、Linux PSI、累計計數器差值／重設辨識、RFW／ZFS 狀態事件與 avg／min／max／count／coverage。缺少指標不補零，重啟、計數器重設與採樣間隔會影響 coverage。預設 spool 各受設定的 16 MiB／72 小時限制；伺服器最多保留 30 天，樣本 8192 筆或 1536 KiB、元件事件 512 筆或 256 KiB，達上限會提早截斷，不能保證完整 30 天。監控歷史不取代計費紀錄或備份。
 
-### 獨立互動與參數入口
-
-數字選單入口為根 `scripts/agent-menu.sh`，可單獨下載或由 `scripts/manage.sh` 以 `bash agent-menu.sh` 呼叫。提供新裝、保留設定重裝、更新至最新穩定版、本地 binary 重裝、status 及最近 100 行 logs；從 `/dev/tty` 讀取選項，管線下載仍可互動。選單只從指定面板下載 `/api/agent/install.sh` 單檔，不 clone 倉庫，不簽發憑證，不管理 Incus／ZFS／RFW。
-
-Linux root shell 可直接執行獨立短指令，無須先下載倉庫；選單以 `[1]` 至 `[6]`、`[0]` 及分隔線顯示。沒有 root 時可先 `sudo -i`，再執行：
+在宿主先做唯讀檢查：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh)
+systemctl --no-pager status incudal-agent incus caddy
+journalctl --no-pager -u incudal-agent -n 100
+/usr/local/bin/incudal-agent -version
+getent ahosts panel.example.org
+timedatectl status
+incus query /1.0
+incus storage list
+zpool status
+zfs list
+curl -q -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:2019/config/ -o /dev/null
 ```
 
-亦支援 `curl -fsSL https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh | bash`，互動仍讀 `/dev/tty`；沒有控制終端時改用 `--action`。腳本不執行 `cd`，退出／返回不改變啟動 shell 的 cwd；相對 `--binary`、`--token-file` 路徑以啟動目錄解析。缺少 status／logs 或下載必要指令會明確報錯。以下保留先下載、再以 sudo 執行的方式：
+- **403／認證失敗**：分辨是面板 HMAC、TOKEN 兌換、WAF，還是面板連 GitHub 被拒絕。核對節點啟用狀態、endpoint、是否重新簽發 TOKEN 導致舊 secret 失效、代理是否保留 headers，以及宿主／面板 UTC 時間。不要關閉驗證或盲目反覆兌換。
+- **DNS／TLS／時間偏差**：檢查 A／AAAA、IPv4／IPv6 實際出站、完整 CA chain、憑證主機名與期限、系統時間及 NTP。不要使用 `-k` 略過 TLS。心跳正常而操作失敗時，再看 WSS Upgrade／長連線、Server／Agent 協定相容性及本機 API。
+- **ZFS／pool 失敗**：核對 `uname -r`、`modinfo zfs`、`/dev/zfs`、核心 headers／DKMS 或預編譯模組相容性、磁碟可用空間與 `zpool status`。Agent 重裝不修核心模組；新裝明確要求 ZFS 時不可把失敗當成已自動降級 dir。現有 root 指向無效 pool 時需先修復，不刪池重建。
+- **監控空白／缺口**：核對 Incus socket、`/proc/pressure/`、state 所有者／權限／磁碟空間及 spool 是否收到 ACK；元件狀態檔須是有效一般 JSON 檔且約 5 分鐘內更新。缺少 exporter 或 stale 檔案代表 unavailable，不等於 RFW／ZFS 故障，也不應填零。
+- **舊安裝下載 400／manifest 解析失敗**：舊 installer 可能將 timestamp 放進保留的 `v` 參數，或不能解析單行 manifest。更新面板安裝器，確認使用獨立 `cache_bust` 與固定版本 `v`／SHA256，再取新命令。
+- **TOKEN 與重試**：binary 下載／校驗在兌換前，失敗可在有效期內修正重跑；TOKEN 交換只發一次，回應遺失、消耗狀態不明、格式錯誤或後續失敗時先查原因，再產生新 TOKEN。新憑證輪換不能由本機備份撤銷。保留設定重裝可修正後重跑。
 
-```bash
-curl -q -fsS --proto '=https' https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh -o agent-menu.sh
-sudo bash agent-menu.sh
-```
+首次 Incus trust 匯入不代表完整管理驗收；`incudal --refresh-agent-trust` 依既有 HMAC 認證取得並驗證面板憑證，確認新連線成功後才移除舊指紋。不要因舊腳本提示需要直連 8443 就公開管理埠，先核對是否混用舊版直連腳本。若 `AGENT_AUTH_REQUIRED`／`AGENT_SIGNATURE_INVALID`，重新配對而非跳過檢查。面板 `client.crt`／`client.key` 必須成對還原，半套或配對不符時不可刪檔觸發重建。
 
-亦可用 `wget --https-only -O agent-menu.sh https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh`。非互動介面：`--action install|reinstall|update|local|status|logs`；新裝接受 `--panel-url`、`--token-file`（未提供 TOKEN 時由 installer 隱藏輸入），`local` 接受 `--binary`，下載模式接受 `--version latest|vSemVer`。重裝／更新讀取既有設定並保留憑證，不接受新面板地址。installer 仍需 curl；manifest／版本檢查需要 python3，缺少時明確停止，不自動安裝套件。首次使用新版版本守衛時，若舊 binary 不支援 `-version`，應先核對可信本地 binary 再使用本地重裝，避免無法判定版本時盲目降版。
+## Release 來源、相容與建置
 
-預設來源為統一倉庫 `XiaoLong-Taiwan/XPayincus` 的穩定 `/releases/latest`，明確指定其他 Agent repository 時仍保留 `agent-` 前綴相容；可用 `INCUDAL_AGENT_RELEASE_TAG_PREFIX` 明確覆寫。403／離線回退會顯示實際快取版本及「無法確認最新」，不將快取版標為 latest。顯式 `--version` 透過面板取得指定版本 manifest，下載固定版本與 SHA256；已安裝版本較新或低於 minimumUpdaterVersion 時拒絕遠端替換。
-
-先從可信的面板下載模板再執行，避免把 TOKEN 放進下載 URL 或 shell 歷史；正式環境使用 HTTPS。以下指令在 Linux 宿主機執行，需要 root、Bash、systemd 及 curl：
-
-```bash
-curl -q -fsS --proto '=https' https://panel.example.org/api/agent/install.sh -o agent-install.sh
-sudo bash agent-install.sh
-```
-
-依提示輸入面板地址（僅 HTTP(S) origin，例如 `https://panel.example.org:8443`）及隱藏輸入的 Agent TOKEN。地址及 TOKEN 分開輸入，不需執行整套宿主初始化。管線執行時仍從 `/dev/tty` 讀取互動值；沒有 TTY 時必須提供參數或既有憑證環境變數。
-
-自動化入口使用 root 擁有、權限 `0600`、只含 TOKEN 的一般檔案，由秘密管理工具提供：
-
-```bash
-sudo bash agent-install.sh --panel-url https://panel.example.org --token-file /root/agent-install.token
-```
-
-不提供明文 `--token` 參數，避免出現在程序參數及歷史；相容既有面板命令所用 `INCUDAL_PANEL_URL`／`INCUDAL_AGENT_INSTALL_TOKEN` 環境變數。執行後由管理者移除 TOKEN 檔案。安裝器關閉 shell trace、遮蔽 dry-run 金鑰、透過 curl stdin 傳遞兌換 URL，不跟隨兌換轉址，也不執行兌換回應中的 shell 程式碼。反向代理須自行遮蔽既有 `/api/agent/install-config/:token` 路徑的存取日誌，勿記錄完整請求 URL。
-
-### 僅重裝 Agent 與本機 binary
-
-```bash
-sudo bash agent-install.sh --reinstall
-sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent
-sudo bash agent-install.sh --reinstall --binary /root/build/incudal-agent --sha256 <可信的64位SHA256>
-```
-
-`--reinstall` 要求已有 `/etc/incudal-agent/config.yaml`，逐位元組保留設定與憑證，更新 Agent binary 及 Agent systemd unit，重啟 `incudal-agent`；不接受新地址／TOKEN。若需更換面板或輪換憑證，使用獨立安裝入口。地址讀取支援安裝器產生的 `panel_url: "…"` 格式；自訂 YAML 格式須先調整。`--binary` 接受已編譯的未壓縮 Linux amd64／arm64 binary，不下載 manifest 或 binary，也不執行編譯；可與首次安裝的地址及 TOKEN 檔案搭配。預設計算本機 SHA256 並驗證暫存副本；指定 `--sha256` 時另核對可信雜湊。自行計算的雜湊只確認複製一致性，不證明來源可信。
-
-保留設定的 `--reinstall` 模式只更新 Agent binary 與 `incudal-agent.service`，保留既有設定，不執行首次宿主準備或 TOKEN bootstrap。沒有既有設定時不可使用此模式。本機 binary 重裝不下載 manifest／binary，但單次冒煙仍需要連到面板；`-once` 不觸發自動升級。TOKEN 安裝另包含宿主捷徑，依面板宿主狀態選擇首次 Incus trust 匯入或已安裝節點 HMAC 刷新；宿主未準備完成時會進入既有準備流程。
-
-### 失敗與重試
-
-- 主控向可信已設定 GitHub repository 讀取 Agent Release 時，每次請求含重新導向及回應本文共用 15 秒逾時；連線／本文傳輸中斷及 502／503／504 最多補試一次。403／429 不立即重試、不移除憑證改用匿名請求；探索、manifest 或 binary 網路失敗時，僅使用已完整驗證的持久快取，沒有快取則報錯。無效 schema、版本、大小、SHA256 或不可信重新導向直接拒絕，不藉舊快取繞過驗證。磁碟快取保留原完整版本，下載失敗不發布半套資產。
-- manifest／binary 下載使用連線逾時 10 秒、單次最多 120 秒，curl 對暫時性錯誤最多重試 2 次、間隔 2 秒，重試視窗 360 秒；永久 HTTP 錯誤、SHA256 不符及解壓失敗不盲目重試。
-- 預檢、下載及 SHA256 檢查在 TOKEN 兌換前完成。此階段失敗可修正網路、權限或檔案後重跑，TOKEN 仍受原本 30 分鐘時效限制。
-- TOKEN 兌換只有一次請求，連線逾時 10 秒、總逾時 30 秒。403／404、兌換回應遺失、格式不符或後續冒煙失敗時，先確認原因，再從管理後台產生新 Agent TOKEN；不自動重送或儲存兌換後的秘密供續跑。
-- 冒煙在替換前執行，失敗保留原安裝；替換後服務檢查失敗會回復舊 binary、設定、unit 與服務狀態。回復不完整時保留備份並報錯，須人工處理，不能無限循環重啟安裝。面板憑證輪換無法由本機回復撤銷，舊設定即使還原也可能無法連線。
-- 保留設定的重裝可在修正問題後重跑；服務由既有 `Restart=always`／`RestartSec=5` 處理執行期重啟，安裝器不改動心跳或 ping 的重試行為。
-
-- 預設心跳 60 秒，最小 30 秒。
-- 每次最多回報 500 個實例，狀態讀取並發為 3，非執行中實例不額外讀取 `/state`。
-- 成功心跳日誌約每 10 分鐘記錄，失敗約每分鐘記錄，並保留首次日誌。
-- 安裝模板設定 `CPUQuota=20%`、`MemoryMax=256M`、`TasksMax=128` 及 journal 速率限制。
-
-二進位自升級不會更新既有 systemd service；舊安裝可使用 `--reinstall` 套用資源與日誌限制。
-
-## 一鍵授權更新
-
-宿主詳情的 Agent 區塊在 Agent 在線、啟用且發現較新版本時顯示「一鍵更新 Agent」。確認視窗列出目前及目標版本，明確授權替換 Agent binary 並重啟 Agent 服務；只有宿主擁有者或管理員可操作。不輪換憑證，不更新 Incus／RFW／ZFS 或 systemd unit。
-
-`POST /api/agent/hosts/:hostId/upgrade` 要求 JSON `{ "confirm": true, "targetVersion": "v1.0.20" }`（版本僅為範例，須已正式發布）。後端重新驗證目標版本、平台與最低 updater 版本（現行 `v1.0.3`），固定當次 manifest 的版本、雜湊及同源代理下載指令；不接收自訂 URL 或命令。版本已變更時須重新整理並再次確認。較新或相同版本不降級；未知版本、離線、停用及不相容平台不能更新。
-
-未授權心跳不自動下發新版，重複請求不替換進行中的目標。狀態 API 的 `agent.upgrade` 提供 `pending`、`delivered`、`succeeded`、`failed`、`unconfirmed`，附 operation ID、目標版本、階段、錯誤及時間。支援 `upgrade-status-v1` 的 Agent 以相同 operation ID 去重，回應遺失時可重新下發同一操作；舊 Agent 維持一次下發相容行為。新版成功須符合目標版本及 `healthy` 回報，舊版僅確認目標版本心跳，皆不代表所有宿主功能已驗收。
-
-Go Agent 保留原本最多 5 分鐘隨機延遲與 10 分鐘執行逾時。面板等待視窗為兩次心跳間隔加 20 分鐘；下發或 HTTP 成功都不代表安裝成功。新版將下載、校驗、替換及等待健康確認等階段存入 `upgrade.json`，由重啟後的新程序在資源心跳成功後確認健康；中斷或健康確認逾時標記失敗。舊 Agent 無細分進度／錯誤回報，未確認時先查心跳與 `journalctl -u incudal-agent`，再明確重試。
-
-授權及狀態由單一 API 程序持久寫入檔案 journal；API 端 `INCUDAL_AGENT_STATE_DIR` 須為應用倉庫外的私人可寫絕對目錄，預設為服務帳號的 `~/.local/state/xpayincus/agent`。容器部署須確保此目錄位於持久掛載，僅寫入容器層不能保證重建後保留。已下發的 Agent 更新可能仍在執行，重啟 API 不會取消宿主工作。授權綁定 Agent ID，輪換憑證後不沿用；請求以 `host.agent_upgrade_request` 留存稽核日誌。檔案 journal 不提供跨程序鎖，仍禁止多個 API 副本。
-
-本機驗證：在 `XPayincus/` 執行 `pnpm --filter server test:agent-upgrade`、Agent 相關守衛、前後端 type-check 及雙端 build；在本目錄執行 `go test ./...`。Linux 真機驗收需用測試宿主：取消確認不應呼叫更新 API，確認後依序看到等待／下發／新版心跳；另驗證未授權心跳、非擁有者、離線、較新版本及校驗失敗。真機驗收不包含在本機守衛通過的證據內。
-
-Agent 只接受目前 `panel_url` 同源下載 URL。下載後先核對 SHA256，再解壓（若適用）、寫入暫存檔、備份並原子替換舊檔，最後重啟 `incudal-agent`。首次使用不含升級執行器的舊版 Agent，需手動重新安裝一次。
-
-面板的來源設定只放在後端，不將 GitHub token 傳入宿主：
+以下只放面板後端，私有 GitHub token 不下發宿主：
 
 ```dotenv
 INCUDAL_RELEASE_REPOSITORY=owner/unified-repository
@@ -138,18 +176,18 @@ INCUDAL_AGENT_RELEASE_REPOSITORY=
 INCUDAL_AGENT_RELEASE_TAG_PREFIX=
 ```
 
-`INCUDAL_AGENT_RELEASE_REPOSITORY` 非空時優先；選中官方統一倉庫或與統一設定相同的倉庫時使用 `v*`，其他 Agent 專用來源預設 `agent-v*`。明確空前綴代表 `v*`，`agent-` 代表舊格式。兩個來源均未設定時使用 `XiaoLong-Taiwan/XPayincus`。私有來源使用 `INCUDAL_AGENT_RELEASE_TOKEN`，修改後重啟後端。Compose 已傳入兩個 repository 設定；前綴與 token 等額外設定需另行注入 API 容器。
+未設定時使用 `XiaoLong-Taiwan/XPayincus`。Agent repository 非空時優先；官方統一來源或與統一設定相同者使用 `v*`，其他 Agent 專用來源預設 `agent-v*`，可用 tag prefix 明確覆寫（空值為 `v*`、`agent-` 為舊格式）。私有來源另設 `INCUDAL_AGENT_RELEASE_TOKEN`。Compose 已傳入兩個 repository 變數，prefix／token 等需額外注入 API 容器。
 
-遠端代理優先讀取同一 Release 的版本化 Agent manifest，沒有時讀取 `manifest.json`，依其雙架構檔名、大小與 SHA256 驗證 `.gz` 或未壓縮二進位。只有缺少 manifest 時才回退到兩架構未壓縮二進位 `xpayincus-agent-${VERSION}-linux-{amd64,arm64}` 並計算雜湊；無效 manifest 不回退。原始碼 zip 或 Actions artifacts 不能取代 Release 資產。也可設定 `INCUDAL_AGENT_RELEASE_DIR=/opt/incudal/agent-release`，將既有格式 `manifest.json` 與其列出的兩架構 `.gz` 一起放入該目錄。
+代理優先讀版本化 Agent manifest，缺少才用 `manifest.json`，核對雙架構檔名、大小及 SHA256；只有 manifest 缺失才允許回退兩架構未壓縮 `xpayincus-agent-${VERSION}-linux-{amd64,arm64}`，無效 manifest 不回退。也可設 `INCUDAL_AGENT_RELEASE_DIR=/opt/incudal/agent-release`，放完整舊格式 `manifest.json` 與兩架構 `.gz`，其雜湊對應壓縮位元組。tag、原始碼 zip 或 Actions artifacts 不等於可供 installer 使用的 Release 資產。
 
-## 建置與發行
+GitHub 403／429 不立即重試或移除憑證改匿名；可回退完整驗證的持久快取，無快取則失敗。無效 schema／版本／大小／SHA256 不以快取繞過。installer 的公開下載使用 10 秒連線、120 秒單次逾時、暫時性錯誤最多補試 2 次；TOKEN 交換總逾時 30 秒且不自動重送。
 
-從統一倉庫根目錄執行：
+從統一倉庫根建置：
 
 ```bash
 bash scripts/build-agent-release.sh
 ```
 
-此 wrapper 讀取根版本並呼叫本目錄 `scripts/build-release.sh`，輸出未壓縮二進位、單檔 `.gz` 及舊格式 `manifest.json`；manifest 雜湊對應壓縮檔位元組。獨立執行本目錄腳本時預設讀取本目錄 `VERSION`，支援預發行後綴。
+wrapper 讀根版本，呼叫本目錄 `scripts/build-release.sh`，輸出未壓縮 binary、`.gz` 與相容 manifest。本目錄 `go.mod` 宣告 Go 1.19；開發請使用與 CI 相容的工具鏈。可在本目錄執行 `go test ./...`，或 `go run ./cmd/incudal-agent -config /etc/incudal-agent/config.yaml -once`；`-once` 只執行一次心跳，不啟動常駐隧道或自動升級。
 
-根 `.github/workflows/release.yml` 由手動或相符 `v*` tag 觸發；手動只上傳 Actions artifacts，tag 流程成功後發布統一 GitHub Release，不會因 Agent `VERSION` 改變就自動發布獨立 `agent-v*` Release。RFW 由根 `scripts/build-rfw-release.sh` 從 `components/rfw` 建置，ZFS 由根 `scripts/package-zfs-source.sh` 從 `components/zfs` 封裝 source-only 包；兩者不進入 Agent 舊格式 `manifest.json` 或面板 OTA manifest。版本、SHA256 與目標主機升級須有各自的執行證據。本次未建置、發布或驗證升級。
+統一發布入口為根 `.github/workflows/release.yml`，手動流程的 artifacts 不代表正式 Release；相符 tag 流程成功發布後才可按 Release 驗證。RFW 由 `scripts/build-rfw-release.sh` 建置，ZFS 由 `scripts/package-zfs-source.sh` 封裝 source-only 包，兩者不進入 Agent 舊 manifest 或面板 OTA manifest。發行規則見 [RELEASE.md](../RELEASE.md)。

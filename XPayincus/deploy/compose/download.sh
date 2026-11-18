@@ -10,9 +10,15 @@ usage() {
     'bash download.sh install DIRECTORY [latest]  (官方最新正式版最小 Compose bundle)' \
     'bash download.sh install-bundle DIRECTORY VERSION SHA256' \
     'bash download.sh install DIRECTORY VERSION SHA256' \
-    'bash download.sh update DIRECTORY VERSION SHA256' \
+    'bash download.sh update DIRECTORY  (官方最新正式版：核驗、備份後安全更新並啟動)' \
+    'bash download.sh update-plan DIRECTORY  (下載核驗及部署檢查，不備份／切換／停機)' \
+    'bash download.sh doctor DIRECTORY [--json]  (唯讀診斷)' \
+    'bash download.sh recover DIRECTORY [--json|--resume-up|--retry-preflight]  (預設唯讀；明確選項才持鎖恢復)' \
+    'bash download.sh force-recreate DIRECTORY  (up pull --force-recreate，短暫停機，保留資料及密鑰)' \
+    'bash download.sh update DIRECTORY VERSION SHA256  (僅準備部署檔案，完成後另執行 up)' \
+    'bash download.sh update-bundle DIRECTORY VERSION SHA256  (僅準備最小 Compose bundle)' \
     '來源固定為 XiaoLong-Taiwan/XPayincus 的固定版本 Release Dashboard Compose 資產。' \
-    '只準備部署檔案，不呼叫 Docker、不初始化或覆寫私人資料。'
+    'install 與固定版本 update 僅準備部署檔案，不呼叫 Docker；既有部署操作會執行所指定目錄的可信 panel.sh。'
 }
 if [[ "${1:-}" == --fetch || "${1:-}" == --resolve ]]; then
   if [[ "$1" == --fetch ]]; then (($# == 5)) || die '下載介面參數錯誤。'; else (($# == 2)) || die '版本解析參數錯誤。'; fi
@@ -206,21 +212,27 @@ try:
         names.append('docker-compose.yml')
     if sys.argv[2] == 'configured':
         names.append('.env')
+    resolved_root = root.resolve(strict=True)
     paths = {root, *(root / name for name in names)}
     for path in list(paths):
         resolved = path.resolve(strict=True)
-        for parent in resolved.parents:
-            if parent == root.resolve():
-                break
-            if root.resolve() in parent.parents:
-                paths.add(parent)
-    for path in paths:
-        resolved = path.resolve(strict=True)
-        if path in [root / name for name in names] and (not resolved.is_file() or resolved.stat().st_size == 0 or root.resolve() not in resolved.parents):
+        if path != root and (not resolved.is_file() or resolved.stat().st_size == 0 or resolved_root not in resolved.parents):
             raise ValueError()
-        info = resolved.stat()
-        if os.name != 'nt' and (info.st_uid not in (0, os.geteuid()) or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
-            raise ValueError()
+        for entry in (path, *path.parents):
+            target = entry.resolve(strict=True)
+            paths.update((entry, target, *target.parents))
+    if os.name != 'nt':
+        for path in paths:
+            info = path.lstat()
+            if info.st_uid not in (0, os.geteuid()):
+                raise ValueError()
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                target = path.resolve(strict=True)
+                if not (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX
+                        and target != resolved_root and resolved_root not in target.parents):
+                    raise ValueError()
     script = (root / 'panel.sh').read_text()
     compose = (root / 'compose.yaml').read_text()
     if 'incudal-panel' not in script or 'command_name=' not in script or not all(value in compose for value in ('services:', '  api:', '  user:', '  admin:')):
@@ -228,6 +240,16 @@ try:
 except (OSError, ValueError):
     sys.exit(1)
 DEPLOYMENT_PY
+}
+deployment_command() {
+  local command_name="$1" directory="$2" method=configured
+  shift 2
+  if [[ "$command_name" == doctor || "$command_name" == recover ]]; then method=prepared; fi
+  deployment_check "$directory" "$method" || die '目錄不是有效且權限安全的 Compose 部署；請提供您管理且信任的部署絕對路徑。'
+  if [[ "$command_name" == force-recreate ]]; then
+    exec bash "$directory/panel.sh" up pull --force-recreate
+  fi
+  exec bash "$directory/panel.sh" "$command_name" "$@"
 }
 move_deployment() {
   (
@@ -469,7 +491,21 @@ case "${1:-menu}" in
   install-bundle) action=install ;;
   update-bundle) action=update ;;
   install|download) action=install ;;
-  update) action=update ;;
+  update)
+    if (($# == 2)); then deployment_command "$@"; fi
+    action=update
+    ;;
+  update-plan|force-recreate)
+    (($# == 2)) || { usage; exit 2; }
+    deployment_command "$@"
+    ;;
+  doctor|recover)
+    (($# == 2 || $# == 3)) || { usage; exit 2; }
+    if (($# == 3)); then
+      case "$1:$3" in doctor:--json|recover:--json|recover:--resume-up|recover:--retry-preflight) ;; *) usage; exit 2 ;; esac
+    fi
+    deployment_command "$@"
+    ;;
   *) usage; exit 2 ;;
 esac
 bundle=false

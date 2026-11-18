@@ -53,8 +53,7 @@ interface Host {
   countryCode: string
   status: 'online' | 'offline' | 'maintenance'
   instanceCount?: number
-  certPath?: string
-  keyPath?: string
+  isInstalled: boolean
   cpuAllowanceMax?: number
   memoryMax?: number
   instanceType?: 'container' | 'vm' | 'both'
@@ -234,8 +233,7 @@ async function verifyHost() {
   }
 }
 
-// 是否需要验证（证书路径未配置）
-const needsVerification = computed(() => !host.value?.certPath)
+const needsVerification = computed(() => host.value?.isInstalled === false)
 
 async function openDeleteModal() {
   if (!host.value) return

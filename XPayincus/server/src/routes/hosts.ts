@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
-import { getAgentTunnel } from '../lib/agent-tunnel.js'
+import { AgentTunnelError, getAgentTunnel } from '../lib/agent-tunnel.js'
 import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
 import { checkHostingAccess } from '../lib/hosting-access.js'
@@ -1625,12 +1625,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       select: { installTokenExpire: true, url: true, isInstalled: true }
     })
 
-    if (fullHost?.isInstalled) {
-      return reply.code(400).send({ error: '该宿主机已完成安装，无需再次验证' })
-    }
-
     // 检查是否过期
-    if (fullHost?.installTokenExpire && new Date() > fullHost.installTokenExpire) {
+    if (!fullHost?.isInstalled && fullHost?.installTokenExpire && new Date() > fullHost.installTokenExpire) {
       return reply.code(400).send({ error: '安装会话已过期，请删除宿主机后重新创建' })
     }
 
@@ -1671,7 +1667,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
       // 只更新连接状态和证书路径，不覆盖任何用户输入的信息
       const updateData: Record<string, unknown> = {
-        status: 'online',
         isInstalled: true,
         installToken: null,  // 清空 installToken（已不再需要）
         installTokenExpire: null,
@@ -1693,6 +1688,10 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       await prisma.host.update({
         where: { id: hostId },
         data: updateData
+      })
+      await prisma.host.updateMany({
+        where: { id: hostId, status: { in: ['online', 'offline'] } },
+        data: { status: 'online' }
       })
 
       await createLog(
@@ -1933,6 +1932,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         url: host.url,
         status: host.status,
         maintenance: host.status === 'maintenance',
+        isInstalled: host.is_installed === true,
         location: host.location,
         countryCode: host.country_code || 'us',
         architecture: host.architecture || 'x86_64',
@@ -4232,18 +4232,16 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       port: 2019,
     })
 
-    const connected = await client.testConnection()
-    
-    request.log.info({
-      hostId,
-      hostName: host.name,
-      targetHost,
-      connected
-    }, '[Caddy Confirm] 连接测试结果')
-
-    if (!connected) {
-      request.log.warn({ hostId, hostName: host.name, targetHost }, '[Caddy Confirm] 无法连接到 Caddy')
-      return reply.code(400).send({ error: '无法连接到 Caddy，请确认已执行安装命令' })
+    try {
+      await client.getConfig()
+    } catch (err) {
+      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED'].includes(err.code)
+      request.log.warn({ hostId, offline }, '[Caddy Confirm] Verification failed')
+      return reply.code(offline ? 503 : 502).send({
+        error: offline
+          ? 'Agent WSS 隧道離線，請確認 Agent 已連線後重試，無需重新安裝 Caddy'
+          : '無法經 Agent 驗證本機 Caddy，請檢查 caddy systemd 服務與 127.0.0.1:2019 管理 API'
+      })
     }
 
     // 更新状态
@@ -4345,8 +4343,18 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       port: 2019,
     })
 
-    const connected = await client.testConnection()
-    
+    try {
+      await client.getConfig()
+    } catch (err) {
+      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED'].includes(err.code)
+      return reply.code(offline ? 503 : 502).send({
+        error: offline
+          ? 'Agent WSS 隧道離線，請確認 Agent 已連線後重試，無需重新安裝 Caddy'
+          : '無法經 Agent 驗證本機 Caddy，請檢查 caddy systemd 服務與 127.0.0.1:2019 管理 API'
+      })
+    }
+    const connected = true
+
     // 获取已配置的站点数量
     const sites = connected ? await client.getSites() : []
 

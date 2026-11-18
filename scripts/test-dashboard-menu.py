@@ -126,6 +126,141 @@ esac
         self.assertIn('arg:menu /srv/panel space', self.calls())
         self.assertIn(RAW + 'XPayincus/deploy/compose/download.sh', self.calls())
 
+    def deployment_fixture(self):
+        self.env['CHILD_SCRIPT'] = (SUPPORT.ROOT / 'XPayincus/deploy/compose/download.sh').read_text(encoding='utf-8')
+        python_path = SUPPORT.shell_path(sys.executable)
+        self.tool('python3', f'exec "{python_path}" "$@"\n')
+        self.deployment = self.base / "panel space's $HOME; deployment"
+        self.deployment.mkdir()
+        self.directory = SUPPORT.shell_path(self.deployment)
+        # Native Windows Python needs its own absolute path syntax for inspection.
+        if os.name == 'nt':
+            self.directory = self.deployment.as_posix()
+        (self.deployment / 'panel.sh').write_text(
+            '# incudal-panel\ncommand_name="${1:-help}"\n'
+            'printf "panel:%s\\n" "$@" >>"$CALLS"\nexit "$CHILD_STATUS"\n',
+            encoding='utf-8', newline='\n')
+        (self.deployment / 'compose.yaml').write_text('services:\n  api:\n  user:\n  admin:\n', encoding='utf-8')
+        (self.deployment / '.env').write_text('private fixture', encoding='utf-8')
+
+    def test_existing_deployment_routes_preserve_arguments_and_exit_status(self):
+        self.deployment_fixture()
+        for args, expected in [
+                (['update'], ['update']), (['update-plan'], ['update-plan']),
+                (['doctor'], ['doctor']), (['doctor', '--json'], ['doctor', '--json']),
+                (['recover'], ['recover']), (['recover', '--json'], ['recover', '--json']),
+                (['recover', '--retry-preflight'], ['recover', '--retry-preflight']),
+                (['recover', '--resume-up'], ['recover', '--resume-up']),
+                (['force-recreate'], ['up', 'pull', '--force-recreate'])]:
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                self.env['CHILD_STATUS'] = '37'
+                result = self.run_entry(args[0], self.directory, *args[1:])
+                self.assertEqual(result.returncode, 37, result.stderr)
+                calls = self.calls()
+                self.assertEqual([line for line in calls.splitlines() if line.startswith('panel:')],
+                                 ['panel:' + arg for arg in expected])
+                self.assertEqual(calls.count(RAW + 'XPayincus/deploy/compose/download.sh'), 1)
+        self.assertEqual((self.deployment / '.env').read_text(), 'private fixture')
+        self.assertFalse((self.deployment / '.state').exists())
+        self.assertFalse((self.deployment / '.bootstrap').exists())
+
+    def test_readonly_diagnostics_work_without_env_or_docker(self):
+        self.deployment_fixture()
+        (self.deployment / '.env').unlink()
+        for command in ['doctor', 'recover']:
+            result = self.run_entry(command, self.directory, '--json')
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.log.unlink()
+        result = self.run_entry('update', self.directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('panel:', self.calls())
+
+    def test_invalid_routes_and_untrusted_deployment_never_execute_panel(self):
+        self.deployment_fixture()
+        for args in [('doctor', '--resume-up'), ('recover', '--force'),
+                     ('recover', '--resume-up', '--json'), ('update-plan', 'extra'),
+                     ('force-recreate', 'extra'), ('update', 'latest')]:
+            with self.subTest(args=args):
+                result = self.run_entry(args[0], self.directory, *args[1:])
+                self.assertEqual(result.returncode, 2, result.stderr)
+        (self.deployment / 'panel.sh').write_text('exit 0\n', encoding='utf-8')
+        result = self.run_entry('doctor', self.directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('panel:', self.calls())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX directory permissions require Linux')
+    def test_parent_chain_permissions_and_sticky_directories(self):
+        self.deployment_fixture()
+        outer = self.base / 'outer'
+        inner = outer / 'inner'
+        inner.mkdir(parents=True)
+        relocated = inner / self.deployment.name
+        self.deployment.rename(relocated)
+        self.deployment = relocated
+        self.directory = SUPPORT.shell_path(relocated)
+        for directory, mode, accepted in [
+                (outer, 0o777, False), (outer, 0o775, False),
+                (outer, 0o1777, True), (inner, 0o1777, True),
+                (self.deployment, 0o1777, False)]:
+            with self.subTest(directory=directory, mode=oct(mode)):
+                original = directory.stat().st_mode & 0o7777
+                try:
+                    directory.chmod(mode)
+                    self.log.unlink(missing_ok=True)
+                    result = self.run_entry('doctor', self.directory)
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                    self.assertEqual('panel:' in self.calls(), accepted)
+                finally:
+                    directory.chmod(original)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX symlinks and directory permissions require Linux')
+    def test_symlink_parent_target_chain_is_checked(self):
+        self.deployment_fixture()
+        target = self.base / 'target'
+        target.mkdir()
+        relocated = target / self.deployment.name
+        self.deployment.rename(relocated)
+        alias = self.base / 'alias'
+        alias.symlink_to(target, target_is_directory=True)
+        self.directory = (alias / self.deployment.name).as_posix()
+        target.chmod(0o777)
+        result = self.run_entry('doctor', self.directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('panel:', self.calls())
+        target.chmod(0o700)
+        result = self.run_entry('doctor', self.directory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lexical_parent = self.base / 'lexical parent'
+        lexical_parent.mkdir()
+        (lexical_parent / 'alias').symlink_to(target, target_is_directory=True)
+        self.directory = (lexical_parent / 'alias' / self.deployment.name).as_posix()
+        lexical_parent.chmod(0o777)
+        self.log.unlink(missing_ok=True)
+        result = self.run_entry('doctor', self.directory)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('panel:', self.calls())
+
+    @unittest.skipIf(os.name == 'nt' or not hasattr(os, 'geteuid'), 'POSIX ownership requires Linux')
+    def test_sticky_parent_with_untrusted_owner_is_rejected(self):
+        if os.geteuid() != 0:
+            self.skipTest('Changing fixture ownership requires root')
+        self.deployment_fixture()
+        parent = self.base / 'untrusted'
+        parent.mkdir()
+        relocated = parent / self.deployment.name
+        self.deployment.rename(relocated)
+        self.directory = SUPPORT.shell_path(relocated)
+        parent.chmod(0o1777)
+        try:
+            os.chown(parent, 65534, -1)
+            result = self.run_entry('doctor', self.directory)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('panel:', self.calls())
+        finally:
+            os.chown(parent, 0, -1)
+            parent.chmod(0o700)
+
     def test_wget_and_download_failure(self):
         (self.bin / 'curl').unlink()
         SUPPORT.ManageMenuTests.fetcher(self, 'wget')
@@ -237,7 +372,12 @@ esac
         self.assertNotIn('fetch:', self.calls())
 
     def test_help_without_download_and_syntax(self):
-        self.assertEqual(self.run_entry('--help').returncode, 0)
+        for option in ['--help', '-h', 'help']:
+            result = self.run_entry(option)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for command in ['update DIRECTORY', 'update-plan DIRECTORY', 'doctor DIRECTORY',
+                            'recover DIRECTORY', 'force-recreate DIRECTORY', '--retry-preflight', '--resume-up']:
+                self.assertIn(command, result.stdout)
         self.assertEqual(self.calls(), '')
         result = subprocess.run([SUPPORT.BASH, '-n', SUPPORT.shell_path(SOURCE)], capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)

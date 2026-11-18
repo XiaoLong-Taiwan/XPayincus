@@ -159,8 +159,19 @@ VERIFY_PY
   bash -n "$work/run-panel.sh"
   bash "$work/run-panel.sh" <&9
 }
-if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
-  printf '%s\n' 'dashboard.sh [menu [DIRECTORY]|install DIRECTORY latest|...]' 'dashboard.sh --host-install  最新正式版原生 Panel 全新安裝（root、互動確認）'
+if [[ "${1:-}" == --help || "${1:-}" == -h || "${1:-}" == help ]]; then
+  printf '%s\n' \
+    'dashboard.sh [menu [DIRECTORY]]  (Dashboard 數字選單)' \
+    'dashboard.sh install DIRECTORY [latest]  (最新正式版最小 Compose bundle)' \
+    'dashboard.sh install[-bundle] DIRECTORY VERSION SHA256  (核驗並準備部署檔案)' \
+    'dashboard.sh update DIRECTORY  (最新正式版：核驗、備份、安全更新並啟動)' \
+    'dashboard.sh update-plan DIRECTORY  (下載核驗及部署檢查，不備份／切換／停機)' \
+    'dashboard.sh doctor DIRECTORY [--json]  (唯讀診斷)' \
+    'dashboard.sh recover DIRECTORY [--json|--resume-up|--retry-preflight]  (預設唯讀；明確選項才持鎖恢復)' \
+    'dashboard.sh force-recreate DIRECTORY  (up pull --force-recreate，短暫停機，保留資料及密鑰；請先備份)' \
+    'dashboard.sh update[-bundle] DIRECTORY VERSION SHA256  (僅準備部署檔案，完成後另執行 up)' \
+    'DIRECTORY 須為您管理且信任的部署絕對路徑；既有部署操作會執行該目錄的 panel.sh。' \
+    'dashboard.sh --host-install  最新正式版原生 Panel 全新安裝（root、互動確認）'
   exit 0
 fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/xpayincus-dashboard.XXXXXXXX")" || fail '無法建立私人暫存目錄。'

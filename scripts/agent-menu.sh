@@ -18,20 +18,22 @@ action=''
 panel=''
 version='latest'
 binary=''
+sha256=''
 token_file=''
 assume_yes=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --yes) assume_yes=1; shift ;;
-    --action|--panel-url|--version|--binary|--token-file)
+    --action|--panel-url|--version|--binary|--sha256|--token-file)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail '參數缺少值'
       case "$1" in
         --action) action="$2" ;; --panel-url) panel="$2" ;; --version) version="$2" ;;
-        --binary) binary="$2" ;; --token-file) token_file="$2" ;;
+        --binary) binary="$2" ;; --sha256) sha256="$2" ;; --token-file) token_file="$2" ;;
       esac
       shift 2 ;;
     --help|-h)
-      printf '%s\n' 'agent-menu.sh [--action install|reinstall|update|local|status|logs] [--panel-url ORIGIN] [--version latest|vSemVer] [--binary FILE] [--token-file FILE] [--yes]'
+      printf '%s\n' 'agent-menu.sh [--action install|reinstall|update|local|status|logs] [--panel-url ORIGIN] [--version latest|vSemVer] [--binary FILE] [--sha256 HASH] [--token-file FILE] [--yes]' \
+        '  --sha256 HASH：僅適用 local；請提供可信來源的 64 位十六進位 SHA-256，以驗證本地 binary。'
       exit 0 ;;
     *) fail '未知參數' ;;
   esac
@@ -53,6 +55,11 @@ if [ -z "$action" ]; then
   prompt choice '請選擇：'
   case "$choice" in 1) action=install ;; 2) action=reinstall ;; 3) action=update ;; 4) action=local ;; 5) action=status ;; 6) action=logs ;; 0) exit 0 ;; *) fail '無效選項' ;; esac
 fi
+if [ -n "$sha256" ]; then
+  [ "$action" = local ] || fail '--sha256 僅適用 local'
+  [[ "$sha256" =~ ^[a-fA-F0-9]{64}$ ]] || fail '--sha256 須為 64 位十六進位 SHA-256'
+  sha256="${sha256,,}"
+fi
 case "$action" in
   status) need systemctl; exec systemctl --no-pager status incudal-agent ;;
   logs) need journalctl; exec journalctl --no-pager -u incudal-agent -n 100 ;;
@@ -65,7 +72,7 @@ command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail '需�
 args=()
 if [ "$action" != install ]; then
   [ -z "$panel$token_file" ] || fail '重裝不接受新地址或 TOKEN'
-  config="${INCUDAL_CONFIG_FILE:-/etc/incudal-agent/config.yaml}"
+  config="${INCUDAL_CONFIG_FILE:-${INCUDAL_CONFIG_DIR:-/etc/incudal-agent}/config.yaml}"
   [ -f "$config" ] && [ ! -L "$config" ] || fail '找不到既有 Agent 設定'
   panel="$(sed -nE 's/^panel_url: "([^"\\]+)"$/\1/p' "$config")"
   args+=(--reinstall)
@@ -78,6 +85,7 @@ fi
 if [ "$action" = local ]; then
   [ -n "$binary" ] || prompt binary '本地未壓縮 binary 路徑：'
   args+=(--binary "$binary")
+  [ -z "$sha256" ] || args+=(--sha256 "$sha256")
 elif [ -n "$binary" ]; then
   fail '--binary 僅適用 local'
 fi
@@ -85,6 +93,8 @@ args+=(--version "$version")
 [ -z "$assume_yes" ] || args+=(--yes)
 work="$(mktemp -d)"
 trap 'rm -f "$work/agent-install.sh"; rmdir "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 url="${panel%/}/api/agent/install.sh"
 if command -v curl >/dev/null 2>&1; then
   curl -q -fsS --proto '=http,https' --connect-timeout 10 --max-time 60 --retry 2 -o "$work/agent-install.sh" "$url"
@@ -93,4 +103,6 @@ elif command -v wget >/dev/null 2>&1; then
 else
   fail '需要 curl 或 wget'
 fi
+[ -s "$work/agent-install.sh" ] || fail '下載的 installer 為空'
+bash -n "$work/agent-install.sh" || fail '下載的 installer 語法檢查失敗'
 bash "$work/agent-install.sh" "${args[@]}"

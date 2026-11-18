@@ -41,6 +41,36 @@ jobs:
           python3 scripts/test-caddy-install.py
           python3 scripts/test-host-shortcuts.py
           python3 XPayincus-Agent/components/zfs/test-debian13-modules.py
+  docs:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: XPayincus
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: XPayincus/docs-site/pnpm-lock.yaml
+      - name: Test deployment documentation guard contracts
+        run: node --test docs-site/scripts/test-deployment-docs.mjs
+      - name: Check deployment documentation
+        run: pnpm --dir docs-site --ignore-workspace check:deployment
+      - name: Install docs dependencies
+        run: pnpm --dir docs-site install --ignore-workspace --frozen-lockfile
+      - name: Build docs
+        run: pnpm --dir docs-site --ignore-workspace build
+      - name: Verify docs output
+        run: test -s docs-site/docs/.vitepress/dist/index.html
   panel:
     needs: version
     runs-on: ubuntu-24.04

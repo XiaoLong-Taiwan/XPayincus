@@ -1,10 +1,12 @@
-# 面板 Compose v1.0.20 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.21 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-本文件描述統一版 v1.0.20 Compose 配置（發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。宿主 Agent 主動連回面板 WSS，面板不直連 Incus／Caddy 管理埠；Server 與 Agent 須協調升級，反向代理須支援 `/api/agent/tunnel` 的 WebSocket Upgrade 與長連線，沒有舊 Agent 自動降級。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.21 Compose 配置（發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。宿主 Agent 主動連回面板 WSS，面板不直連 Incus／Caddy 管理埠；Server 與 Agent 須協調升級，反向代理須支援 `/api/agent/tunnel` 的 WebSocket Upgrade 與長連線，沒有舊 Agent 自動降級。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
+
+Dashboard 小型部署建議起點為 **2 vCPU、4 GiB RAM、40 GiB SSD**，備份空間另計。這是未經壓力測試的建議，不是安裝硬門檻或效能保證；應依 DB／WAL、日誌、更新暫存、來源建置峰值與使用量調整，宿主實例資源另行規劃。
 
 - Linux 主機，Bash、OpenSSL、util-linux `flock`、GNU coreutils／tar／find／awk、Docker Engine 與 Compose v2.20.0 以上外掛；需要 `include`、`up --wait --wait-timeout`、`service_completed_successfully` 與 bind mount 的 `create_host_path: false`，不支援舊版 `docker-compose` v1。操作帳號須能存取 Docker daemon 並讀寫部署目錄，初始化與後續操作請使用同一帳號。
 - pull 模式需能存取 Compose 所設定的映像 registry；有官方 `compose.release.yaml` 時另需 Python 3.9 以上與 Docker Buildx 核對 digest。不需要本機 Node、pnpm 或完整來源。選用 build 模式才需要完整面板原始碼、pnpm lockfile，以及 Debian、npm 與 Prisma 下載來源；建置使用 Node 22、pnpm 9.14.2。
@@ -17,7 +19,7 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 可使用完整倉庫執行 `up` 或 `up build`，或解壓已發布的 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。使用官方發行包時保留附帶的 `compose.release.yaml`；也可只複製該包完整 `deploy/compose/` 目錄，執行 init 與預設 pull 部署。手動／自訂部署沒有該 release 檔時，`up` 與 `up pull` 直接依既有 Compose 的 image 拉取，不要求先以 `update` 納管或改用 build。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.20`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.20`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.21`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.21`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。缺少新入口的舊部署，CLI 與 `init` 回退使用 `compose.yaml`；已存在但損壞的入口不會被忽略。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -87,7 +89,7 @@ Cloudflare 接著隱藏詢問 Tunnel token，寫入 `secrets/cloudflare_tunnel_t
 固定版本可信 SHA256 模式仍相容；請從獨立可信管道確認入口與 archive 的預期值，不能下載後自行計算就視為驗證：
 
 ```bash
-VERSION=v1.0.20
+VERSION=v1.0.21
 BOOTSTRAP_SHA256='填入可信的入口腳本64位小寫SHA256'
 ARCHIVE_SHA256='填入可信的Dashboard封裝64位小寫SHA256'
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
@@ -97,7 +99,7 @@ printf '%s  %s\n' "$BOOTSTRAP_SHA256" "xpayincus-compose-$VERSION.sh" | sha256su
   bash "xpayincus-compose-$VERSION.sh" install /srv/incudal-panel "$VERSION" "$ARCHIVE_SHA256"
 ```
 
-此處使用 v1.0.20 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
+此處使用 v1.0.21 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
 
 ```bash
 cd /srv/incudal-panel
@@ -110,11 +112,29 @@ bash panel.sh setup https://pay.example.org https://admin.example.org admin@exam
 
 舊 `install DIRECTORY VERSION SHA256` 仍下載完整 Dashboard archive，但只取出部署檔；選單／latest 使用最小 bundle。可信 SHA 的最小 bundle 介面為 `install-bundle DIRECTORY VERSION SHA256`，顯式 bootstrap 檔案更新為 `update-bundle DIRECTORY VERSION SHA256`。不安裝 build source 或 `.env.example`。`.env`、`secrets/`、`certs/`、`tls/`、`data/`、`backups/`、`config/`、本機 `source/` 都不在更新清單內。部署目錄須為可信、同一操作帳號獨占寫入的 Linux 目錄；請從根 `panel.sh` 連結操作，不從 `.bootstrap/` 內直接執行。SHA256 保護封裝內容；映像依版本標籤選取，須信任 GHCR 發布者不覆寫標籤。
 
-宿主安全自主更新（需 Python 3.9 以上、Docker Buildx 及本版 `panel.sh`／`update.py`／`download.sh`）：
+宿主安全自主更新（需 Python 3.9 以上、Docker Buildx 及本版 `panel.sh`／`update.py`／`download.sh`／`operations.py`），在實際部署目錄執行：
 
 ```bash
+bash panel.sh doctor --json
+bash panel.sh update-plan
+# 核對目標、另外備份私人設定與憑證後執行
 bash panel.sh update
 ```
+
+也可從統一倉庫根目錄使用短入口；`DIRECTORY` 必須是自己管理且信任的部署絕對路徑，會執行該處既有 `panel.sh`，不替舊工具補齊指令：
+
+```bash
+bash scripts/dashboard.sh doctor /srv/incudal-panel --json
+bash scripts/dashboard.sh update-plan /srv/incudal-panel
+bash scripts/dashboard.sh update /srv/incudal-panel
+bash scripts/dashboard.sh recover /srv/incudal-panel --json
+# 僅需重建目前釘選版本容器時，先備份再執行
+bash scripts/dashboard.sh force-recreate /srv/incudal-panel
+```
+
+`download.sh` 支援相同的 `doctor DIRECTORY`、`update-plan DIRECTORY`、`update DIRECTORY`、`recover DIRECTORY` 與 `force-recreate DIRECTORY`。最後一項等同 `panel.sh up pull --force-recreate`，只重建目前釘選版本，有短暫停機且啟動可能執行 migration；不查 latest、不跨版更新、不回滾 DB、不重裝宿主 Agent。Agent `reinstall` 是保留既有設定的同版修復，沒有 `--force`，升版須走 Agent 更新流程。`update-plan` 與 `update` 各自解析 latest，執行時須再次核對目標版本。
+
+Agent `reinstall`／安裝器 `--reinstall` 未指定 `--version` 時仍選擇 `latest`，可能升版，不會自動固定目前版本；前述同版修復必須先確認已安裝版本，再以 `--version` 指定該版本。
 
 無參數更新只向官方 GitHub Releases API 查詢一次 latest，核對非 draft／prerelease 的正式 `vX.Y.Z`，之後固定 tag 取得 `SHA256SUMS` 與目標最小 Compose bundle。核對舊部署時依 receipt 選擇該版本最小 bundle；舊手動／Dashboard 來源包部署仍需下載舊版來源包來比對。checksum 必須唯一且符合完整資產名稱，整包通過校驗才解析；不接受 URL／repository 覆蓋。信任官方 GitHub HTTPS 與 Release 發布權限，checksum 不是獨立簽章；需要獨立可信 checksum 時使用顯式介面。拒絕自動降版；同版允許重新部署。
 
@@ -319,7 +339,7 @@ Migration plan 只讀 export 目錄，核對 v1 manifest、COMPLETE／INCOMPLETE
 
 ## 更新與移機
 
-更新前安全保存 `.env`、整個 `secrets/`、`certs/`、`config/` 並匯出 DB。`install` 不覆蓋既有部署；同一部署目錄的一般啟動或程式映像更新使用 `panel.sh up`，官方部署檔更新與手動部署納管使用 `panel.sh update`，它會先備份 DB／部署檔再切換。pull／build 及其餘映像準備全部成功後才停舊服務。同機更換部署目錄時須先停止舊部署，避免同名 project 仍掛載舊路徑；此情況應事先準備映像。
+更新前安全保存 `.env`、整個 `secrets/`、`certs/`、`config/` 並匯出 DB。`install` 不覆蓋既有部署；同一部署目錄的一般啟動或目前釘選映像重建使用 `panel.sh up`，官方版本更新、部署檔更新與手動部署納管使用 `panel.sh update`，它會先備份 DB／部署檔再切換。pull／build 及其餘映像準備全部成功後才停舊服務。同機更換部署目錄時須先停止舊部署，避免同名 project 仍掛載舊路徑；此情況應事先準備映像。
 
 使用發行包更新時保留目標包附帶的 `compose.release.yaml`，不要從舊版本複製該檔，避免將新原始碼標成舊版映像。它不含私人設定，不需由 `init` 產生。
 
@@ -393,7 +413,7 @@ CLI 停止的範圍僅限本 Compose 面板；操作人員須另外停止外部�
 - 面板對 Incus 使用的 `client.crt`／`client.key` 位於宿主 `./certs/`，掛入容器 `/opt/incudal/server/certs`。既有部署搬遷須保留原憑證及私鑰並確保 UID 1000 可讀；新憑證須依既有流程重新建立 Incus 信任，DB 還原不會自動恢復該信任。
 - PostgreSQL 密碼採 hex 以安全組合連線 URL；既有 PGDATA／實體 volume 搬遷必須保留相符的原 `postgres_password`，修改 secret 不會更新角色密碼。若僅將邏輯 dump 匯入全新 DB，可使用新 `init` 產生的 DB 密碼，因 dump 不含角色密碼；這不影響仍須保留原 `encryption_key` 的要求。
 - Compose 固定向 API 注入 `INCUDAL_CONTAINER_DEPLOYMENT: 'true'`，禁止容器呼叫宿主 systemd／sudo OTA 更新或回滾；不要移除或覆寫此旗標。`GET /api/admin/system-update/version` 保留版本查詢，`GET /api/admin/system-update/check` 保留目前版本與 release 資訊，但回傳 `repositoryAvailable: false` 及 `repositoryError` 說明容器不可 OTA 與備份後重建方式，管理權限欄位仍按既有規則判定。
-- 通過既有管理權限檢查後，`POST /api/admin/system-update/start` 與 `POST /api/admin/system-update/tasks/:id/rollback` 會回傳 HTTP 409、`CONTAINER_OTA_UNSUPPORTED`，在建立／修改任務、建立日誌目錄或啟動 worker 之前拒絕。更新請先備份、選定部署版本，再執行 `bash deploy/compose/panel.sh up` 拉取映像並重建容器；來源建置使用 `up build`。不提供自動 migration 回滾。
+- 通過既有管理權限檢查後，`POST /api/admin/system-update/start` 與 `POST /api/admin/system-update/tasks/:id/rollback` 會回傳 HTTP 409、`CONTAINER_OTA_UNSUPPORTED`，在建立／修改任務、建立日誌目錄或啟動 worker 之前拒絕。官方版本更新請先核對 `update-plan`、另存私人設定後執行 `bash deploy/compose/panel.sh update`；`up` 只使用目前部署的映像設定，不選取新版本，來源建置使用同版本完整來源與 `up build`。不提供自動 migration 回滾。
 - Docker 建置使用專屬 allowlist ignore，排除本地依賴、環境檔、憑證及備份；runtime 保留 Prisma CLI 與建置依賴以沿用現有 workspace，尚未進行映像精簡與供應鏈掃描。基底映像固定主要版本標籤但未鎖 digest。
 - Docker 管理員及主機 root 能讀取 Compose file secrets 與容器環境；這些檔案不是外部 secrets manager。勿上傳 secrets、備份或展開後的含密鑰環境。
 
@@ -469,4 +489,4 @@ try {
 
 驗證成功後執行 `docker compose up -d --no-deps api`。若保留原配對，既有 Incus trust 可繼續使用；若生成新配對，請在面板重新產生節點安裝／重裝命令，於真正的 Incus 宿主機執行匯入目前公開憑證，再回面板驗證。不要將 `client.key` 複製到 Incus 宿主機或貼進工單。網站憑證更新或 API 重啟不會自動修復 Incus trust。
 
-相關守衛入口為 `pnpm --filter server test:host-install-script-guards`（包含生成條件、不覆寫、半套拒絕、配對檢查、公開憑證輸出與錯誤遮蔽的結構斷言），另需 `pnpm --filter server test:host-route-id-guards`、`pnpm --filter server type-check` 及 `sh -n deploy/compose/api-entrypoint.sh`。Linux 實機須覆蓋全新生成／重啟保留指紋、半套／空檔／錯配拒絕、node 權限及節點信任流程。本次依要求未執行本機測試，這些項目為待驗收項目。
+相關守衛入口為 `pnpm --filter server test:host-install-script-guards`（包含生成條件、不覆寫、半套拒絕、配對檢查、公開憑證輸出與錯誤遮蔽的結構斷言），另需 `pnpm --filter server test:host-route-id-guards`、`pnpm --filter server type-check` 及 `sh -n deploy/compose/api-entrypoint.sh`。Linux 實機須覆蓋全新生成／重啟保留指紋、半套／空檔／錯配拒絕、node 權限及節點信任流程。守衛通過與 Linux 實機驗收須分別保留對應版本的執行證據，不能由文件更新推定已完成。

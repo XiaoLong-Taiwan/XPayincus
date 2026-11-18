@@ -68,13 +68,27 @@ if (cname !== 'xpayincus.com') {
 const robots = read('docs-site/docs/public/robots.txt')
 requireText(robots, 'Sitemap: https://xpayincus.com/sitemap.xml', 'robots.txt')
 
-const workflow = read('.github/workflows/docs-pages.yml')
-requireText(workflow, '- main', 'docs workflow')
-rejectText(workflow, "- 'v*'", 'docs workflow')
-requireText(workflow, 'check:deployment', 'docs workflow')
-requireText(workflow, 'workflow_run:', 'docs workflow')
-requireText(workflow, 'actions/upload-pages-artifact@v3', 'docs workflow')
-rejectText(workflow, 'version: 10.17.1', 'docs workflow')
-requireText(workflow, 'test -s docs-site/docs/.vitepress/dist/index.html', 'docs workflow')
+const rootWorkflow = readFileSync(resolve(repoRoot, '..', '.github/workflows/ci.yml'), 'utf8')
+const docsJob = rootWorkflow.match(/^  docs:\r?\n([\s\S]*?)(?=^  [\w-]+:\r?$|$(?![\s\S]))/m)?.[1]
+if (!docsJob) {
+  throw new Error('root CI: missing docs job')
+}
+for (const expected of [
+  'needs: version',
+  'working-directory: XPayincus',
+  'fetch-depth: 0',
+  'version: 9.14.2',
+  "node-version: '22'",
+  'cache-dependency-path: XPayincus/docs-site/pnpm-lock.yaml',
+  'run: node --test docs-site/scripts/test-deployment-docs.mjs',
+  'run: pnpm --dir docs-site --ignore-workspace check:deployment',
+  'run: pnpm --dir docs-site install --ignore-workspace --frozen-lockfile',
+  'run: pnpm --dir docs-site --ignore-workspace build',
+  'run: test -s docs-site/docs/.vitepress/dist/index.html'
+]) {
+  requireText(docsJob, expected, 'root CI docs job')
+}
+rejectText(docsJob, 'continue-on-error:', 'root CI docs job')
+rejectText(docsJob, 'if:', 'root CI docs job')
 
 console.log('Deployment documentation guards passed.')

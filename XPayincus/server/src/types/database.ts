@@ -63,6 +63,7 @@ export interface SshKey {
 
 export interface Host {
   id: number
+  is_installed?: boolean
   user_id?: number  // 节点所有者
   name: string
   url: string

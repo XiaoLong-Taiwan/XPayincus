@@ -282,7 +282,7 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
         {{ t('host.caddy.title') }}
       </h3>
       <p class="text-sm mb-4" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'">
-        {{ t('host.caddy.notInstalled') }}
+        {{ t('host.caddy.agentOffline') }}
       </p>
       <button :disabled="generating" class="btn-primary" @click="generateInstallCommand">
         {{ generating ? t('common.loading') : t('host.caddy.generateCommand') }}
@@ -325,8 +325,15 @@ const isEnabled = computed(() => caddyStatus.value.enabled)
             {{ t('host.caddy.notInstalled') }}
           </p>
           <button
-            :disabled="generating"
-            class="btn-primary"
+            :disabled="confirming || generating"
+            class="btn-primary mb-3"
+            @click="confirmInstallation"
+          >
+            {{ confirming ? t('common.loading') : t('host.caddy.verifyAndEnable') }}
+          </button>
+          <button
+            :disabled="generating || confirming"
+            class="btn-ghost"
             @click="generateInstallCommand"
           >
             <span v-if="generating" class="flex items-center gap-2">

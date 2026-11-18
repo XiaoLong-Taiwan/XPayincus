@@ -1,8 +1,8 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.20`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.21`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
 
-本輪整合 Agent 出站 WSS 管理隧道，面板不直連宿主 Incus／Caddy 管理埠，Server 與 Agent 須協調升級；另修正容量、CPU 架構、受管端口顯示及 Caddy admin 遷移與 autosave 恢復。產品版本與現行文件同步至 v1.0.20，現行最低 updater 維持 v1.0.3，詳見 [v1.0.20 發行目標](../RELEASE.md#v1020-發行目標)。跨版本升級仍須交付完整 migration。本次未執行測試、型別檢查、建置、提交或推送；驗證由 GitHub Actions 執行。
+本輪發行目標整理既有宿主／Caddy 重複驗證修正、Dashboard 更新與恢復短入口、Agent 本機 binary 雜湊傳遞及設定路徑一致性，並補齊部署與維護文件。產品版本與現行文件同步至 v1.0.21，現行最低 updater 維持 v1.0.3，詳見 [v1.0.21 發行目標](../RELEASE.md#v1021-發行目標)。跨版本升級仍須交付完整 migration。本地檢查、GitHub Actions、已發布資產與目標環境驗收是不同證據，請分別核對對應 commit、Release 與部署紀錄。
 
 ## 目錄與能力
 
@@ -24,6 +24,8 @@
 
 ## 部署與架構邊界
 
+Dashboard 小型部署可先以 **2 vCPU、4 GiB RAM、40 GiB SSD** 作為建議起點，備份空間另計。這是未經壓力測試的容量建議，不是安裝硬門檻或效能保證；請依使用量、DB／WAL、日誌與更新暫存空間調整。來源建置另需評估記憶體與磁碟峰值，宿主 Incus／Agent／實例資源也須另外規劃。
+
 新面板部署可使用 [Compose 說明](deploy/compose/README.md)，從統一倉庫根目錄執行：
 
 ```bash
@@ -41,7 +43,7 @@ Compose 只包含 PostgreSQL 16、單一 API 與雙前端，不部署 Incus、Ag
 - API 只能執行一個 Node 程序。禁止 cluster、多 worker、多容器副本，或與舊 systemd 程序同時連線至相同 DB；PG advisory lock 不會共享程序內的防重放、鎖與快取狀態。
 - DB archive 不含 `.env`、加密金鑰、Incus 客戶端憑證或實例資料，移機須另外安全保存。
 
-既有宿主部署保留 `scripts/install-panel.sh`、`deploy/` 下的 systemd 與 Nginx 模板，支援 `/opt/incudal/current -> releases/<version-timestamp>` 原子布局。安裝器仍固定使用歷史獨立倉庫的 Release，不能僅靠搬移腳本就視為已支援統一發行來源。統一來源部署請依 [手動部署](docs-site/docs/deployment/manual-install.md) 選用已實際發布且校驗的面板資產；反向代理見 [部署文件](docs-site/docs/deployment/nginx.md)。
+既有宿主部署保留 `scripts/install-panel.sh`、`deploy/` 下的 systemd 與 Nginx 模板，支援 `/opt/incudal/current -> releases/<version-timestamp>` 原子布局。安裝器已使用統一倉庫 `XiaoLong-Taiwan/XPayincus` 的 Release，並檢查 checksum 與封存內容。`scripts/dashboard.sh --host-install` 僅供最新正式版全新原生安裝，會要求 root 與互動確認，遇到既有 `/opt/incudal` 直接拒絕；既有原生部署請走 [原生 OTA](docs-site/docs/guide/ota-update.md#原生-systemd-ota)。手動部署請依 [指南](docs-site/docs/deployment/manual-install.md) 選用已發布且校驗的面板資產；反向代理見 [部署文件](docs-site/docs/deployment/nginx.md)。
 
 ## CLI 備份與還原
 
@@ -78,13 +80,42 @@ pnpm docs:dev
 pnpm docs:build
 ```
 
-這些是操作參考，本次未執行；執行前需準備相應資料庫、工具鏈與本地設定。
+執行前需準備相應資料庫、工具鏈與本地設定；實際通過項目以對應執行紀錄為準。部署文件守衛可獨立執行 `pnpm --dir docs-site check:deployment`。
 
 ## 統一發行與 OTA
 
 正式入口為根 `.github/workflows/ci.yml`、`.github/workflows/release.yml`，子目錄 workflow 保留歷史參考。根 release workflow 在相符的 `v*` tag 推送後自動發布 GitHub Release，手動觸發僅產生 Actions artifacts，不自動部署。版本、兩架構原生依賴、資產清單與發布要求見 [統一發行說明](../RELEASE.md)。
 
-舊宿主部署的 OTA 使用 `/api/admin/system-update/*`，由超級管理員執行；Compose 不支援容器內 systemd／sudo 更新。Compose 應先備份，選定來源版本後執行 `panel.sh up` 重建，migration 不會自動回滾。
+### Compose 一般更新與除錯
+
+以下從統一倉庫根目錄執行；`/srv/incudal-panel` 須是自己管理且信任的既有 Compose 部署絕對路徑，新入口會執行該目錄的 `panel.sh`，不會替舊部署補齊缺少的指令：
+
+```bash
+bash scripts/dashboard.sh doctor /srv/incudal-panel --json
+bash scripts/dashboard.sh update-plan /srv/incudal-panel
+# 核對計畫並另外安全備份設定、密鑰與憑證後，執行一般更新
+bash scripts/dashboard.sh update /srv/incudal-panel
+```
+
+`update-plan` 取得操作鎖、下載並驗證目前及目標官方部署檔與容器身分，不備份、不切換、不停機，也不改 journal；會建立鎖與暫存目錄。`update` 固定最新正式 Release，拒絕自動降版，備份 DB／部署檔、寫入持久 journal，再切換部署工具並啟動。映像準備完成後才停止舊服務；migration 或健康檢查失敗時不保證服務仍運行，也不自動回滾 DB。
+
+```bash
+bash scripts/dashboard.sh recover /srv/incudal-panel --json
+bash /srv/incudal-panel/panel.sh status
+bash /srv/incudal-panel/panel.sh logs api
+# 僅需修復目前釘選版本的容器時，先備份再重建
+bash scripts/dashboard.sh force-recreate /srv/incudal-panel
+```
+
+`doctor` 與預設 `recover` 是唯讀診斷，不建立鎖或狀態目錄；doctor 的 ledger／health 通過不代表 schema 相容或完成上線驗收。未完成更新會阻擋新更新，先保留 journal 與備份並核對恢復指引；`recover --retry-preflight` 僅限 `backupComplete=false` 且已修正原因，`recover --resume-up` 僅限備份可驗證、目前為目標版本，並人工確認設定與 schema 相容。兩者都會持鎖且不還原 DB；選單中須先選 `[0]` 退出再執行提示命令。
+
+`force-recreate` 等同 `bash /srv/incudal-panel/panel.sh up pull --force-recreate`，保留 DB／設定／密鑰，但有短暫停機，且啟動時可能執行 migration。它只重建目前釘選版本，不查詢 latest、不跨版更新、不回滾資料庫。需要換版使用 `update`；只有拉取映像、不停啟服務使用 `panel.sh pull`。更多備份與除錯限制見 [Compose 指南](deploy/compose/README.md)。
+
+### 原生 systemd 與 Agent
+
+原生 systemd／sudo OTA 使用 `/api/admin/system-update/*`，由超級管理員執行，流程與命令見 [OTA 指南](docs-site/docs/guide/ota-update.md#原生-systemd-ota)。Compose 禁止此更新與回滾入口。
+
+Agent 的 `reinstall`／安裝器 `--reinstall` 保留既有設定，沒有 `--force`；未指定 `--version` 時仍選擇 `latest`，可能升版，不會自動固定目前版本。同版修復必須先確認已安裝版本，再以 `--version` 指定該版本。升版請使用 Agent `update` 並核對目標版本及面板相容性。Dashboard 容器重建不會重裝 Agent、Incus、RFW 或 ZFS。
 
 統一 Release 來源可在面板設定：
 
@@ -101,6 +132,6 @@ Agent 仍走面板同源 manifest／binary 代理，私有來源 token 只放面
 
 ## 文件與證據
 
-[文件站](docs-site/README.md) 提供部署、Agent、管理端與 API 文件。`HANDOFF.md`、`OPERATIONS_HANDOFF.md`、`audits/` 及歷史 release notes 保留歷史證據，不代表目前 checkout、CI、Release 或線上狀態。本次只整理文件，未執行測試、建置、OTA 或實機驗收。
+[文件站](docs-site/README.md) 提供部署、Agent、管理端與 API 文件。`HANDOFF.md`、`OPERATIONS_HANDOFF.md`、`audits/` 及歷史 release notes 保留歷史證據，不代表目前 checkout、CI、Release 或線上狀態。文件描述可用流程，不替代目標 Linux 主機上的更新、還原與功能驗收；分享診斷輸出前須移除敏感資訊。
 
 面板程式的授權見 [LICENSE](LICENSE)；其他元件依各自授權文件。
