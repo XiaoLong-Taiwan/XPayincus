@@ -199,8 +199,11 @@ export function getDbPoolStats(): {
 }
 
 export async function closePrismaDatabase(): Promise<void> {
-  await prisma.$disconnect()
-  await pool.end()
+  try {
+    await prisma.$disconnect()
+  } finally {
+    await pool.end()
+  }
 }
 
 export default prisma

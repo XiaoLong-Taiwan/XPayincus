@@ -4,30 +4,34 @@ import { randomUUID } from 'node:crypto'
 process.env.ENCRYPTION_KEY ||= 'registration-ssh-key-behavior-test-key'
 
 const { prisma, closePrismaDatabase } = await import('../src/db/prisma.js')
-const { encryptSensitiveData } = await import('../src/lib/security.js')
-const { consumeRegistrationPrivateKey } = await import('../src/db/ssh-keys.js')
-
-const marker = `ssh-registration-test-${randomUUID()}`
-const tokenHash = `${marker}-token`
-const privateKey = '-----BEGIN RSA PRIVATE KEY-----\nbehavior-test\n-----END RSA PRIVATE KEY-----'
-const encryptedPrivateKey = encryptSensitiveData(privateKey)
-const future = new Date(Date.now() + 15 * 60 * 1000)
-const past = new Date(Date.now() - 60 * 1000)
-
-const userA = await prisma.user.create({
-  data: {
-    username: `${marker}-a`,
-    passwordHash: 'behavior-test-password-hash'
-  }
-})
-const userB = await prisma.user.create({
-  data: {
-    username: `${marker}-b`,
-    passwordHash: 'behavior-test-password-hash'
-  }
-})
+const createdUserIds: number[] = []
 
 try {
+  const { encryptSensitiveData } = await import('../src/lib/security.js')
+  const { consumeRegistrationPrivateKey } = await import('../src/db/ssh-keys.js')
+
+  const marker = `ssh-registration-test-${randomUUID()}`
+  const tokenHash = `${marker}-token`
+  const privateKey = '-----BEGIN RSA PRIVATE KEY-----\nbehavior-test\n-----END RSA PRIVATE KEY-----'
+  const encryptedPrivateKey = encryptSensitiveData(privateKey)
+  const future = new Date(Date.now() + 15 * 60 * 1000)
+  const past = new Date(Date.now() - 60 * 1000)
+
+  const userA = await prisma.user.create({
+    data: {
+      username: `${marker}-a`,
+      passwordHash: 'behavior-test-password-hash'
+    }
+  })
+  createdUserIds.push(userA.id)
+  const userB = await prisma.user.create({
+    data: {
+      username: `${marker}-b`,
+      passwordHash: 'behavior-test-password-hash'
+    }
+  })
+  createdUserIds.push(userB.id)
+
   const validKey = await prisma.sshKey.create({
     data: {
       userId: userA.id,
@@ -118,9 +122,13 @@ try {
   assert.equal(concurrentRow.privateKeyEncrypted, null)
   assert.equal(concurrentRow.registrationTokenHash, null)
 } finally {
-  await prisma.sshKey.deleteMany({ where: { userId: { in: [userA.id, userB.id] } } })
-  await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } })
-  await closePrismaDatabase()
+  try {
+    if (createdUserIds.length > 0) {
+      await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
+    }
+  } finally {
+    await closePrismaDatabase()
+  }
 }
 
 console.log('registration SSH key PostgreSQL behavior tests passed')
