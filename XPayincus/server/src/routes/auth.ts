@@ -106,7 +106,8 @@ async function buildAuthUserPayload(user: {
     avatarStyle: user.avatar_style,
     avatarBadgeId: user.avatar_badge_id ?? null,
     hasCreatedHostBefore: hostingFeatureStatus.hasCreatedHostBefore,
-    canAccessHostingFeature: hostingFeatureStatus.canAccessHostingFeature
+    canAccessHostingFeature: hostingFeatureStatus.canAccessHostingFeature,
+    hostingApplicationStatus: hostingFeatureStatus.applicationStatus
   }
 }
 
@@ -603,6 +604,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     let userId: number
     let registerGift: db.RegisterGiftResult | null
+    let registrationSshKey: db.CreateRegisteredUserResult['sshKey']
     try {
       const created = await db.createRegisteredUser({
         username,
@@ -612,6 +614,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       })
       userId = created.userId
       registerGift = created.registerGift
+      registrationSshKey = created.sshKey
     } catch (createErr) {
       if (createErr instanceof Error) {
         if (createErr.message === 'INVITE_CODE_UNAVAILABLE') {
@@ -708,7 +711,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     reply.code(201).send({
       token: accessToken,
-      user: await buildAuthUserPayload(newUser)
+      user: await buildAuthUserPayload(newUser),
+      sshKey: registrationSshKey
     })
   })
 

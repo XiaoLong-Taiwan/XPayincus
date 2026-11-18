@@ -64,7 +64,7 @@ async function redirectIfHostingEntryHidden() {
     hiddenHostingRouteNames.has(route.name) &&
     authStore.user?.canAccessHostingFeature === false
   ) {
-    await router.replace({ name: 'dashboard' })
+    await router.replace({ name: 'hosting-application' })
   }
 }
 

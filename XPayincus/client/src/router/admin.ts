@@ -60,6 +60,12 @@ async function handleOAuthCode(): Promise<boolean> {
 
 const routes: RouteRecordRaw[] = [
   {
+    path: '/admin/hosting/applications',
+    name: 'admin-hosting-applications',
+    component: () => import('@/views/admin/HostingApplicationsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: '托管上架申请' }
+  },
+  {
     path: '/admin/tasks',
     name: 'admin-tasks',
     component: () => import('@/views/TasksView.vue'),

@@ -76,6 +76,18 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       DATABASE_URL: postgresql://test:test@127.0.0.1:5432/xpayincus_test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: xpayincus_test
+        options: >-
+          --health-cmd="pg_isready -U test -d xpayincus_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     defaults:
       run:
         working-directory: XPayincus
@@ -83,6 +95,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 9.14.2
@@ -106,6 +119,11 @@ jobs:
         run: pnpm --filter server test:host-agent-onboarding-guards
       - name: Test host port management guards
         run: pnpm --filter server test:host-port-management-guards
+      - run: pnpm --filter server test:hosting-access-application-guards
+      - name: Apply PostgreSQL migrations to test database
+        run: pnpm --filter server exec prisma migrate deploy
+      - run: pnpm --filter server test:registration-ssh-key-guards
+      - run: pnpm --filter server test:ssh-key-route-id-guards
       - name: Test host Caddy behavior
         run: pnpm --filter server test:host-caddy-behavior
       - run: pnpm test:core
@@ -114,6 +132,9 @@ jobs:
       - run: pnpm --filter server test:panel-backup-guards
       - run: pnpm --filter server test:update-manifest-contract
       - run: pnpm --filter server test:native-panel-download
+      - name: Verify PostgreSQL migrations on empty and previous databases
+        working-directory: .
+        run: bash scripts/test-postgres-migrations.sh
       - run: bash scripts/test-install-panel-guards.sh
       - run: pnpm build
   agent:

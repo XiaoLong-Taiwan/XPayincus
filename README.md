@@ -1,6 +1,6 @@
 # XPayincus
 
-Incus（LXC／KVM）NAT VPS 銷售與管理平台，統一管理 Dashboard、Server API、Host Agent 與宿主元件。整體版本見 [VERSION](VERSION)；目前來源樹的 `v1.0.21` 為發行目標，實際已發布版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。`main` 入口可能領先正式版，不代表相應資產已可下載。
+Incus（LXC／KVM）NAT VPS 銷售與管理平台，統一管理 Dashboard、Server API、Host Agent 與宿主元件。整體版本見 [VERSION](VERSION)；目前來源樹的 `v1.0.22` 為發行目標，實際已發布版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。`main` 入口可能領先正式版，不代表相應資產已可下載。
 
 ## Dashboard 與 Agent 分區
 
@@ -84,7 +84,7 @@ bash deploy/compose/panel.sh up build
 | Dashboard 同版強制重建 | `bash scripts/dashboard.sh force-recreate /srv/incudal-panel` | 執行 `up pull --force-recreate`，重建目前釘選版本容器，會短暫停機；請先備份 |
 | 中斷狀態檢查 | `bash scripts/dashboard.sh recover /srv/incudal-panel` | 預設唯讀；判讀結果後才選 `--retry-preflight` 或 `--resume-up` |
 | Agent 一般更新 | `sudo bash scripts/agent-menu.sh --action update --version latest` | 保留設定與認證，驗證後更新 binary／unit |
-| Agent 同版強制修復 | `sudo bash scripts/agent-menu.sh --action reinstall --version v1.0.21` | 指定已發布版本重裝，可覆寫同版；沒有 `--force` |
+| Agent 同版強制修復 | `sudo bash scripts/agent-menu.sh --action reinstall --version v1.0.22` | 指定已發布版本重裝，可覆寫同版；沒有 `--force` |
 
 Dashboard `force-recreate` 不選新版、不跳過校驗，也不還原 DB。固定版本 `update DIRECTORY VERSION SHA256` 僅準備部署檔，完成後另行備份及 `up`，與無版本的自動更新不同。舊部署的 `panel.sh` 若沒有新指令，需先依 Compose 文件核對工具更新方式，不能只更新入口就推定舊核心支援。
 

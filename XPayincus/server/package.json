@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "XPayincus backend service",
   "type": "module",
   "main": "dist/app.js",
@@ -68,6 +68,7 @@
     "test:gift-card-guards": "node --import tsx scripts/test-gift-card-guards.ts",
     "test:gift-card-flow": "node --import tsx scripts/test-gift-card-flow.ts",
     "test:hosting-balance-guards": "node --import tsx scripts/test-hosting-balance-guards.ts",
+    "test:hosting-access-application-guards": "node --import tsx scripts/test-hosting-access-application-guards.ts && node --import tsx scripts/test-hosting-access-application-flow.ts",
     "test:host-notification-email-task-guards": "node --import tsx scripts/test-host-notification-email-task-guards.ts",
     "test:image-route-guards": "node --import tsx scripts/test-image-route-guards.ts",
     "test:inbox-query-guards": "node --import tsx scripts/test-inbox-query-guards.ts",
@@ -163,6 +164,7 @@
     "test:startup-database-safety": "node --import tsx scripts/test-startup-database-safety.ts",
     "test:snapshot-route-guards": "node --import tsx scripts/test-snapshot-route-guards.ts",
     "test:ssh-key-route-id-guards": "node --import tsx scripts/test-ssh-key-route-id-guards.ts",
+    "test:registration-ssh-key-guards": "node --import tsx scripts/test-registration-ssh-key-guards.ts && node --import tsx scripts/test-registration-ssh-key-behavior.ts",
     "test:split-deploy-config": "node --import tsx scripts/test-split-deploy-config.ts",
     "test:storage-outbound-guards": "node --import tsx scripts/test-storage-outbound-guards.ts",
     "test:safe-outbound-fetch-guards": "node --import tsx scripts/test-safe-outbound-fetch-guards.ts",

@@ -61,6 +61,36 @@ function normalizeSshKeyCreateInput(input: unknown): { name: string; publicKey: 
 
 export default async function sshKeyRoutes(fastify: FastifyInstance) {
 
+  fastify.post<{ Body: { token?: string } }>('/registration-private-key', {
+    onRequest: [fastify.authenticateUser],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['token'],
+        properties: { token: { type: 'string', minLength: 40, maxLength: 100 } }
+      }
+    }
+  }, async (request: FastifyRequest<{ Body: { token?: string } }>, reply: FastifyReply) => {
+    const token = request.body.token
+    if (!token || !/^[A-Za-z0-9_-]{40,100}$/.test(token)) {
+      return reply.code(404).send(apiError(ErrorCode.NOT_FOUND))
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+    const privateKey = await db.consumeRegistrationPrivateKey(tokenHash, request.user.id)
+    if (!privateKey || !privateKey.includes('PRIVATE KEY')) {
+      return reply.code(500).send(apiError(ErrorCode.INTERNAL_ERROR))
+    }
+
+    reply
+      .header('Cache-Control', 'no-store, private')
+      .header('Pragma', 'no-cache')
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Type', 'application/octet-stream')
+      .header('Content-Disposition', 'attachment; filename="incudal-registration-key.pem"')
+    return privateKey
+  })
+
   // 获取用户的 SSH 公钥列表
   fastify.get('/', {
     onRequest: [fastify.authenticateUser]

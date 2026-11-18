@@ -206,6 +206,12 @@ const routes: RouteRecordRaw[] = [
   },
   // 用户资源管理路由（开放给满足条件的用户）
   {
+    path: '/hosting-application',
+    name: 'hosting-application',
+    component: () => import('@/views/HostingApplicationView.vue'),
+    meta: { requiresAuth: true, requiresUser: true, title: '托管上架申请' }
+  },
+  {
     path: '/resources/hosts',
     name: 'my-hosts',
     component: () => import('@/views/resources/MyHostsView.vue'),
@@ -392,7 +398,7 @@ router.beforeEach(async (to: RouteLocationNormalized, _from: RouteLocationNormal
     hiddenHostingRouteNames.has(to.name) &&
     authStore.user?.canAccessHostingFeature === false
   ) {
-    next({ name: 'dashboard' })
+    next({ name: 'hosting-application' })
     return
   }
 

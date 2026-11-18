@@ -1091,6 +1091,25 @@ export function decryptSensitiveData(ciphertext: string): string | null {
     }
 }
 
+export function decryptSensitiveDataStrict(ciphertext: string): string | null {
+    try {
+        const parts = ciphertext.split(':')
+        if (parts.length !== 3) return null
+        const [ivHex, tagHex, encrypted] = parts
+        const key = getEncryptionKey()
+        const iv = Buffer.from(ivHex, 'hex')
+        const tag = Buffer.from(tagHex, 'hex')
+        if (iv.length !== ENCRYPTION_CONFIG.ivLength || tag.length !== ENCRYPTION_CONFIG.tagLength) return null
+        const decipher = crypto.createDecipheriv(ENCRYPTION_CONFIG.algorithm, key, iv) as crypto.DecipherGCM
+        decipher.setAuthTag(tag)
+        let decrypted = decipher.update(encrypted, 'hex', 'utf8')
+        decrypted += decipher.final('utf8')
+        return decrypted
+    } catch {
+        return null
+    }
+}
+
 /**
  * 检查数据是否已加密
  */

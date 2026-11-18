@@ -5,14 +5,13 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.21**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.22**; GitHub Releases record publication status.
 
-## v1.0.21 Host Verification and Management Entry Points (Release Target)
+## v1.0.22 Hosting Applications, SSH Registration and Migration CI (Release Target)
 
-- Allow installed hosts to be verified again while preserving maintenance state. Verify local Caddy configuration through Agent WSS, distinguish tunnel outages from API failures, and provide a verify-and-enable action.
-- Dashboard/Compose entry points forward update planning, diagnostics, recovery, and same-version container recreation after checking trusted deployment path permissions. The Agent menu forwards local binary SHA256 values and aligns configuration path precedence.
-- Expand installation, capacity planning, same-version repair, failure recovery, and backup documentation. Synchronize required version sources, Compose tags/labels, fixtures, and current documentation to v1.0.21, preserving v1.0.20 history and third-party versions with minimum updater `v1.0.3`.
-- This cycle only synchronizes versions and edits documentation, preserving existing functional changes without tests, type checks, builds, commits, pushes, or publication. Full details are in `docs-site/release-notes/v1.0.21.md`.
+- Synchronize product VERSION files, package versions, RFW crates and lockfile, Compose tags/labels, Go Agent default, current documentation and release fixtures to v1.0.22 while preserving v1.0.21 history and third-party versions.
+- Add hosting application, registration SSH key and SSH route ID guards to root CI. Verify PostgreSQL 16 migrations from an empty database and from the v1.0.21 migration state.
+- No product feature files or local tests, type checks, builds, or migrations are performed. Full details are in `docs-site/release-notes/v1.0.22.md`.
 
 ## v1.0.20 WSS Management and Host Fixes (Release Target)
 
@@ -95,7 +94,7 @@ Ship migration `20261110000000_add_delivery_maintenance_stock_payments` with the
 ## Versioning Rule / 版本号规则
 
 - The unified root `VERSION` is the sole source, using canonical `vMAJOR.MINOR.PATCH[-prerelease][+build]` as specified in root `RELEASE.md`.
-- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.20` to `v1.0.21`, without implying that the preceding version was published.
+- Patch numbers are not limited to one digit: this cycle advances the source version from `v1.0.20` to `v1.0.22`, without implying that the preceding version was published.
 - Core numbers and numeric prerelease identifiers must not have leading zeros. Version files reject BOM, whitespace, and extra lines, allowing one optional LF/CRLF ending.
 - Preserve historical tags, handoffs, and release notes. Third-party dependency and actual ZFS module versions do not follow the product version.
 

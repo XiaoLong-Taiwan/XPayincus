@@ -11,6 +11,7 @@ export interface AuthUser {
   avatarBadgeId?: string | null
   hasCreatedHostBefore?: boolean
   canAccessHostingFeature?: boolean
+  hostingApplicationStatus?: 'pending' | 'approved' | 'rejected' | null
 }
 
 export interface ThemeMode {

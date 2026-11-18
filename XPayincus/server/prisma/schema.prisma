@@ -588,6 +588,8 @@ model User {
   hostingBlocksCreated  HostingUserBlock[] @relation("HostingBlocker")
   hostingBlocksReceived HostingUserBlock[] @relation("HostingBlockedUser")
   hostingZone         HostingZone?         @relation("HostingZoneOwner")
+  hostingAccessApplications HostingAccessApplication[] @relation("HostingAccessApplicant")
+  hostingAccessReviews HostingAccessApplication[] @relation("HostingAccessReviewer")
 
   // 域名邮箱系统
   mailSubscriptions   MailSubscription[]
@@ -674,6 +676,10 @@ model SshKey {
   name        String
   publicKey   String   @map("public_key")
   fingerprint String
+  privateKeyEncrypted       String?   @map("private_key_encrypted")
+  registrationTokenHash     String?   @unique @map("registration_token_hash")
+  registrationTokenExpiresAt DateTime? @map("registration_token_expires_at")
+  privateKeyConsumedAt      DateTime? @map("private_key_consumed_at")
   createdAt   DateTime @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -3598,6 +3604,31 @@ model HostingZone {
 
   @@index([active, sortOrder])
   @@map("hosting_zones")
+}
+
+enum HostingAccessApplicationStatus {
+  pending
+  approved
+  rejected
+}
+
+model HostingAccessApplication {
+  id           Int                           @id @default(autoincrement())
+  userId       Int                           @unique @map("user_id")
+  status       HostingAccessApplicationStatus @default(pending)
+  reason       String                        @db.VarChar(1000)
+  reviewReason String?                       @map("review_reason") @db.VarChar(1000)
+  reviewedById Int?                          @map("reviewed_by_id")
+  reviewedAt   DateTime?                     @map("reviewed_at")
+  createdAt    DateTime                      @default(now()) @map("created_at")
+  updatedAt    DateTime                      @updatedAt @map("updated_at")
+
+  user       User  @relation("HostingAccessApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("HostingAccessReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([reviewedById])
+  @@map("hosting_access_applications")
 }
 // ==================== 礼品卡兑换码系统 ====================
 

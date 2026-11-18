@@ -2,7 +2,21 @@ import axios, { type AxiosInstance } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { buildApiUrl } from '@/utils/api-url'
 import { API_BASE_URL } from '@/utils/runtime-config'
-import type { CreateHostResponse, RegenerateHostInstallResponse } from '@/types/api'
+import type { CreateHostResponse, RegenerateHostInstallResponse } from '@/types/api.js'
+
+export interface HostingAccessApplication {
+  id: number
+  userId: number
+  status: 'pending' | 'approved' | 'rejected'
+  reason: string
+  reviewReason: string | null
+  reviewedById: number | null
+  reviewedAt: string | null
+  createdAt: string
+  updatedAt: string
+  user: { id: number; username: string; email: string | null } | null
+  reviewedBy: { id: number; username: string } | null
+}
 import type { LoginRequest, LoginResponse, UpdateUserResponse, GenerateInviteRequest, InviteListResponse, User, BadgeCatalogItem, BadgeSeriesItem, UserQuota, UpdateUserRequest, Instance, InstanceWithDetails, InstanceStats, CreateInstanceRequest, CreateInstanceResponse, UpdateInstanceRequest, ChangeHostOptionsResponse, PortMapping, CreatePortMappingRequest, IpAddress, Ipv6Subnet, HostAgentStatusResponse, HostAgentInstallCommandResponse, HostAgentUpgradeRequestResponse, Snapshot, Backup, CreateSnapshotRequest, CreateBackupRequest, SnapshotPolicy, BackupPolicy, UpdateSnapshotPolicyRequest, UpdateBackupPolicyRequest, Host, HostWithDetails, AvailableHost, CreateHostRequest, UpdateHostRequest, Package, CreatePackageRequest, UpdatePackageRequest, SshKey, CreateSshKeyRequest, NotificationChannel, CreateNotificationChannelRequest, UpdateNotificationChannelRequest, OAuthConfig, UserOAuthBinding, UpdateOAuthConfigRequest, OAuthClientApp, AdminOAuthAuthorization, UpsertOAuthClientAppRequest, HelpArticle, CreateHelpArticleRequest, UpdateHelpArticleRequest, HostImagePolicy, SystemImage, CreateSystemImageRequest, UpdateSystemImageRequest, Log, PaginatedResponse, Ticket, TicketMessage, TicketStatus, TicketObjectLink, TicketObjectLinkType, TicketSupportContext, TicketInternalNote, CreateTicketRequest, PaginatedTickets, PaginatedTicketMessages, TerminalSavedCommand, CreateTerminalSavedCommandRequest, UpdateTerminalSavedCommandRequest, TelegramBindingStatus, TelegramBindTokenResponse, TelegramAdminBindingsResponse, TelegramWebhookDeleteResponse, TelegramWebhookInfoResponse, TelegramWebhookSetupResponse, VersionMetadata, SystemUpdateCheckResult, SystemUpdateTask, PublicApiScopeMetadata, CreateGiftCardBatchRequest, CreateGiftCardRequest, GiftCardListResponse, GiftCardRecord, GiftCardStats } from '@/types/api.js'
 
 export type VipRuleType = 'user' | 'hosting'
@@ -2917,6 +2931,12 @@ const api = {
     }> => http.post('/admin/hosting/zones', data),
     deleteHostingZone: (id: number): Promise<{ message: string }> =>
       http.delete(`/admin/hosting/zones/${id}`),
+    getHostingApplications: (status?: 'pending' | 'approved' | 'rejected'): Promise<{ applications: HostingAccessApplication[] }> =>
+      http.get('/admin/hosting/applications', { params: status ? { status } : undefined }),
+    approveHostingApplication: (id: number, reviewReason?: string): Promise<{ application: HostingAccessApplication }> =>
+      http.post(`/admin/hosting/applications/${id}/approve`, { reviewReason }),
+    rejectHostingApplication: (id: number, reviewReason: string): Promise<{ application: HostingAccessApplication }> =>
+      http.post(`/admin/hosting/applications/${id}/reject`, { reviewReason }),
     getHostingWithdrawals: (params: { page?: number; pageSize?: number; status?: string } = {}): Promise<{ withdrawals: Array<{ id: number; username?: string; amount: number; target: string; status: string; paymentMethod?: string | null; paymentReference?: string | null; paymentProof?: string | null; failureReason?: string | null; createdAt: string }>; total: number; page: number; pageSize: number }> =>
       http.get('/hosting/admin/withdrawals', { params }),
     updateHostingWithdrawalPayment: (id: number, data: { status: 'processing' | 'paid' | 'failed'; paymentMethod?: string; paymentReference?: string; paymentProof?: string; reason?: string }): Promise<{ withdrawal: Record<string, unknown> }> =>

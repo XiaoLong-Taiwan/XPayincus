@@ -3,7 +3,7 @@
  * 处理托管余额查询、提现申请、管理员审核等
  */
 
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { HostingActionType, Prisma, WithdrawalStatus } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
 import { createLog } from '../db/logs.js'
@@ -89,13 +89,12 @@ function normalizeSearch(value: string | undefined, maxLength: number): string |
 }
 
 export default async function hostingRoutes(fastify: FastifyInstance) {
-  async function ensureCanManageHostingBlocks(userId: number, role: string): Promise<boolean> {
-    if (role === 'admin') {
-      return true
-    }
-
-    const result = await checkHostingAccess(userId)
-    return result.allowed
+  async function ensureHostingAccess(request: FastifyRequest, reply: FastifyReply, enforceFeatureVisibility: boolean) {
+    if (request.user.role === 'admin') return true
+    const access = await checkHostingAccess(request.user.id, { enforceFeatureVisibility })
+    if (access.allowed) return true
+    reply.code(403).send({ error: access.reason, code: 'HOSTING_ACCESS_DENIED' })
+    return false
   }
 
   // ==================== 托管准入检查 ====================
@@ -125,9 +124,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     onRequest: [fastify.authenticateUser]
   }, async (request, reply) => {
     const { user } = request
-    if (!await ensureCanManageHostingBlocks(user.id, user.role)) {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
+    if (!await ensureHostingAccess(request, reply, true)) return
 
     const blocks = await listHostingUserBlocks(user.id)
     return { blocks }
@@ -149,9 +146,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest<{ Querystring: { keyword?: string } }>, reply) => {
     const { user } = request
     const keyword = request.query.keyword?.trim() || ''
-    if (!await ensureCanManageHostingBlocks(user.id, user.role)) {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
+    if (!await ensureHostingAccess(request, reply, true)) return
     if (keyword.length < 2) {
       return { users: [] }
     }
@@ -216,9 +211,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest<{ Body: { userId: number; remark?: string | null } }>, reply) => {
     const { user } = request
     const { userId, remark } = request.body
-    if (!await ensureCanManageHostingBlocks(user.id, user.role)) {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
+    if (!await ensureHostingAccess(request, reply, true)) return
     if (userId === user.id) {
       return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS, '不能拉黑自己'))
     }
@@ -256,9 +249,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest<{ Params: { userId: string } }>, reply) => {
     const { user } = request
     const blockedUserId = parsePositiveRouteId(request.params.userId)
-    if (!await ensureCanManageHostingBlocks(user.id, user.role)) {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
+    if (!await ensureHostingAccess(request, reply, true)) return
     if (!blockedUserId) {
       return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
     }
@@ -275,8 +266,9 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
   // 获取当前用户托管余额
   fastify.get('/balance', {
     onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest) => {
+  }, async (request: FastifyRequest, reply) => {
     const { user } = request
+    if (!await ensureHostingAccess(request, reply, false)) return
 
     // 获取用户托管余额
     const userData = await prisma.user.findUnique({
@@ -347,8 +339,9 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     }
   }>('/logs', {
     onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{ Querystring: { page?: string; pageSize?: string; actionType?: string; frozen?: string; search?: string } }>) => {
+  }, async (request: FastifyRequest<{ Querystring: { page?: string; pageSize?: string; actionType?: string; frozen?: string; search?: string } }>, reply) => {
     const { user } = request
+    if (!await ensureHostingAccess(request, reply, false)) return
     const { page = '1', pageSize = '30', actionType, frozen, search } = request.query
 
     const safePageSize = parseClampedPositiveIntegerQuery(pageSize, 30, 100)
@@ -589,6 +582,7 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     }
   }, async (request, reply) => {
     const { user } = request
+    if (!await ensureHostingAccess(request, reply, false)) return
     const { amount, target = 'balance' } = request.body
     const usdtAddress = request.body.usdtAddress?.trim()
     const isBalanceTransfer = target === 'balance'
@@ -936,8 +930,9 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
     }
   }>('/withdrawals', {
     onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{ Querystring: { page?: string; pageSize?: string; status?: string } }>) => {
+  }, async (request: FastifyRequest<{ Querystring: { page?: string; pageSize?: string; status?: string } }>, reply) => {
     const { user } = request
+    if (!await ensureHostingAccess(request, reply, false)) return
     const { page = '1', pageSize = '20', status } = request.query
 
     const safePageSize = parseClampedPositiveIntegerQuery(pageSize, 20, 100)
@@ -989,8 +984,9 @@ export default async function hostingRoutes(fastify: FastifyInstance) {
   // 获取托管统计（我的节点收益概览）
   fastify.get('/stats', {
     onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest) => {
+  }, async (request: FastifyRequest, reply) => {
     const { user } = request
+    if (!await ensureHostingAccess(request, reply, false)) return
 
     // 我托管的节点数量
     const myHostsCount = await prisma.host.count({

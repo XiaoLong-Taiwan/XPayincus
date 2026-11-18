@@ -16,6 +16,7 @@ import { parseNullablePostgresBigIntInput, parseRequiredPostgresBigIntInput } fr
 import { normalizePlanTrafficLimitSpeed } from '../services/traffic-bandwidth.js'
 import { calculateVipLevel, getVipBadgeStyleForLevel, getVipRules } from '../services/vip-levels.js'
 import { ACTIVE_PACKAGE_NETWORK_MODES } from '../lib/network-modes.js'
+import { checkHostingAccess } from '../lib/hosting-access.js'
 
 const KVM_UNSUPPORTED_NETWORK_MODES = new Set(['nat_ipv6_nat', 'ipv6_nat'])
 const MAX_PACKAGE_PLAN_NAME_LENGTH = 50
@@ -1743,6 +1744,10 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       }
     }
   }, async (request: FastifyRequest<{ Body: CreatePackageRequest }>, reply: FastifyReply) => {
+    if (request.user.role !== 'admin') {
+      const accessCheck = await checkHostingAccess(request.user.id)
+      if (!accessCheck.allowed) return reply.code(403).send({ error: accessCheck.reason, code: 'HOSTING_ACCESS_DENIED' })
+    }
     let packageInput: NormalizedPackageInput
     try {
       packageInput = normalizePackageInput(request.body, { requireAll: true })
@@ -2062,6 +2067,10 @@ export default async function packageRoutes(fastify: FastifyInstance) {
     
     // 验证全局共享配置的数值有效性（Fastify schema 已经验证，这里做额外检查以防万一）
     const currentGlobalShared = (pkg as any).global_shared ?? false
+    if (request.user.role !== 'admin' && (globalShared === true || packageInput.active === true)) {
+      const accessCheck = await checkHostingAccess(request.user.id)
+      if (!accessCheck.allowed) return reply.code(403).send({ error: accessCheck.reason, code: 'HOSTING_ACCESS_DENIED' })
+    }
     if (globalShared !== undefined) {
       updateData.globalShared = globalShared
       // 如果 globalShared 被设置为 false，确保相关字段为 null

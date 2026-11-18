@@ -674,8 +674,10 @@ assert.ok(
     !sideNavSource.includes("return route.path === '/dashboard'") &&
     !sideNavSource.includes('RouterLink to="/"') &&
     sideNavSource.includes('let baseItems = [...navMenuItems]') &&
-    sideNavUserItemsSource.includes("path: '/resources/hosts'") &&
-    sideNavUserItemsSource.includes("path: '/resources/packages'") &&
+    sideNavUserItemsSource.includes("path: '/hosting-application'") &&
+    !sideNavUserItemsSource.includes("path: '/resources/hosts'") &&
+    !sideNavUserItemsSource.includes("path: '/resources/packages'") &&
+    !sideNavUserItemsSource.includes("path: '/hosting-wallet'") &&
     !sideNavUserItemsSource.includes('/admin/') &&
     sideNavAdminItemsSource.includes("path: '/admin/tickets'") &&
     sideNavAdminItemsSource.includes("path: '/admin/profile'") &&

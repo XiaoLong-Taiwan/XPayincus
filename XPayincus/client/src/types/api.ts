@@ -26,6 +26,7 @@ export interface LoginResponse {
     avatarBadgeId?: string | null
     hasCreatedHostBefore?: boolean
     canAccessHostingFeature?: boolean
+    hostingApplicationStatus?: 'pending' | 'approved' | 'rejected' | null
   }
 }
 
@@ -40,6 +41,13 @@ export interface RegisterRequest {
 
 export interface RegisterResponse {
   token: string
+  sshKey: {
+    id: number
+    name: string
+    fingerprint: string
+    publicKeyPreview: string
+    downloadToken: string
+  }
   user: {
     id: number
     username: string
@@ -49,6 +57,7 @@ export interface RegisterResponse {
     avatarBadgeId?: string | null
     hasCreatedHostBefore?: boolean
     canAccessHostingFeature?: boolean
+    hostingApplicationStatus?: 'pending' | 'approved' | 'rejected' | null
   }
 }
 

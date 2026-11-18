@@ -1231,23 +1231,20 @@ async function handleSubmit(): Promise<void> {
       </RouterLink>
     </header>
 
-    <p v-if="draftRestored" class="mb-3 text-sm text-themed-muted">{{ t('operations.draft') }}</p>
-    <section v-if="!loading && (isPaidPackage || form.planId !== null || plansLoadedPackageId !== form.packageId)" class="mb-4 rounded-xl border border-themed p-4 space-y-2">
-      <p>{{ t('operations.balance') }}: {{ purchaseBalance === null ? '—' : `¥${purchaseBalance.toFixed(2)}` }} · {{ t('operations.shortfall') }}: ¥{{ purchaseShortfall.toFixed(2) }}</p>
-      <div class="flex flex-wrap gap-2"><button type="button" class="btn btn-secondary" :disabled="purchaseReviewLoading || submitting" @click="reviewPurchase">{{ t('operations.review') }}</button><button type="button" class="btn btn-secondary" @click="rechargeForPurchase">{{ t('operations.recharge') }}</button><RouterLink class="btn btn-secondary" to="/tasks">{{ t('operations.title') }}</RouterLink></div>
-      <label class="flex items-start gap-2 text-sm"><input v-model="purchaseReviewed" type="checkbox" :disabled="!purchaseReviewReady || purchaseReviewLoading || purchaseBalance === null || selectedPlan?.isSoldOut || selectedPackage?.soldOut" />{{ t('operations.confirm') }}</label>
-    </section>
-    <!-- 套餐来源切换器 -->
-    <div v-if="!loading" class="flex justify-center mb-4 lg:mb-3 shrink-0">
+    <div v-if="!loading" class="mb-4 flex flex-wrap items-center gap-2 border-b border-themed pb-4 lg:mb-3 lg:shrink-0">
+      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-themed-muted">{{ t('instance.createPage.flowLabel') }}</span>
+      <span class="text-sm text-themed-muted">{{ t('instance.createPage.flowHint') }}</span>
+    </div>
+    <div v-if="!loading" class="mb-4 flex justify-center lg:mb-3 lg:shrink-0">
       <div
-        class="nimbus-segmented inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-themed bg-themed-surface p-1 shadow-sm scrollbar-hide"
+        class="nimbus-segmented inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-themed bg-themed-surface p-1 scrollbar-hide"
       >
         <button
           v-for="source in sourceTabs"
           :key="source.key"
           type="button"
           :disabled="sourceLoading"
-          class="nimbus-seg-pill relative shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200"
+          class="nimbus-seg-pill relative shrink-0 rounded-md px-4 py-2 text-sm font-medium transition-all duration-200"
           :class="[
             packageSource === source.key ? 'active' : '',
             sourceLoading ? 'cursor-not-allowed opacity-50' : ''
@@ -1294,9 +1291,12 @@ async function handleSubmit(): Promise<void> {
     </div>
 
     <form v-else class="lg:flex-1 lg:min-h-0 lg:flex lg:flex-col" @submit.prevent="handleSubmit">
-      <div class="lg:flex lg:flex-1 lg:min-h-0 lg:gap-6">
-        <!-- LEFT: 选择区（独立滚动）-->
-        <div class="nimbus-pane space-y-4 mb-4 lg:mb-0 lg:flex-[3] lg:overflow-y-auto lg:pr-1 lg:pb-4 scrollbar-hide">
+      <div class="mx-auto w-full max-w-5xl space-y-4 pb-4">
+        <div class="nimbus-pane space-y-4">
+          <section class="create-step-heading">
+            <span class="create-step-number">1</span>
+            <div><h2>{{ getCreatePageText('sourceTitle') }}</h2><p>{{ getCreatePageText('sourceHint') }}</p></div>
+          </section>
           <div
             v-if="selectedHostingZone"
             class="flex items-center gap-3 rounded-xl border border-themed bg-themed-tertiary px-5 py-3"
@@ -1325,17 +1325,18 @@ async function handleSubmit(): Promise<void> {
             @select="selectPackage"
             @show-owner-info="(packageId) => loadHostOwnerInfo(packageId)"
           />
-        </div>
-        <!-- RIGHT: 配置区（独立滚动）-->
-        <div class="lg:flex-[2] lg:overflow-y-auto lg:pb-4 scrollbar-hide">
           <div ref="rightPanelScrollRef" class="nimbus-pane space-y-4">
+            <section class="create-step-heading">
+              <span class="create-step-number">{{ regions.length > 0 ? 3 : 2 }}</span>
+              <div><h2>{{ getCreatePageText('configurationTitle') }}</h2><p>{{ getCreatePageText('configurationHint') }}</p></div>
+            </section>
             <PlanSelector
               v-if="isPaidPackage"
               :plans="packagePlans"
               :selected-plan-id="form.planId"
               :instance-type="(selectedPackage?.instance_type === 'vm' ? 'vm' : 'container')"
               :loading="plansLoading"
-              :step-number="regions.length > 0 ? 3 : 2"
+              :step-number="regions.length > 0 ? 4 : 3"
               :prerequisite-message="prerequisiteMissing ? prerequisiteMessage : null"
               :free-site-mode="configStore.freeSiteMode"
               :title="getCreatePageText('selectPlan')"
@@ -1358,11 +1359,15 @@ async function handleSubmit(): Promise<void> {
               :cpu="form.cpu"
               :memory="form.memory"
               :disk="form.disk"
-              :step-number="regions.length > 0 ? 3 : 2"
+              :step-number="regions.length > 0 ? 4 : 3"
               @update:cpu="form.cpu = $event"
               @update:memory="form.memory = $event"
               @update:disk="form.disk = $event"
             />
+            <div class="create-step-heading">
+              <span class="create-step-number">{{ regions.length > 0 ? 5 : 4 }}</span>
+              <div><h2>{{ getCreatePageText('hostTitle') }}</h2><p>{{ getCreatePageText('hostHint') }}</p></div>
+            </div>
             <HostSelector
               :available-hosts="availableHosts"
               :selected-host-id="form.hostId"
@@ -1381,7 +1386,7 @@ async function handleSubmit(): Promise<void> {
               :available-images="availableImages"
               :selected-image="form.image"
               :images-loading="imagesLoading"
-              :step-number="regions.length > 0 ? 4 : 3"
+              :step-number="regions.length > 0 ? 5 : 4"
               :title="getCreatePageText('selectSystem')"
               :empty-message="getCreatePageText('noImages')"
               @update:selected-image="form.image = $event"
@@ -1392,11 +1397,10 @@ async function handleSubmit(): Promise<void> {
             <SSHKeySelector
               :ssh-keys="sshKeys"
               :selected-key-id="form.sshKeyId"
-              :step-number="regions.length > 0 ? 5 : 4"
+              :step-number="regions.length > 0 ? 6 : 5"
               :title="getCreatePageText('selectSshKey')"
               @update:selected-key-id="form.sshKeyId = $event"
             />
-            <!-- 订单概览 -->
             <div v-if="isPaidPackage && form.planId && selectedPlan" class="card p-5">
               <div class="flex items-center gap-3 mb-5">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary-500/10 text-primary-600 dark:text-primary-400">
@@ -1438,7 +1442,6 @@ async function handleSubmit(): Promise<void> {
                     <span class="text-themed-muted"><span class="opacity-75">{{ $t('instance.snapshots') }}:</span> <span class="font-mono tabular-nums text-themed-secondary">{{ selectedPlan.snapshotLimit }}</span></span>
                   </div>
                 </div>
-                <!-- 优惠码 -->
                 <div class="space-y-3">
                   <div>
                     <label class="label text-xs uppercase tracking-wide text-themed-muted mb-2">{{ configStore.freeSiteMode ? freeSiteCopy.createPromoCode : $t('aff.promoCode') }}</label>
@@ -1462,7 +1465,6 @@ async function handleSubmit(): Promise<void> {
                     </div>
                   </div>
                 </div>
-                <!-- 价格明细 -->
                 <div v-if="planPriceInfo" class="space-y-3">
                   <div v-if="promoCodeValid && planPriceInfo.discountAmount > 0" class="p-4 rounded-xl space-y-2 bg-themed-tertiary">
                     <div class="flex justify-between text-sm"><span class="text-themed-muted">{{ configStore.freeSiteMode ? freeSiteCopy.createPlanFee : $t('instance.createPage.planFee') }}</span><span class="font-mono tabular-nums font-medium text-themed">¥{{ planPriceInfo.planPrice.toFixed(2) }}</span></div>
@@ -1489,10 +1491,11 @@ async function handleSubmit(): Promise<void> {
                 </div>
               </div>
             </div>
-          </div><!-- end scrollable -->
-
-          <!-- 吸底提交区 -->
-          <div class="nimbus-submit card p-4 mt-4 space-y-3 lg:sticky lg:bottom-0 lg:z-10">
+            <section class="nimbus-submit card p-4 space-y-4">
+              <div class="create-step-heading">
+                <span class="create-step-number">{{ regions.length > 0 ? 7 : 6 }}</span>
+                <div><h2>{{ t('instance.createPage.identityTitle') }}</h2><p>{{ t('instance.createPage.identityHint') }}</p></div>
+              </div>
             <div>
               <label class="block text-sm font-medium text-themed-secondary mb-1.5">{{ $t('instance.createPage.instanceName') }}</label>
               <p v-if="showDestroyTrafficNotice" class="mb-2 text-xs leading-relaxed flex items-start gap-1.5 text-amber-700 dark:text-amber-300">
@@ -1538,7 +1541,12 @@ async function handleSubmit(): Promise<void> {
             <div v-if="prerequisiteMissing" class="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
               <p class="text-sm font-medium text-amber-700 dark:text-amber-400">{{ prerequisiteMessage }}</p>
             </div>
-            <label class="flex items-start gap-3 p-3 rounded-xl border border-themed bg-themed-tertiary cursor-pointer">
+            <div class="border-t border-themed pt-4">
+              <div class="create-step-heading mb-3">
+                <span class="create-step-number">{{ regions.length > 0 ? 8 : 7 }}</span>
+                <div><h2>{{ t('instance.createPage.advancedTitle') }}</h2><p>{{ t('instance.createPage.advancedHint') }}</p></div>
+              </div>
+              <label class="flex items-start gap-3 rounded-lg border border-themed bg-themed-tertiary p-3 cursor-pointer">
               <input
                 v-model="form.autoRemotePort"
                 type="checkbox"
@@ -1548,7 +1556,27 @@ async function handleSubmit(): Promise<void> {
                 <span class="font-medium text-themed">{{ $t('instance.createPage.autoRemotePort') }}</span>
                 <span class="mt-1 block text-xs text-themed-muted">{{ $t('instance.createPage.autoRemotePortDesc') }}</span>
               </span>
-            </label>
+              </label>
+            </div>
+            <div class="border-t border-themed pt-4">
+              <div class="create-step-heading mb-3">
+                <span class="create-step-number">{{ regions.length > 0 ? 9 : 8 }}</span>
+                <div><h2>{{ t('instance.createPage.paymentTitle') }}</h2><p>{{ t('instance.createPage.paymentHint') }}</p></div>
+              </div>
+              <div v-if="draftRestored" class="mb-3 rounded-lg border border-themed bg-themed-tertiary p-3 text-sm text-themed-secondary">{{ t('operations.draft') }}</div>
+              <div v-if="isPaidPackage || form.planId !== null || plansLoadedPackageId !== form.packageId" class="space-y-3 rounded-lg border border-themed p-3">
+                <div class="grid gap-2 text-sm sm:grid-cols-2">
+                  <span class="text-themed-muted">{{ t('operations.balance') }} <strong class="font-mono text-themed">{{ purchaseBalance === null ? '—' : `¥${purchaseBalance.toFixed(2)}` }}</strong></span>
+                  <span class="text-themed-muted">{{ t('operations.shortfall') }} <strong class="font-mono text-themed">¥{{ purchaseShortfall.toFixed(2) }}</strong></span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" class="btn btn-secondary" :disabled="purchaseReviewLoading || submitting" @click="reviewPurchase">{{ t('operations.review') }}</button>
+                  <button type="button" class="btn btn-secondary" @click="rechargeForPurchase">{{ t('operations.recharge') }}</button>
+                  <RouterLink class="btn btn-secondary" to="/tasks">{{ t('operations.title') }}</RouterLink>
+                </div>
+                <label class="flex items-start gap-2 text-sm"><input v-model="purchaseReviewed" type="checkbox" :disabled="!purchaseReviewReady || purchaseReviewLoading || purchaseBalance === null || selectedPlan?.isSoldOut || selectedPackage?.soldOut" />{{ t('operations.confirm') }}</label>
+              </div>
+            </div>
             <div
               v-if="isCreateTurnstileRequired"
               ref="turnstileSectionRef"
@@ -1581,9 +1609,10 @@ async function handleSubmit(): Promise<void> {
             >
               {{ submitting ? $t('instance.createPage.creating') : $t('instance.create') }}
             </button>
+            </section>
           </div>
-        </div><!-- end right col -->
-      </div><!-- end grid -->
+        </div>
+      </div>
     </form>
   </div>
 
@@ -1686,9 +1715,6 @@ async function handleSubmit(): Promise<void> {
 </template>
 
 <style scoped>
-/* ============ Nimbus polish — create-instance view ============ */
-
-/* Segmented source switcher */
 .nimbus-segmented {
   backdrop-filter: blur(8px);
 }
@@ -1707,7 +1733,6 @@ async function handleSubmit(): Promise<void> {
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 5px 12px -5px color-mix(in srgb, var(--kawaii-primary) 55%, transparent);
 }
 
-/* Selector step cards: subtle hover-lift + staggered entrance */
 .nimbus-pane :deep(.card) {
   transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
   animation: nimbus-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards;
@@ -1724,9 +1749,41 @@ async function handleSubmit(): Promise<void> {
 .nimbus-pane :deep(.card):nth-child(4) { animation-delay: 0.14s; }
 .nimbus-pane :deep(.card):nth-child(n + 5) { animation-delay: 0.18s; }
 
-/* Sticky submit block: soft top edge above scrolling content */
 .nimbus-submit {
   box-shadow: 0 -10px 26px -20px rgb(0 0 0 / 0.55), 0 1px 3px 0 rgb(0 0 0 / 0.08);
+}
+
+.create-step-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.create-step-heading h2 {
+  color: var(--kawaii-text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.create-step-heading p {
+  color: var(--kawaii-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.create-step-number {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--kawaii-text);
+  color: var(--kawaii-bg);
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 @keyframes nimbus-rise {
