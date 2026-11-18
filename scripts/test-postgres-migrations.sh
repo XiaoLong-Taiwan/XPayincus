@@ -36,10 +36,11 @@ run_migrations() {
   local label="$3"
   local work_dir="$temp_dir/run-$label"
   mkdir -p "$work_dir/prisma"
+  ln -s "$server_dir/node_modules" "$work_dir/node_modules"
   cp "$server_dir/prisma.config.ts" "$work_dir/prisma.config.ts"
   cp "$server_dir/prisma/schema.prisma" "$work_dir/prisma/schema.prisma"
   cp -R "$migrations_dir" "$work_dir/prisma/migrations"
-  (cd "$work_dir" && DATABASE_URL="$database_url" pnpm --dir "$repo_root/$panel_dir" exec prisma migrate deploy --config "$work_dir/prisma.config.ts")
+  DATABASE_URL="$database_url" pnpm --dir "$repo_root/$panel_dir" --filter server exec prisma migrate deploy --config "$work_dir/prisma.config.ts"
   printf 'Migration stage completed: %s\n' "$label"
 }
 
