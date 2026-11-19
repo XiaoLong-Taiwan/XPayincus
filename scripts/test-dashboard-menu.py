@@ -165,16 +165,37 @@ esac
         self.assertFalse((self.deployment / '.state').exists())
         self.assertFalse((self.deployment / '.bootstrap').exists())
 
+    def test_readonly_menu_through_top_entry_does_not_execute_local_panel(self):
+        self.deployment_fixture()
+        (self.deployment / '.env').unlink()
+        terminal = self.base / 'menu-input'
+        terminal.write_text('10\n0\n', encoding='utf-8', newline='\n')
+        self.env['MOCK_TTY'] = SUPPORT.shell_path(terminal)
+        child = self.env['CHILD_SCRIPT']
+        self.env['CHILD_SCRIPT'] = child.replace('exec 8<>/dev/tty', 'exec 8<"$MOCK_TTY"').replace('>&8', '>&2')
+        result = self.run_entry('menu', self.directory)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('缺少 .env', result.stderr)
+        self.assertNotIn('panel:', self.calls())
+        self.assertFalse((self.deployment / '.state').exists())
+        self.assertFalse((self.deployment / '.bootstrap').exists())
+
     def test_readonly_diagnostics_work_without_env_or_docker(self):
         self.deployment_fixture()
         (self.deployment / '.env').unlink()
         for command in ['doctor', 'recover']:
             result = self.run_entry(command, self.directory, '--json')
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.log.unlink()
-        result = self.run_entry('update', self.directory)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('panel:', self.calls())
+        for args in [('update',), ('update-plan',), ('force-recreate',),
+                     ('recover', '--resume-up'), ('recover', '--retry-preflight')]:
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result = self.run_entry(args[0], self.directory, *args[1:])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('缺少 .env', result.stderr)
+                self.assertNotIn('panel:', self.calls())
+        self.assertFalse((self.deployment / '.state').exists())
+        self.assertFalse((self.deployment / '.bootstrap').exists())
 
     def test_invalid_routes_and_untrusted_deployment_never_execute_panel(self):
         self.deployment_fixture()

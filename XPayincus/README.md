@@ -1,8 +1,18 @@
 # XPayincus Dashboard 與 Server API
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.22`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
+## 最簡部署指令
 
-本輪發行目標整理既有宿主／Caddy 重複驗證修正、Dashboard 更新與恢復短入口、Agent 本機 binary 雜湊傳遞及設定路徑一致性，並補齊部署與維護文件。產品版本與現行文件同步至 v1.0.22，現行最低 updater 維持 v1.0.3，詳見 [v1.0.22 發行目標](../RELEASE.md#v1021-發行目標)。跨版本升級仍須交付完整 migration。本地檢查、GitHub Actions、已發布資產與目標環境驗收是不同證據，請分別核對對應 commit、Release 與部署紀錄。
+在 Linux 面板主機準備 DNS、HTTPS 與 Docker Compose，以 root 下載並執行統一管理入口，再從選單選擇「安裝新面板」及 Compose：
+
+```bash
+( f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -q -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/dashboard.sh -o "$f" && bash -n "$f" && bash "$f" )
+```
+
+安裝流程會要求部署目錄、使用者／管理端 HTTPS origin 及代理模式。操作既有部署前，先確認路徑是自己管理且信任的部署。完整安裝與最低需求見 [根 README](../README.md#最低需求與容量規劃) 及 [Compose 說明](deploy/compose/README.md)。
+
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，本次發行目標為 `v1.0.23`（發布狀態以 GitHub Release 為準）。歷史交接檔中的線上版本不代表統一版本已部署。
+
+本輪新增 Compose 唯讀部署檢查，改善目錄、連結、檔案權限與 `.env` 的診斷，並整理 Dashboard 與 Agent 快速安裝指令。最低 updater 維持 v1.0.3，詳見 [v1.0.23 發行目標](../RELEASE.md#v1023-發行目標)。GitHub Actions、已發布資產與目標環境驗收是不同證據，請分別核對對應 commit、Release 與部署紀錄。
 
 ## 目錄與能力
 

@@ -197,54 +197,131 @@ docker_check() {
   docker info >/dev/null 2>&1 || { printf '%s\n' '無法連線 Docker daemon；請檢查服務、Docker context 與目前帳號權限（sudo systemctl status docker）。不會自動變更權限或重裝 Docker。' >&2; return 1; }
 }
 deployment_check() {
+  command -v python3 >/dev/null || { printf '部署檢查需要 Python 3。\n' >&2; return 1; }
   python3 - "$1" "${2:-configured}" <<'DEPLOYMENT_PY'
 import os
 from pathlib import Path
 import stat
 import sys
 
+
+class InvalidDeployment(Exception):
+    pass
+
+
+def reject(path, reason):
+    raise InvalidDeployment(f'{str(path)!r}：{reason}')
+
+
+def resolve_checked(path, paths):
+    entry = Path(path.anchor)
+    parts = list(reversed(path.parts[1:]))
+    links = 0
+    paths[entry] = entry.lstat()
+    while parts:
+        part = parts.pop()
+        if part == '..':
+            entry = entry.parent
+            continue
+        candidate = entry / part
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            reject(path, '符號連結目標不存在' if links else '路徑不存在')
+        paths[candidate] = info
+        if stat.S_ISLNK(info.st_mode):
+            links += 1
+            if links > 40:
+                reject(path, '符號連結循環或層數過多')
+            target = Path(os.readlink(candidate))
+            if target.is_absolute():
+                entry = Path(target.anchor)
+                paths[entry] = entry.lstat()
+            parts.extend(reversed(target.parts[1:] if target.is_absolute() else target.parts))
+        else:
+            entry = candidate
+            if parts and not stat.S_ISDIR(info.st_mode):
+                reject(candidate, '路徑成員不是目錄')
+    canonical = path.resolve(strict=True)
+    if os.name == 'nt':
+        paths[canonical] = canonical.lstat()
+        return canonical
+    if entry != canonical:
+        reject(path, '無法驗證路徑的連結目標')
+    return entry
+
+
 try:
     root = Path(sys.argv[1])
-    if not root.is_absolute() or not root.is_dir() or root.is_symlink():
-        raise ValueError()
+    mode = sys.argv[2]
+    if not root.is_absolute():
+        reject(root, '請提供部署絕對路徑')
+    if root.is_symlink():
+        reject(root, '部署根目錄不可為符號連結')
+    paths = {}
+    resolved_root = resolve_checked(root, paths)
+    if not stat.S_ISDIR(paths[resolved_root].st_mode):
+        reject(root, '部署根路徑不是目錄')
     names = ['panel.sh', 'compose.yaml']
-    if (root / 'docker-compose.yml').exists() or (root / 'docker-compose.yml').is_symlink():
-        names.append('docker-compose.yml')
-    if sys.argv[2] == 'configured':
-        names.append('.env')
-    resolved_root = root.resolve(strict=True)
-    paths = {root, *(root / name for name in names)}
-    for path in list(paths):
-        resolved = path.resolve(strict=True)
-        if path != root and (not resolved.is_file() or resolved.stat().st_size == 0 or resolved_root not in resolved.parents):
-            raise ValueError()
-        for entry in (path, *path.parents):
-            target = entry.resolve(strict=True)
-            paths.update((entry, target, *target.parents))
+    env_issue = '缺少 .env'
+    for name in ('docker-compose.yml', 'compose.release.yaml', '.env'):
+        try:
+            (resolved_root / name).lstat()
+        except FileNotFoundError:
+            continue
+        names.append(name)
+    files = {}
+    for name in names:
+        path = resolved_root / name
+        resolved = resolve_checked(path, paths)
+        info = paths[resolved]
+        if resolved_root not in resolved.parents:
+            reject(path, '符號連結指向部署目錄外')
+        if not stat.S_ISREG(info.st_mode):
+            reject(path, '不是一般檔案')
+        if name == '.env':
+            env_issue = '' if info.st_size else '.env 是空檔案'
+        elif not info.st_size:
+            reject(path, '檔案為空')
+        files[name] = resolved
     if os.name != 'nt':
-        for path in paths:
-            info = path.lstat()
+        for path, info in paths.items():
             if info.st_uid not in (0, os.geteuid()):
-                raise ValueError()
+                reject(path, f'所有者 UID {info.st_uid} 不是 root 或目前執行帳號（UID {os.geteuid()}）')
             if stat.S_ISLNK(info.st_mode):
                 continue
             if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-                target = path.resolve(strict=True)
                 if not (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX
-                        and target != resolved_root and resolved_root not in target.parents):
-                    raise ValueError()
-    script = (root / 'panel.sh').read_text()
-    compose = (root / 'compose.yaml').read_text()
-    if 'incudal-panel' not in script or 'command_name=' not in script or not all(value in compose for value in ('services:', '  api:', '  user:', '  admin:')):
-        raise ValueError()
-except (OSError, ValueError):
+                        and path != resolved_root and resolved_root not in path.parents):
+                    reject(path, f'群組或其他人可寫（模式 {stat.S_IMODE(info.st_mode):04o}）')
+    script = files['panel.sh'].read_text(encoding='utf-8')
+    if 'incudal-panel' not in script or 'command_name=' not in script:
+        reject(root / 'panel.sh', '不符合 XPayincus 面板入口結構')
+    compose = files['compose.yaml'].read_text(encoding='utf-8')
+    if not all(value in compose for value in ('services:', '  api:', '  user:', '  admin:')):
+        reject(root / 'compose.yaml', '缺少預期的 services／api／user／admin 結構')
+    if env_issue and mode == 'configured':
+        reject(root / '.env', env_issue + '；可使用選單 [10] 唯讀檢查部署')
+    if mode == 'inspect':
+        print('部署檔案通過結構與權限檢查（並非來源驗證）。')
+        print(env_issue + '；未執行任何面板操作。' if env_issue else '找到非空的 .env；未檢查或顯示設定值。')
+except InvalidDeployment as error:
+    print(f'部署檢查失敗：{error}', file=sys.stderr)
+    sys.exit(1)
+except OSError as error:
+    print(f'部署檢查失敗：無法存取 {error.filename!r}（系統錯誤 {error.errno}）。', file=sys.stderr)
+    sys.exit(1)
+except UnicodeError:
+    print('部署檢查失敗：panel.sh 或 compose.yaml 不是可讀的 UTF-8 文字。', file=sys.stderr)
     sys.exit(1)
 DEPLOYMENT_PY
 }
 deployment_command() {
   local command_name="$1" directory="$2" method=configured
   shift 2
-  if [[ "$command_name" == doctor || "$command_name" == recover ]]; then method=prepared; fi
+  if [[ "$command_name" == doctor || ( "$command_name" == recover && ( $# == 0 || "${1:-}" == --json ) ) ]]; then
+    method=prepared
+  fi
   deployment_check "$directory" "$method" || die '目錄不是有效且權限安全的 Compose 部署；請提供您管理且信任的部署絕對路徑。'
   if [[ "$command_name" == force-recreate ]]; then
     exec bash "$directory/panel.sh" up pull --force-recreate
@@ -301,10 +378,19 @@ dashboard_menu() {
   local directory="${1:-$PWD}" choice value method source_real parent_real destination trusted=''
   { exec 8<>/dev/tty; } 2>/dev/null || die '數字選單需要可用的 /dev/tty；無終端請使用 install DIRECTORY latest 或既有非互動 CLI。'
   while true; do
-    printf '\n╭──────────────────────────────────────────╮\n│           XPAYINCUS · 面板管理            │\n╰──────────────────────────────────────────╯\n部署目錄：%s\n\n  [1] 查看狀態\n  [2] 更新面板\n  [3] 安裝新面板\n  [4] 重新拉取鏡像\n  [5] 匯入資料\n  [6] 查看日誌\n  [7] 匯出資料\n  [8] 移動佈署目錄\n  [9] 重建容器\n  [0] 退出腳本\n\n選擇功能 › ' "$directory" >&8
+    printf '\n╭──────────────────────────────────────────╮\n│           XPAYINCUS · 面板管理            │\n╰──────────────────────────────────────────╯\n部署目錄：%s\n\n  [1] 查看狀態\n  [2] 更新面板\n  [3] 安裝新面板\n  [4] 重新拉取鏡像\n  [5] 匯入資料\n  [6] 查看日誌\n  [7] 匯出資料\n  [8] 移動佈署目錄\n  [9] 重建容器\n  [10] 唯讀檢查部署\n  [0] 退出腳本\n\n選擇功能 › ' "$directory" >&8
     IFS= read -r choice <&8 || return 0
     case "$choice" in
       0) return 0 ;;
+      10)
+        if ! deployment_check "$directory" inspect >&8 2>&1; then
+          printf '請輸入既有部署絕對路徑（不建立目錄，空白返回）：' >&8
+          IFS= read -r value <&8 || return 0
+          [[ -n "$value" ]] || continue
+          directory="$value"; trusted=''
+          deployment_check "$directory" inspect >&8 2>&1 || continue
+        fi
+        ;;
       3)
         printf '\n安裝方式\n  [1] Compose（Docker）\n  [2] 宿主機（交由 Dashboard 上層入口）\n  [0] 返回\n選擇：' >&8
         IFS= read -r method <&8 || return 0
@@ -332,12 +418,23 @@ dashboard_menu() {
         ;;
       1|2|4|5|6|7|9)
         method=configured
-        if ! deployment_check "$directory" "$method"; then
-          printf '目前目錄不是有效且權限安全的 Compose 部署。請輸入既有部署絕對路徑（不建立目錄，空白返回）：' >&8
+        if ! deployment_check "$directory" "$method" 2>&8; then
+          if [[ "$choice" == 1 ]] && deployment_check "$directory" inspect >&8 2>&1; then
+            printf '目前僅能檢查部署檔案。設定完整後才能查詢容器狀態或操作服務。\n' >&8
+            continue
+          fi
+          printf '請輸入既有部署絕對路徑（不建立目錄，空白返回）：' >&8
           IFS= read -r value <&8 || return 0
           [[ -n "$value" ]] || continue
           directory="$value"; trusted=''
-          deployment_check "$directory" "$method" || { printf '目錄無效；未執行任何本機腳本。\n' >&8; continue; }
+          if ! deployment_check "$directory" "$method" 2>&8; then
+            if [[ "$choice" == 1 ]] && deployment_check "$directory" inspect >&8 2>&1; then
+              printf '目前僅能檢查部署檔案。設定完整後才能查詢容器狀態或操作服務。\n' >&8
+            else
+              printf '未執行任何本機腳本。\n' >&8
+            fi
+            continue
+          fi
         fi
         if [[ "$trusted" != "$directory" ]]; then
           printf '即將執行 %s/panel.sh；結構檢查不等同來源驗證。確認這是您管理且信任的部署？輸入 yes：' "$directory" >&8
@@ -404,13 +501,13 @@ dashboard_menu() {
         ;;
       8)
         method=configured
-        if ! deployment_check "$directory" "$method"; then
-          printf '目前目錄不是有效的 Compose 部署。請輸入來源部署絕對路徑（空白返回）：' >&8
+        if ! deployment_check "$directory" "$method" 2>&8; then
+          printf '請輸入來源部署絕對路徑（空白返回）：' >&8
           IFS= read -r value <&8 || return 0
           [[ -n "$value" ]] || continue
           directory="$value"
           trusted=''
-          deployment_check "$directory" "$method" || { printf '來源目錄無效；未執行任何本機腳本。\n' >&8; continue; }
+          deployment_check "$directory" "$method" 2>&8 || { printf '未執行任何本機腳本。\n' >&8; continue; }
         fi
         if [[ "$trusted" != "$directory" ]]; then
           printf '即將移動 %s 的完整部署資料。確認來源可信？輸入 yes：' "$directory" >&8
@@ -474,7 +571,7 @@ MOVE_CHECK_PY
         trusted="$directory"
         printf '部署資料已搬移至 %s。\n' "$directory" >&8
         ;;
-      *) printf '請輸入 0 至 9 的選項。\n' >&8 ;;
+      *) printf '請輸入 0 至 10 的選項。\n' >&8 ;;
     esac
   done
 }

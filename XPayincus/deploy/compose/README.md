@@ -1,8 +1,8 @@
-# 面板 Compose v1.0.22 部署與 PostgreSQL 匯出匯入
+# 面板 Compose v1.0.23 部署與 PostgreSQL 匯出匯入
 
 本配置僅部署 Dashboard／面板：使用者前端、管理端前端、單一 API 程序及 PostgreSQL 16。Agent、Incus、ZFS、RFW 與宿主機網路服務維持既有宿主機部署，不提供容器、不掛載 Docker socket、不使用 privileged 或 host network。原 systemd／Nginx 配置保留；發行入口是統一倉庫根 `.github/workflows`，子目錄 workflow 僅作歷史參考。
 
-本文件描述統一版 v1.0.22 Compose 配置（發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。宿主 Agent 主動連回面板 WSS，面板不直連 Incus／Caddy 管理埠；Server 與 Agent 須協調升級，反向代理須支援 `/api/agent/tunnel` 的 WebSocket Upgrade 與長連線，沒有舊 Agent 自動降級。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
+本文件描述統一版 v1.0.23 Compose 配置（發布狀態以 GitHub Release 為準）；整體發行版本以根 `VERSION` 為準。宿主 Agent 主動連回面板 WSS，面板不直連 Incus／Caddy 管理埠；Server 與 Agent 須協調升級，反向代理須支援 `/api/agent/tunnel` 的 WebSocket Upgrade 與長連線，沒有舊 Agent 自動降級。根封裝腳本會核對新入口、Nginx 模板、支援腳本與 legacy export 工具／指南完整性。GitHub CI 包含 Compose 的 API／雙前端映像建置及 committed Dashboard 封裝，不推送 registry，也不自動部署；完整發行規則見根 [RELEASE.md](../../../RELEASE.md)。
 
 ## 前置條件
 
@@ -19,7 +19,7 @@ Windows 工作區可編輯這些檔案；部署 CLI 應在 Linux 主機或具有
 
 可使用完整倉庫執行 `up` 或 `up build`，或解壓已發布的 Dashboard Compose 原始碼包 `xpayincus-dashboard-<版本>-compose.tar.gz`。使用官方發行包時保留附帶的 `compose.release.yaml`；也可只複製該包完整 `deploy/compose/` 目錄，執行 init 與預設 pull 部署。手動／自訂部署沒有該 release 檔時，`up` 與 `up pull` 直接依既有 Compose 的 image 拉取，不要求先以 `update` 納管或改用 build。只有 build 模式需要保留完整 `XPayincus/` 相對目錄；`compose.build.yaml` 的預設 build context `../..` 解析為 `XPayincus/`，安裝模式改用 `BUILD_CONTEXT=./source`。
 
-根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.22`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.22`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
+根打包腳本透過 `prepare-compose-release.mjs` 在包內產生僅含 image 的 `compose.release.yaml`。本次發行目標 API 使用 `ghcr.io/xiaolong-taiwan/xpayincus-api:v1.0.23`，user／admin 共用 `ghcr.io/xiaolong-taiwan/xpayincus-panel-web:v1.0.23`，發布狀態以 registry 與 Actions 為準；Web 的 Docker target 仍為 `web`。預設設定不含 build；`bash panel.sh up build` 才疊加 `compose.build.yaml` 並加入版本建置標籤。有官方 release 檔時，`up` 依部署釘選版本解析 GHCR registry index digest，只有本機 RepoDigests 含相同 digest 才略過應用映像 pull；缺少或不同則強制拉取，官方部署檔換版使用 `update`。無 release 檔時直接執行 Compose `pull --policy always`，拉取目前啟用服務的 image。映像須已發布且支援目標架構；官方映像由根 Docker workflow 發布。若 digest 無法解析或 pull 失敗，舊服務不會先停止。私有映像請先用安全方式登入對應 registry。
 
 主要入口為 `docker-compose.yml`，透過 Compose `include` 引用 `compose.yaml`；所有服務、網路、secret 僅定義於 `compose.yaml`，舊的 `-f compose.yaml` 用法仍相容。缺少新入口的舊部署，CLI 與 `init` 回退使用 `compose.yaml`；已存在但損壞的入口不會被忽略。避免同時載入兩個入口。若存在 `compose.release.yaml`，CLI 使用 `compose.yaml` 再疊加該 override，避免 `include` 與 override 同名服務衝突；檔案必須可讀且非空。`init` 會寫入對應 `COMPOSE_FILE`，讓部署目錄的 `docker compose` 也採相同配置。`up`、`down`、`status`、`logs`、`export`、`import` 共用配置；`install`、`init` 與 help 不呼叫 Compose。
 
@@ -70,7 +70,9 @@ bash -c 'set -eu; d=$(mktemp -d); trap '\''rm -rf -- "$d"'\'' EXIT; wget --https
 
 [8] 會要求輸入新的絕對路徑與 MOVE 確認，全程持有操作鎖，先匯出資料庫，再停止容器、搬移完整部署並從新位置啟動。目標父目錄須存在、目標不可已存在，且限同一檔案系統以原子更名搬移；拒絕巢狀目標、掛載點、絕對或越界符號連結，以及設定中含來源絕對路徑的部署。部署內的相對連結、資料、密鑰、憑證與備份一併保留。搬移後啟動失敗時資料保留於新路徑，請從新位置查看狀態與日誌；外部代理、服務單元或備份排程若引用舊路徑，須自行更新。
 
-更新前檢查候選內的 panel.sh、compose.yaml、可用的 docker-compose.yml 與非空 .env，支援指向部署內 `.bootstrap/` 的入口連結；拒絕越界腳本、群組／其他人可寫或非目前帳號／root 擁有的檔案。這是結構與權限檢查，不是來源簽章：執行本機入口前仍要求輸入 yes 確認為自己管理且信任的部署。無效時詢問既有絕對路徑，不自動 mkdir；新安裝則先顯示目錄並要求 yes 才允許建立。
+部署檢查要求 `panel.sh` 和 `compose.yaml`，並檢查存在的 `docker-compose.yml` 和 `compose.release.yaml`；支援指向部署內 `.bootstrap/` 的入口連結。檢查會指出缺檔、無效連結、所有者或寫入權限等具體原因，不顯示 `.env` 內容。選單 `[10] 唯讀檢查部署` 在 `.env` 缺少或為空時仍可用，不執行本機 `panel.sh`、不呼叫 Docker、不建立檔案。這對沒有 `doctor` 的舊部署也適用。
+
+其他既有部署操作仍要求非空 `.env`，包括 CLI 的 `recover --retry-preflight` 和 `recover --resume-up`。結構與權限檢查不是來源驗證：選單執行本機入口前仍要求輸入 `yes`。候選不合格時可輸入另一個既有部署絕對路徑，不會自動建立目錄；只有明確選擇並確認新安裝才會建立目錄。
 
 Docker 前置檢查確認 binary、Compose plugin >=2.20.0 與 daemon 可用；可獨立呼叫 `bash download.sh docker-check`。缺少元件時提供 Docker 官方 Debian／Ubuntu apt 文件與套件指令，使用者自行確認 repository／服務／權限，不執行 curl|sh、不 purge Docker。重裝是面板容器重建：[9] 輸入 rebuild 確認，或 `bash panel.sh up pull --force-recreate`。仍先完成全部 pull 才停舊服務，不重新初始化、不刪 volume／DB／secrets；有短暫停機，應先備份，不承諾 migration 自動回滾。
 
@@ -89,7 +91,7 @@ Cloudflare 接著隱藏詢問 Tunnel token，寫入 `secrets/cloudflare_tunnel_t
 固定版本可信 SHA256 模式仍相容；請從獨立可信管道確認入口與 archive 的預期值，不能下載後自行計算就視為驗證：
 
 ```bash
-VERSION=v1.0.22
+VERSION=v1.0.23
 BOOTSTRAP_SHA256='填入可信的入口腳本64位小寫SHA256'
 ARCHIVE_SHA256='填入可信的Dashboard封裝64位小寫SHA256'
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
@@ -99,7 +101,7 @@ printf '%s  %s\n' "$BOOTSTRAP_SHA256" "xpayincus-compose-$VERSION.sh" | sha256su
   bash "xpayincus-compose-$VERSION.sh" install /srv/incudal-panel "$VERSION" "$ARCHIVE_SHA256"
 ```
 
-此處使用 v1.0.22 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
+此處使用 v1.0.23 發行目標範例；下載前確認該版本正式 Release、資產及映像均已發布。v1.0.5 工具不具備自主更新功能，舊部署須先核對工具版本。確認下載與校驗成功後初始化：
 
 ```bash
 cd /srv/incudal-panel

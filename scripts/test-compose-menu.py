@@ -1,3 +1,5 @@
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import os
 from pathlib import Path
 import shutil
@@ -37,7 +39,10 @@ class MenuTests(unittest.TestCase):
         bash_prelude = "python3() { if [[ \"$1\" == - ]]; then python - \"$(cygpath -w \"$2\")\" \"$(cygpath -w \"$3\")\"; elif [[ \"$1\" == -c ]]; then python -c \"$2\" \"$(cygpath -w \"$3\")\" \"$(cygpath -w \"$4\")\"; else python \"$@\"; fi; }\n" if os.name == 'nt' else ''
         directory_arg = '"$1"'
         code = code.replace('move_deployment "$source_real" "$destination"', 'move_deployment_impl "$source_real" "$destination"')
-        script = 'set -Eeuo pipefail\n' + bash_prelude + 'self=fixture\ndocker() { printf "DOCKER <%s>\\n" "$*"; }\ndocker_check() { return 0; }\ndeployment_check() { ' + check + '; }\nbash() { printf "CALL <%s>\\n" "$*"; }\n' + extra + '\n' + move_function + '\nmove_deployment() { ' + move_body + '; }\ndashboard_menu() {\n' + code + '\n}\ndashboard_menu ' + directory_arg
+        check_function = ('deployment_check() {\n' + SOURCE.split('deployment_check() {\n', 1)[1].split('\n}\ndeployment_command', 1)[0] + '\n}'
+                          if check is None else 'deployment_check() { ' + check + '; }')
+        inspection_python = 'python3() { python - "$(cygpath -w "$2")" "$3"; }\n' if check is None and os.name == 'nt' else ''
+        script = 'set -Eeuo pipefail\n' + bash_prelude + 'self=fixture\ndocker() { printf "DOCKER <%s>\\n" "$*"; }\ndocker_check() { return 0; }\n' + check_function + '\nbash() { printf "CALL <%s>\\n" "$*"; }\n' + extra + '\n' + move_function + '\nmove_deployment() { ' + move_body + '; }\n' + inspection_python + 'dashboard_menu() {\n' + code + '\n}\ndashboard_menu ' + directory_arg
         fixture = self.base / 'menu-fixture.sh'
         fixture.write_text(script, encoding='utf-8', newline='\n')
         bash_fixture = str(fixture)
@@ -68,6 +73,166 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 20, process_output(result))
         self.assertNotIn(b'CALL', result.stdout)
         self.assertIn(b'--host-install', result.stderr)
+
+    def deployment_fixture(self):
+        deployment = self.base / "panel space's $HOME; fixture"
+        deployment.mkdir()
+        for name in ('panel.sh', 'compose.yaml', 'docker-compose.yml'):
+            shutil.copyfile(COMPOSE / name, deployment / name)
+        return deployment
+
+    def inspect(self, deployment, mode='configured', expected=None):
+        code = SOURCE.split("<<'DEPLOYMENT_PY'\n", 1)[1].split('\nDEPLOYMENT_PY\n', 1)[0]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(sys, 'argv', ['check', str(deployment), mode]), redirect_stdout(output), redirect_stderr(errors):
+            try:
+                exec(compile(code, 'deployment-check', 'exec'), {})
+            except SystemExit as error:
+                self.assertEqual(error.code, 1)
+                self.assertIsNotNone(expected, errors.getvalue())
+            else:
+                self.assertIsNone(expected, '不安全部署被接受')
+        if expected:
+            self.assertIn(expected, errors.getvalue())
+        self.assertNotIn('Traceback', errors.getvalue())
+        return output.getvalue(), errors.getvalue()
+
+    def test_readonly_menu_uses_real_inspection_without_env_or_panel_execution(self):
+        deployment = self.deployment_fixture()
+        before = {p.name: p.read_bytes() for p in deployment.iterdir()}
+        result = self.menu('10\n0\n', check=None, directory=deployment.as_posix(),
+                           extra='docker_check() { printf "DOCKER CHECK\\n"; return 1; }')
+        self.assertEqual(result.returncode, 0, process_output(result))
+        self.assertIn('缺少 .env'.encode(), result.stderr)
+        self.assertNotIn(b'CALL', result.stdout + result.stderr)
+        self.assertNotIn(b'DOCKER CHECK', result.stdout + result.stderr)
+        self.assertEqual({p.name: p.read_bytes() for p in deployment.iterdir()}, before)
+
+    def test_configured_menu_actions_remain_blocked_without_env(self):
+        deployment = self.deployment_fixture()
+        for choice in (2, 4, 5, 6, 7, 8, 9):
+            with self.subTest(choice=choice):
+                result = self.menu(f'{choice}\n\n0\n', check=None, directory=deployment.as_posix())
+                self.assertEqual(result.returncode, 0, process_output(result))
+                self.assertIn('缺少 .env'.encode(), result.stderr)
+                self.assertNotIn(b'CALL', result.stdout + result.stderr)
+        self.assertFalse((deployment / '.state').exists())
+        self.assertFalse((deployment / '.bootstrap').exists())
+
+    def test_status_reports_incomplete_setup_without_prompting_or_running_panel(self):
+        deployment = self.deployment_fixture()
+        for content, message in [(None, '缺少 .env'), ('', '.env 是空檔案')]:
+            with self.subTest(content=content):
+                if content is not None:
+                    (deployment / '.env').write_text(content)
+                result = self.menu('1\n0\n', check=None, directory=deployment.as_posix(),
+                                   extra='docker_check() { printf "DOCKER CHECK\\n"; return 1; }')
+                self.assertEqual(result.returncode, 0, process_output(result))
+                self.assertIn(message.encode(), result.stderr)
+                self.assertIn('目前僅能檢查部署檔案'.encode(), result.stderr)
+                self.assertNotIn('請輸入既有部署絕對路徑'.encode(), result.stderr)
+                self.assertNotIn(b'CALL', result.stdout + result.stderr)
+                self.assertNotIn(b'DOCKER CHECK', result.stdout + result.stderr)
+
+    def test_inspection_reports_env_missing_empty_and_never_prints_values(self):
+        deployment = self.deployment_fixture()
+        for content, issue in [(None, '缺少 .env'), ('', '.env 是空檔案')]:
+            if content is not None:
+                (deployment / '.env').write_text(content)
+            self.inspect(deployment, expected=issue)
+            output, _ = self.inspect(deployment, 'inspect')
+            self.assertIn(issue, output)
+            self.inspect(deployment, 'prepared')
+        (deployment / '.env').write_text('PRIVATE_VALUE=never-display-this')
+        output, errors = self.inspect(deployment, 'inspect')
+        self.assertNotIn('never-display-this', output + errors)
+        self.inspect(deployment)
+
+    def test_inspection_diagnostics_cover_structure_paths_and_encoding(self):
+        self.inspect(Path('relative'), expected='絕對路徑')
+        self.inspect(self.base / 'absent', expected='路徑不存在')
+        deployment = self.deployment_fixture()
+        (deployment / '.env').write_text('fixture')
+        for name, content, message in [('panel.sh', b'', '檔案為空'),
+                                       ('panel.sh', b'exit 0', '面板入口結構'),
+                                       ('compose.yaml', b'services:\n', '缺少預期'),
+                                       ('compose.yaml', b'\xff', 'UTF-8')]:
+            with self.subTest(name=name, content=content):
+                original = (deployment / name).read_bytes()
+                (deployment / name).write_bytes(content)
+                self.inspect(deployment, expected=message)
+                (deployment / name).write_bytes(original)
+        for name in ('docker-compose.yml', 'compose.release.yaml'):
+            with self.subTest(name=name):
+                (deployment / name).write_bytes(b'')
+                self.inspect(deployment, 'prepared', expected='檔案為空')
+                (deployment / name).unlink()
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX 權限與連結測試需要 Linux')
+    def test_inspection_preserves_permissions_sticky_and_link_boundaries(self):
+        deployment = self.deployment_fixture()
+        (deployment / '.env').write_text('fixture')
+        for path in [deployment, deployment / 'panel.sh', deployment / '.env', self.base]:
+            original = path.stat().st_mode & 0o7777
+            try:
+                for mode in (0o775, 0o777):
+                    path.chmod(mode)
+                    self.inspect(deployment, 'inspect', expected='群組或其他人可寫')
+                if path.is_dir():
+                    path.chmod(0o1777)
+                    self.inspect(deployment, 'inspect', expected='群組或其他人可寫' if path == deployment else None)
+            finally:
+                path.chmod(original)
+        link = deployment / 'panel.sh'
+        release = deployment / '.bootstrap/releases/v1'
+        release.mkdir(parents=True)
+        link.rename(release / 'panel.sh')
+        (deployment / '.bootstrap/current').symlink_to('releases/v1', target_is_directory=True)
+        link.symlink_to('.bootstrap/current/panel.sh')
+        self.inspect(deployment)
+        for target, message in [('missing', '目標不存在'), ('panel.sh', '循環'),
+                                ('../outside-panel.sh', '部署目錄外')]:
+            link.unlink()
+            (self.base / 'outside-panel.sh').write_text('fixture')
+            link.symlink_to(target)
+            self.inspect(deployment, 'inspect', expected=message)
+        link.unlink()
+        link.symlink_to('.bootstrap/current/panel.sh')
+        alias = self.base / 'alias'
+        alias.symlink_to(deployment, target_is_directory=True)
+        self.inspect(alias, 'inspect', expected='根目錄不可為符號連結')
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX 連結及權限測試需要 Linux')
+    def test_intermediate_links_cannot_hide_writable_or_foreign_owned_directories(self):
+        deployment = self.deployment_fixture()
+        (deployment / '.env').write_text('fixture')
+        release = deployment / '.bootstrap/releases/v1'
+        release.mkdir(parents=True)
+        (deployment / 'panel.sh').rename(release / 'panel.sh')
+        hop = deployment / 'hop'
+        hop.mkdir()
+        (hop / 'next').symlink_to('../.bootstrap/releases/v1', target_is_directory=True)
+        (deployment / 'panel.sh').symlink_to('hop/next/panel.sh')
+        self.inspect(deployment)
+        hop.chmod(0o777)
+        self.inspect(deployment, expected='群組或其他人可寫')
+        hop.chmod(0o700)
+        if os.geteuid() == 0:
+            try:
+                os.chown(hop, 65534, -1)
+                self.inspect(deployment, expected='所有者 UID')
+            finally:
+                os.chown(hop, 0, -1)
+
+    def test_legacy_deployment_structures_remain_inspectable(self):
+        deployment = self.deployment_fixture()
+        (deployment / 'panel.sh').write_text('command_name="${1:-help}"\ncompose=(docker compose --project-name incudal-panel)\n')
+        (deployment / 'docker-compose.yml').unlink()
+        self.inspect(deployment, 'inspect')
+        (deployment / 'docker-compose.yml').write_text('include:\n  - compose.yaml\n')
+        self.inspect(deployment, 'inspect')
+        (deployment / 'compose.release.yaml').write_text('services:\n  api:\n    image: fixture\n')
+        self.inspect(deployment, 'inspect')
 
     def test_entry_dispatch_preserves_host_handoff_status(self):
         terminal = self.base / 'terminal'

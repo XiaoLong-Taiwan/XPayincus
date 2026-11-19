@@ -5,7 +5,12 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.22**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.23**; GitHub Releases record publication status.
+
+## v1.0.23 Compose Deployment Diagnostics
+
+- Add a read-only deployment check that reports missing or empty `.env` files, invalid links and unsafe permissions without running the local panel script or contacting Docker.
+- Require a nonempty `.env` for recovery actions that change state, document the Dashboard and Agent quick-install commands, and cover the new behavior with regression tests.
 
 ## v1.0.22 Hosting Applications, SSH Registration and Migration CI (Release Target)
 

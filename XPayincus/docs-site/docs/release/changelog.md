@@ -5,7 +5,12 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.22**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.23**；正式發布狀態以 GitHub Release 為準。
+
+## v1.0.23 Compose 部署診斷
+
+- 新增唯讀部署檢查，辨識缺少或為空的 `.env`、無效連結與不安全的路徑權限，不執行本機面板腳本或呼叫 Docker。
+- 維持恢復及其他需完整設定的操作守衛，補齊 Dashboard／Agent 快速安裝指令與回歸測試。
 
 ## v1.0.22 Hosting application、SSH 註冊與 migration CI（發行目標）
 
