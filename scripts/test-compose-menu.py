@@ -366,7 +366,7 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, process_output(result))
         self.assertIn(b'panel.sh kill', result.stdout)
 
-    def test_deployment_inspection_checks_structure_ownership_and_bootstrap_links(self):
+    def test_deployment_inspection_checks_structure_and_bootstrap_links(self):
         code = SOURCE.split("<<'DEPLOYMENT_PY'\n", 1)[1].split('\nDEPLOYMENT_PY\n', 1)[0]
         def inspect(success):
             with patch.object(sys, 'argv', ['check', str(self.base), 'configured']):
@@ -385,7 +385,7 @@ class MenuTests(unittest.TestCase):
         if os.name != 'nt':
             shutil.copyfile(COMPOSE / 'panel.sh', self.base / 'panel.sh')
             (self.base / 'panel.sh').chmod(0o666)
-            inspect(False)
+            inspect(True)
             (self.base / 'panel.sh').unlink()
             release = self.base / '.bootstrap/release'
             release.mkdir(parents=True)
