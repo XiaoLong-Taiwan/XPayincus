@@ -5,7 +5,12 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.23**；正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.24**。正式發布狀態以 GitHub Release 為準。
+
+## v1.0.24 Compose 部署相容性
+
+- 既有部署可使用不同所有者 UID 或可寫的上層目錄，仍須通過檔案結構與符號連結檢查。
+- `[10]` 維持唯讀。執行部署操作前，請確認路徑及入口來源可信。
 
 ## v1.0.23 Compose 部署診斷
 

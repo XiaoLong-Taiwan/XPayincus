@@ -284,16 +284,6 @@ try:
         elif not info.st_size:
             reject(path, '檔案為空')
         files[name] = resolved
-    if os.name != 'nt':
-        for path, info in paths.items():
-            if info.st_uid not in (0, os.geteuid()):
-                reject(path, f'所有者 UID {info.st_uid} 不是 root 或目前執行帳號（UID {os.geteuid()}）')
-            if stat.S_ISLNK(info.st_mode):
-                continue
-            if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-                if not (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX
-                        and path != resolved_root and resolved_root not in path.parents):
-                    reject(path, f'群組或其他人可寫（模式 {stat.S_IMODE(info.st_mode):04o}）')
     script = files['panel.sh'].read_text(encoding='utf-8')
     if 'incudal-panel' not in script or 'command_name=' not in script:
         reject(root / 'panel.sh', '不符合 XPayincus 面板入口結構')
@@ -303,7 +293,7 @@ try:
     if env_issue and mode == 'configured':
         reject(root / '.env', env_issue + '；可使用選單 [10] 唯讀檢查部署')
     if mode == 'inspect':
-        print('部署檔案通過結構與權限檢查（並非來源驗證）。')
+        print('部署檔案通過結構檢查（未檢查所有者或寫入權限）。')
         print(env_issue + '；未執行任何面板操作。' if env_issue else '找到非空的 .env；未檢查或顯示設定值。')
 except InvalidDeployment as error:
     print(f'部署檢查失敗：{error}', file=sys.stderr)
@@ -322,7 +312,7 @@ deployment_command() {
   if [[ "$command_name" == doctor || ( "$command_name" == recover && ( $# == 0 || "${1:-}" == --json ) ) ]]; then
     method=prepared
   fi
-  deployment_check "$directory" "$method" || die '目錄不是有效且權限安全的 Compose 部署；請提供您管理且信任的部署絕對路徑。'
+  deployment_check "$directory" "$method" || die '目錄不是有效的 Compose 部署；請提供您管理且信任的部署絕對路徑。'
   if [[ "$command_name" == force-recreate ]]; then
     exec bash "$directory/panel.sh" up pull --force-recreate
   fi

@@ -220,23 +220,23 @@ esac
         self.deployment.rename(relocated)
         self.deployment = relocated
         self.directory = SUPPORT.shell_path(relocated)
-        for directory, mode, accepted in [
-                (outer, 0o777, False), (outer, 0o775, False),
-                (outer, 0o1777, True), (inner, 0o1777, True),
-                (self.deployment, 0o1777, False)]:
+        for directory, mode in [
+                (outer, 0o777), (outer, 0o775),
+                (outer, 0o1777), (inner, 0o1777),
+                (self.deployment, 0o1777)]:
             with self.subTest(directory=directory, mode=oct(mode)):
                 original = directory.stat().st_mode & 0o7777
                 try:
                     directory.chmod(mode)
                     self.log.unlink(missing_ok=True)
                     result = self.run_entry('doctor', self.directory)
-                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
-                    self.assertEqual('panel:' in self.calls(), accepted)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('panel:doctor', self.calls().splitlines())
                 finally:
                     directory.chmod(original)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX symlinks and directory permissions require Linux')
-    def test_symlink_parent_target_chain_is_checked(self):
+    def test_symlink_parent_chain_accepts_writable_directories(self):
         self.deployment_fixture()
         target = self.base / 'target'
         target.mkdir()
@@ -247,11 +247,13 @@ esac
         self.directory = (alias / self.deployment.name).as_posix()
         target.chmod(0o777)
         result = self.run_entry('doctor', self.directory)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('panel:', self.calls())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('panel:doctor', self.calls().splitlines())
         target.chmod(0o700)
+        self.log.unlink(missing_ok=True)
         result = self.run_entry('doctor', self.directory)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('panel:doctor', self.calls().splitlines())
         lexical_parent = self.base / 'lexical parent'
         lexical_parent.mkdir()
         (lexical_parent / 'alias').symlink_to(target, target_is_directory=True)
@@ -259,25 +261,25 @@ esac
         lexical_parent.chmod(0o777)
         self.log.unlink(missing_ok=True)
         result = self.run_entry('doctor', self.directory)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('panel:', self.calls())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('panel:doctor', self.calls().splitlines())
 
     @unittest.skipIf(os.name == 'nt' or not hasattr(os, 'geteuid'), 'POSIX ownership requires Linux')
-    def test_sticky_parent_with_untrusted_owner_is_rejected(self):
+    def test_sticky_parent_with_different_owner_is_accepted(self):
         if os.geteuid() != 0:
             self.skipTest('Changing fixture ownership requires root')
         self.deployment_fixture()
-        parent = self.base / 'untrusted'
+        parent = self.base / 'shared'
         parent.mkdir()
         relocated = parent / self.deployment.name
         self.deployment.rename(relocated)
         self.directory = SUPPORT.shell_path(relocated)
         parent.chmod(0o1777)
         try:
-            os.chown(parent, 65534, -1)
+            os.chown(parent, 65532, -1)
             result = self.run_entry('doctor', self.directory)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertNotIn('panel:', self.calls())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('panel:doctor', self.calls().splitlines())
         finally:
             os.chown(parent, 0, -1)
             parent.chmod(0o700)

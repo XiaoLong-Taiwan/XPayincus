@@ -63,4 +63,4 @@ Run from the unified repository root:
 bash scripts/build-agent-release.sh
 ```
 
-The product version comes from root `VERSION`, currently targeting `v1.0.23`; Go sources live in `XPayincus-Agent/`. The root release workflow creates a GitHub Release for matching tags after CI, version checks, and image publication succeed; manual runs publish images and Actions artifacts only. GitHub Releases record publication status. No tests, builds, or host upgrades were performed during this documentation update.
+The product version comes from root `VERSION`, currently targeting `v1.0.24`; Go sources live in `XPayincus-Agent/`. The root release workflow creates a GitHub Release for matching tags after CI, version checks, and image publication succeed; manual runs publish images and Actions artifacts only. GitHub Releases record publication status. No tests, builds, or host upgrades were performed during this documentation update.

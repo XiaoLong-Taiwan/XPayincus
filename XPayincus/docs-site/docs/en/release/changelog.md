@@ -5,7 +5,12 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.23**; GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.24**. GitHub Releases record publication status.
+
+## v1.0.24 Compose Deployment Compatibility
+
+- Accept existing deployments under directories with different owner UIDs or write modes while retaining structural and symlink checks.
+- Option `[10]` remains read-only. Verify that the deployment path and its entry point are trusted before running deployment operations.
 
 ## v1.0.23 Compose Deployment Diagnostics
 

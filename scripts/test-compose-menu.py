@@ -169,7 +169,7 @@ class MenuTests(unittest.TestCase):
                 (deployment / name).unlink()
 
     @unittest.skipIf(os.name == 'nt', 'POSIX 權限與連結測試需要 Linux')
-    def test_inspection_preserves_permissions_sticky_and_link_boundaries(self):
+    def test_inspection_accepts_permissions_and_preserves_link_boundaries(self):
         deployment = self.deployment_fixture()
         (deployment / '.env').write_text('fixture')
         for path in [deployment, deployment / 'panel.sh', deployment / '.env', self.base]:
@@ -177,10 +177,11 @@ class MenuTests(unittest.TestCase):
             try:
                 for mode in (0o775, 0o777):
                     path.chmod(mode)
-                    self.inspect(deployment, 'inspect', expected='群組或其他人可寫')
+                    self.inspect(deployment, 'inspect')
+                    self.inspect(deployment)
                 if path.is_dir():
                     path.chmod(0o1777)
-                    self.inspect(deployment, 'inspect', expected='群組或其他人可寫' if path == deployment else None)
+                    self.inspect(deployment, 'inspect')
             finally:
                 path.chmod(original)
         link = deployment / 'panel.sh'
@@ -203,7 +204,7 @@ class MenuTests(unittest.TestCase):
         self.inspect(alias, 'inspect', expected='根目錄不可為符號連結')
 
     @unittest.skipIf(os.name == 'nt', 'POSIX 連結及權限測試需要 Linux')
-    def test_intermediate_links_cannot_hide_writable_or_foreign_owned_directories(self):
+    def test_intermediate_links_accept_permissions_and_foreign_owned_directories(self):
         deployment = self.deployment_fixture()
         (deployment / '.env').write_text('fixture')
         release = deployment / '.bootstrap/releases/v1'
@@ -215,12 +216,14 @@ class MenuTests(unittest.TestCase):
         (deployment / 'panel.sh').symlink_to('hop/next/panel.sh')
         self.inspect(deployment)
         hop.chmod(0o777)
-        self.inspect(deployment, expected='群組或其他人可寫')
+        self.inspect(deployment, 'inspect')
+        self.inspect(deployment)
         hop.chmod(0o700)
         if os.geteuid() == 0:
             try:
-                os.chown(hop, 65534, -1)
-                self.inspect(deployment, expected='所有者 UID')
+                os.chown(hop, 65532, -1)
+                self.inspect(deployment, 'inspect')
+                self.inspect(deployment)
             finally:
                 os.chown(hop, 0, -1)
 
