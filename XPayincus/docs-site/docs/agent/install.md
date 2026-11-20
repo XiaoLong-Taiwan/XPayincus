@@ -2,7 +2,7 @@
 
 Agent 在 Incus 宿主機執行，回報資源、實例狀態、流量及監控歷史，並主動建立出站 WSS，讓面板透過固定本機 API 管理 Incus／Caddy。Agent、Incus、ZFS、Caddy 與 RFW 保留宿主部署，面板 Compose 不包含這些服務。
 
-本文依目前來源樹整理。根 `VERSION` 的 `v1.0.24` 是發行目標；正式可用版本以 GitHub Release 與實際部署版本為準。`main` 上的名稱 onboarding、安裝腳本或新隧道能力可能領先穩定版，不代表已發布，使用前須確認 Server／Agent／安裝器相容。
+本文依目前來源樹整理。根 `VERSION` 的 `v1.0.25` 是發行目標；正式可用版本以 GitHub Release 與實際部署版本為準。`main` 上的名稱 onboarding、安裝腳本或新隧道能力可能領先穩定版，不代表已發布，使用前須確認 Server／Agent／安裝器相容。
 
 ## 元件分工與宿主需求
 
@@ -104,7 +104,7 @@ TOKEN 交換端點 `/api/agent/install-config/:token?bootstrap=1` 目前提供�
 bash /root/agent-menu.sh --action status
 bash /root/agent-menu.sh --action logs
 bash /root/agent-menu.sh --action update --version latest
-bash /root/agent-menu.sh --action reinstall --version v1.0.24
+bash /root/agent-menu.sh --action reinstall --version v1.0.25
 bash /root/agent-menu.sh --action local --binary /root/build/incudal-agent \
   --sha256 '<可信的64位SHA256>'
 bash /root/agent-install.sh --reinstall --binary /root/build/incudal-agent \

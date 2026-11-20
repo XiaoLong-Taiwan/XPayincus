@@ -13,6 +13,59 @@ BASH = os.environ.get('AGENT_TEST_BASH', 'bash')
 
 
 class CaddyInstallTests(unittest.TestCase):
+    def test_initial_apt_failure_does_not_run_service_rollback(self):
+        stage = SOURCE[SOURCE.index('OLD_SERVICE_ACTIVE=false'):SOURCE.index('install -d -o root -g caddy')]
+        harness = f'''set -euo pipefail
+CADDYFILE=/dev/null
+systemctl() {{ printf 'systemctl:%s\\n' "$*"; return 1; }}
+apt-get() {{ printf 'apt:%s\\n' "$*"; return 1; }}
+log() {{ :; }}
+error() {{ printf '%s\\n' "$*"; }}
+{stage}
+'''
+        result = subprocess.run([BASH, '-s'], input=harness, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('APT update failed before Caddy package or service changes', result.stdout)
+        self.assertEqual([line for line in result.stdout.splitlines() if line.startswith(('systemctl:', 'apt:'))],
+                         ['systemctl:is-active --quiet caddy', 'systemctl:is-enabled --quiet caddy', 'apt:update --error-on=any -qq'])
+
+    @unittest.skipUnless(os.name == 'posix', 'requires POSIX permissions')
+    def test_zabbly_keyring_and_source_are_readable_with_private_umask(self):
+        for download_fails in (False, True):
+            with self.subTest(download_fails=download_fails), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                (base / 'sources.list.d').mkdir()
+                function = HOST[HOST.index('install_incus() {'):HOST.index('install_caddy() {')]
+                function = function.replace('/etc/apt/', f'{directory}/')
+                harness = f'''set -euo pipefail
+umask 077
+OS_CODENAME=trixie ARCH=amd64
+incus() {{ return 1; }}
+step() {{ :; }}
+log() {{ :; }}
+curl() {{ printf 'public key'; return {int(download_fails)}; }}
+gpg() {{ cat > "${{@: -1}}"; }}
+apt-get() {{ printf '%s\\n' "$*"; }}
+{function}
+install_incus || exit 7
+'''
+                result = subprocess.run([BASH, '-s'], input=harness, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 7 if download_fails else 0, result.stderr)
+                keyrings = base / 'keyrings'
+                key = keyrings / 'zabbly.gpg'
+                source = base / 'sources.list.d' / 'zabbly-incus-stable.sources'
+                self.assertFalse(list(keyrings.glob('.zabbly.*')))
+                if download_fails:
+                    self.assertFalse(key.exists())
+                    self.assertFalse(source.exists())
+                    self.assertEqual(result.stdout, '')
+                else:
+                    self.assertEqual(keyrings.stat().st_mode & 0o777, 0o755)
+                    self.assertEqual(key.stat().st_mode & 0o777, 0o644)
+                    self.assertEqual(source.stat().st_mode & 0o777, 0o644)
+                    self.assertIn(f'Signed-By: {key}', source.read_text())
+                    self.assertIn('update --error-on=any -qq', result.stdout)
+
     def test_listener_detection_rejects_wildcard_ipv4_and_ipv6(self):
         probe = next(line.strip() for line in SOURCE.splitlines() if line.strip().startswith('PUBLIC_ADMIN_LISTENER='))
         for address in ('127.0.0.1:2019', '0.0.0.0:2019', '[::]:2019', '[::1]:2019', '*:2019', '1127.0.0.1:2019'):

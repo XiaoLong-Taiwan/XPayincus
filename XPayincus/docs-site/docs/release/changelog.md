@@ -5,7 +5,13 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.24**。正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.25**。正式發布狀態以 GitHub Release 為準。
+
+## v1.0.25 Caddy 與 Incus 宿主安裝修正
+
+- Caddy 安裝在初始 APT 更新失敗時停止，不進入服務回復流程；新增的 Caddy key 與 APT source 設為可讀權限。
+- Incus 安裝以私有暫存及原子替換部署 Zabbly key，拒絕 symlink keyrings 目錄，並在 source 寫入、APT 更新或套件安裝失敗時停止。
+- 詳見 `docs-site/release-notes/v1.0.25.md`。
 
 ## v1.0.24 Compose 部署相容性
 

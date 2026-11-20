@@ -5,7 +5,13 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.24**. GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.25**. GitHub Releases record publication status.
+
+## v1.0.25 Caddy and Incus Host Installation Fixes
+
+- Stop Caddy installation when the initial APT update fails, before entering service rollback handling; set readable permissions on the added Caddy key and APT source.
+- Install the Zabbly key for Incus through a private temporary directory and atomic replacement, reject a symlinked keyrings directory, and stop on source-write, APT-update, or package-install failures.
+- See `docs-site/release-notes/v1.0.25.md` for details.
 
 ## v1.0.24 Compose Deployment Compatibility
 

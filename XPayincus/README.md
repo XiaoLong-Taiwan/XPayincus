@@ -10,9 +10,9 @@
 
 安裝流程會要求部署目錄、使用者／管理端 HTTPS origin 及代理模式。操作既有部署前，先確認路徑是自己管理且信任的部署。完整安裝與最低需求見 [根 README](../README.md#最低需求與容量規劃) 及 [Compose 說明](deploy/compose/README.md)。
 
-面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前來源樹目標為 `v1.0.24`（發布狀態以 GitHub Release 為準）。
+面向 Incus 的 NAT VPS 銷售、資源交付、支付帳務、Public API 與管理平台。此目錄是統一倉庫的 Server 端 pnpm workspace；整體版本以 [根 VERSION](../VERSION) 為準，目前來源樹目標為 `v1.0.25`（發布狀態以 GitHub Release 為準）。
 
-本輪版本摘要：Dashboard／API、Agent、Compose 映像與 OCI labels 統一升至 `v1.0.24`；最低 updater 維持 v1.0.3。GitHub Actions、已發布資產與目標環境驗收是不同證據，請分別核對對應 commit、Release 與部署紀錄。
+本輪版本摘要：Dashboard／API、Agent、Compose 映像與 OCI labels 統一升至 `v1.0.25`；最低 updater 維持 v1.0.3。GitHub Actions、已發布資產與目標環境驗收是不同證據，請分別核對對應 commit、Release 與部署紀錄。
 
 ## 目錄與能力
 

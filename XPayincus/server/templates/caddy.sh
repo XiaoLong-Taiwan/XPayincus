@@ -40,6 +40,8 @@ systemctl is-active --quiet caddy 2>/dev/null && OLD_SERVICE_ACTIVE=true
 systemctl is-enabled --quiet caddy 2>/dev/null && OLD_SERVICE_ENABLED=true
 CERT_TMP=""
 KEY_TMP=""
+CADDY_KEY_NEW=""
+CADDY_SOURCE_NEW=""
 CADDYFILE_NEW=""
 OVERRIDE_NEW=""
 CADDY_INSTALL_COMPLETE=false
@@ -86,7 +88,7 @@ restore_caddy_install() {
 
 cleanup_caddy_install() {
     local exit_status=$?
-    rm -f "${CERT_TMP:-}" "${KEY_TMP:-}" "${CADDYFILE_NEW:-}" "${OVERRIDE_NEW:-}" "${AUTOSAVE_NEW:-}" 2>/dev/null || true
+    rm -f "${CERT_TMP:-}" "${KEY_TMP:-}" "${CADDY_KEY_NEW:-}" "${CADDY_SOURCE_NEW:-}" "${CADDYFILE_NEW:-}" "${OVERRIDE_NEW:-}" "${AUTOSAVE_NEW:-}" 2>/dev/null || true
     if [[ "$exit_status" -ne 0 && "$CADDY_INSTALL_COMPLETE" != "true" && "$ROLLBACK_HANDLED" != "true" ]]; then
         set +e
         if ! restore_caddy_install; then
@@ -94,21 +96,33 @@ cleanup_caddy_install() {
         fi
     fi
 }
-trap cleanup_caddy_install EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
 log "Installing Caddy Web Server & Dependencies..."
 
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update -qq
+if ! apt-get update --error-on=any -qq; then
+    error "APT update failed before Caddy package or service changes; fix the repository error above and retry"
+    exit 1
+fi
+
+trap cleanup_caddy_install EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 apt-get install -y -qq curl jq iproute2 debian-keyring debian-archive-keyring apt-transport-https >/dev/null
 
 if ! command -v caddy &> /dev/null; then
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-    apt-get update -qq
+    CADDY_KEY_NEW=$(mktemp /usr/share/keyrings/.caddy-stable-archive-keyring.XXXXXX)
+    CADDY_SOURCE_NEW=$(mktemp /etc/apt/sources.list.d/.caddy-stable.XXXXXX)
+    (umask 022; curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --yes --dearmor -o "$CADDY_KEY_NEW")
+    chmod 0644 "$CADDY_KEY_NEW"
+    (umask 022; curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > "$CADDY_SOURCE_NEW")
+    chmod 0644 "$CADDY_SOURCE_NEW"
+    mv -fT -- "$CADDY_KEY_NEW" /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    CADDY_KEY_NEW=""
+    mv -fT -- "$CADDY_SOURCE_NEW" /etc/apt/sources.list.d/caddy-stable.list
+    CADDY_SOURCE_NEW=""
+    apt-get update --error-on=any -qq
     apt-get install -y -qq caddy >/dev/null
     log "Caddy installed successfully"
 else

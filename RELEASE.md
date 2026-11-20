@@ -1,8 +1,14 @@
 # 統一發行
 
-根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.24`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
+根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.25`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
 
 GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent 內兩個宿主元件須納入實際來源，不能只有 gitlink 或 submodule。Git 工作區是否已提交、推送及遠端 CI 是否成功，需另以當次紀錄確認，不應把文件中的工作區描述當作即時狀態。來源碼上傳不等於建立 GitHub Release，也不代表已部署。
+
+## v1.0.25 發行目標
+
+- Caddy 安裝先確認初始 APT 更新成功，再安裝 Caddy 套件或設定服務回復陷阱，避免 repository 錯誤時改動服務狀態；新增 Caddy key 與 APT source 時明確設定可讀權限。
+- Incus 安裝拒絕 symlink APT keyrings 目錄，以私有暫存目錄下載及轉換 Zabbly key、設定權限後原子替換；source 寫入、APT 更新或套件安裝失敗均停止並回傳失敗。
+- 保留 v1.0.24 及更早歷史。詳見 [v1.0.25 發行說明](XPayincus/docs-site/release-notes/v1.0.25.md)。
 
 ## v1.0.24 發行目標
 
@@ -264,16 +270,16 @@ bash panel.sh status
 | Dashboard Compose 原始碼 | `xpayincus-dashboard-${VERSION}-compose.tar.gz` |
 | 最小 Compose 部署 bundle | `xpayincus-compose-${VERSION}.tar.gz`，根 VERSION 與固定部署檔 |
 | Compose bootstrap 入口 | `xpayincus-compose-${VERSION}.sh` |
-| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-v1.0.24-linux-{amd64,arm64}.tar.gz` |
-| Agent | `xpayincus-agent-v1.0.24-linux-{amd64,arm64}` 與單檔 `.gz` |
+| Server（含雙端面板與原生正式依賴） | `xpayincus-panel-${VERSION}-linux-{amd64,arm64}.tar.gz` |
+| Agent | `xpayincus-agent-${VERSION}-linux-{amd64,arm64}` 與單檔 `.gz` |
 | Agent 舊格式 manifest | `manifest.json`，保留 `files.linux-amd64/linux-arm64`、`name/sha256/size/gzip` |
-| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-v1.0.24-ota-manifest.json`，schemaVersion 1 |
-| RFW | `xpayincus-rfw-v1.0.24-linux-{amd64,arm64}` |
-| ZFS builder 原始碼 | `xpayincus-zfs-builder-v1.0.24-source.tar.gz`，不是核心模組 |
+| 面板 OTA manifest | `ota-manifest.json` 與 `xpayincus-panel-${VERSION}-ota-manifest.json`，schemaVersion 1 |
+| RFW | `xpayincus-rfw-${VERSION}-linux-{amd64,arm64}` |
+| ZFS builder 原始碼 | `xpayincus-zfs-builder-${VERSION}-source.tar.gz`，不是核心模組 |
 | 統一索引 | `release-manifest.json`，包含 ZFS source-only 狀態與執行需求 |
 | 雜湊 | 個別產物 `.sha256` 與 `SHA256SUMS`，後者涵蓋產物及三份新增 JSON manifest，不自我雜湊 |
 
-表中的 `v1.0.24` 對應目前根 VERSION；下載前須確認正式 Release 已存在，所有檔名與彙整 artifact 名稱均隨根 VERSION 更新。
+表中的 `${VERSION}` 取自根 `VERSION`；下載前須確認對應的正式 Release 已存在。
 
 manifest 產生前目錄必須恰有 13 個一般檔案：Dashboard 包、最小 Compose bundle、Compose bootstrap 腳本、ZFS source 包、兩個 panel tarball、兩個 Agent 二進位與兩個 `.gz`、兩個 RFW 二進位、Agent `manifest.json`。多餘檔案（含舊版、異名、既有 checksum／輸出 manifest）、缺件、目錄及符號連結均拒絕。收集器只接收 9 件建置產物，其餘四件由 assemble 封裝產生，不要求 incoming 預先提供最小 bundle。Agent manifest 的 `files` 必須恰為 `linux-amd64` 與 `linux-arm64`，每項名稱、壓縮檔 SHA256、大小與 `gzip: true` 均核對。完成後再次核對原始 13 件、13 份個別 checksum、三份新增 JSON 與 `SHA256SUMS`，共 30 件；`SHA256SUMS` 共 16 筆。統一索引保留 `compose.artifact` 指向完整 Dashboard 包，新增 `compose.bundle` 指向最小包，兩者皆列入 artifacts 的 URL／大小／SHA256；不將 Compose 包或 bootstrap 混入 OTA。
 

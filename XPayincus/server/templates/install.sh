@@ -1926,12 +1926,22 @@ install_incus() {
     fi
 
     # 导入 Zabbly GPG 密钥
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://pkgs.zabbly.com/key.asc \
-        | gpg --yes --dearmor -o /etc/apt/keyrings/zabbly.gpg
+    [[ ! -L /etc/apt/keyrings ]] || return 1
+    install -d -m 0755 /etc/apt/keyrings || return 1
+    (
+        key_work=$(mktemp -d /etc/apt/keyrings/.zabbly.XXXXXX) || exit 1
+        trap 'rm -rf -- "$key_work"' EXIT
+        curl -q -fsSL --proto '=https' --proto-redir '=https' https://pkgs.zabbly.com/key.asc \
+            | gpg --yes --dearmor -o "$key_work/zabbly.gpg" || exit 1
+        chmod 0644 "$key_work/zabbly.gpg" || exit 1
+        mv -fT -- "$key_work/zabbly.gpg" /etc/apt/keyrings/zabbly.gpg
+    ) || return 1
 
     # 添加 Zabbly APT 源（同时支持 Ubuntu 和 Debian）
-    cat > /etc/apt/sources.list.d/zabbly-incus-stable.sources <<SRC
+    (
+        source_new=$(mktemp /etc/apt/sources.list.d/.zabbly-incus-stable.XXXXXX) || exit 1
+        trap 'rm -f -- "$source_new"' EXIT
+        cat > "$source_new" <<SRC || exit 1
 Enabled: yes
 Types: deb
 URIs: https://pkgs.zabbly.com/incus/stable
@@ -1940,9 +1950,12 @@ Components: main
 Architectures: ${ARCH}
 Signed-By: /etc/apt/keyrings/zabbly.gpg
 SRC
+        chmod 0644 "$source_new" || exit 1
+        mv -fT -- "$source_new" /etc/apt/sources.list.d/zabbly-incus-stable.sources
+    ) || return 1
 
-    apt-get update -qq 2>/dev/null
-    apt-get install -y -qq incus >/dev/null
+    apt-get update --error-on=any -qq || return 1
+    apt-get install -y -qq incus >/dev/null || return 1
     log "Incus 安装完成"
 }
 
