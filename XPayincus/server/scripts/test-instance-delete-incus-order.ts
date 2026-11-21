@@ -21,8 +21,8 @@ function section(source: string, startPattern: string, endPattern: string): stri
 }
 
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
-const instancesSource = readFileSync(resolve(repoRoot, 'server/src/routes/instances.ts'), 'utf8')
-const hostsSource = readFileSync(resolve(repoRoot, 'server/src/routes/hosts.ts'), 'utf8')
+const instancesSource = readFileSync(resolve(repoRoot, 'server/src/routes/instances.ts'), 'utf8').replace(/\r\n/g, '\n')
+const hostsSource = readFileSync(resolve(repoRoot, 'server/src/routes/hosts.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 const configUpdateSection = section(
   instancesSource,
@@ -113,13 +113,14 @@ assert(
 )
 
 const batchClaim = indexOfOrThrow(batchDeleteSection, 'await claimHostBatchInstanceForDelete(instance.id, instance.status as InstanceStatus)', 'host batch claim')
-const batchRemoteCleanup = indexOfOrThrow(batchDeleteSection, '// ===== 1. 删除反代站点', 'host batch remote cleanup')
+const batchDeviceCleanup = indexOfOrThrow(batchDeleteSection, 'await incusInstanceOperations.removeDevice(', 'host batch device cleanup')
+const batchSnapshotCleanup = indexOfOrThrow(batchDeleteSection, 'await incusSnapshotOperations.deleteSnapshot(', 'host batch snapshot cleanup')
 const batchIncusDelete = indexOfOrThrow(batchDeleteSection, 'await deleteIncusInstanceForHostBatch(client, incusInstanceOperations, instance, fastify.log)', 'host batch strict Incus delete')
 const batchRefund = indexOfOrThrow(batchDeleteSection, '// ===== 6. 处理退款', 'host batch refund section')
 const batchDbCleanup = indexOfOrThrow(batchDeleteSection, '// ===== 7. 删除数据库附属记录', 'host batch DB cleanup section')
 const batchResourceRelease = indexOfOrThrow(batchDeleteSection, 'await db.rollbackResources({', 'host batch resource release')
 
-assert(batchClaim < batchRemoteCleanup, 'host batch delete must claim before remote cleanup')
+assert(batchClaim < batchDeviceCleanup && batchClaim < batchSnapshotCleanup, 'host batch delete must claim before remote cleanup')
 assert(batchIncusDelete < batchRefund, 'host batch delete must delete Incus instance before refund')
 assert(batchIncusDelete < batchDbCleanup, 'host batch delete must delete Incus instance before DB cleanup')
 assert(batchIncusDelete < batchResourceRelease, 'host batch delete must delete Incus instance before resource release')
