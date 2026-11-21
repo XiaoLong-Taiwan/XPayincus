@@ -31,7 +31,8 @@ const verifyError = ref('')
 
 const form = ref({
   name: '',
-  nameSuffix: ''
+  nameSuffix: '',
+  cpuAllowanceMax: 0
 })
 
 // 验证并连接宿主机
@@ -82,7 +83,8 @@ async function createHost() {
   saving.value = true
   try {
     const formData = {
-      name: fullName
+      name: fullName,
+      cpuAllowanceMax: form.value.cpuAllowanceMax
     }
 
     const response = await loadInstallDetails(() => api.hosts.create(formData))
@@ -165,6 +167,14 @@ function closeAndGoBack() {
                 <p class="text-xs text-amber-500">{{ t('common.noIncudalHint') }}</p>
               </div>
             </div>
+          </section>
+
+          <section class="nimbus-card space-y-3 rounded-xl border border-themed bg-themed-surface p-5 sm:p-6">
+            <div>
+              <label for="host-cpu-capacity" class="block text-sm font-medium text-themed">{{ t('admin.hosts.cpuAllowanceMax') }}</label>
+              <p class="mt-1 text-xs text-themed-muted">{{ t('resources.hosts.cpuCapacityHint') }}</p>
+            </div>
+            <input id="host-cpu-capacity" v-model.number="form.cpuAllowanceMax" type="number" min="0" step="1" class="input max-w-xs" />
           </section>
 
           <!-- 存储池提示 -->

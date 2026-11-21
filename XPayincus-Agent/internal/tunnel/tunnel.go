@@ -115,6 +115,9 @@ func Execute(ctx context.Context, f Frame, client *http.Client) Frame {
 		result.Error = "INVALID_REQUEST"
 		return result
 	}
+	if f.Target == "caddy" {
+		req.Host = CaddyAddress
+	}
 	for k, v := range f.Headers {
 		name := strings.ToLower(k)
 		if len(v) > 4096 || strings.ContainsAny(v, "\r\n") || (name != "content-type" && name != "x-incus-name" && name != "x-incus-pool") {

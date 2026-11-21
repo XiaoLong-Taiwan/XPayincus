@@ -5770,6 +5770,7 @@ export default {
             calibrateAllNoChange: 'Synced {total} hosts, no differences',
             nameHint: 'Node name is prefixed with PEER + your user ID, followed by custom suffix',
             nameSuffixRequired: 'Please enter the node name suffix',
+            cpuCapacityHint: 'Set the sellable CPU time-slice quota for this host. 100 equals approximately one CPU core; leave 0 to detect the host capacity after the agent connects.',
             // Admin only: Host scope toggle
             mine: 'My Hosts',
             hosted: 'Hosted',

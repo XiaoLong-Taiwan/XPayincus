@@ -913,37 +913,8 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       })
       
       const isPaid = plans.length > 0
-      const availablePlans = plans.filter(plan => !plan.isSoldOut)
       const hostIds = pkg.packageHosts.map(ph => ph.hostId)
-      
-      // 检查是否售罄（所有绑定的宿主机资源不足）
-      let soldOut = isPaid && availablePlans.length === 0
-      if (hostIds.length > 0) {
-        const hosts = await prisma.host.findMany({
-          where: { id: { in: hostIds }, status: 'online' },
-          select: { id: true, cpuAllowanceMax: true, memoryMax: true, cpuUsed: true, memoryUsed: true }
-        })
-        
-        // 如果没有在线的宿主机，则售罄
-        if (hosts.length === 0) {
-          soldOut = true
-        } else if (!soldOut) {
-          // 检查是否所有宿主机资源都不足
-          const minCpu = isPaid ? Math.min(...availablePlans.map(plan => plan.cpu)) : 15
-          const minMemory = isPaid ? Math.min(...availablePlans.map(plan => plan.memory)) : 128
-          
-          const hasAvailable = hosts.some(h => {
-            const cpuAvailable = (h.cpuAllowanceMax || 0) - (h.cpuUsed || 0) >= minCpu
-            const memoryAvailable = (h.memoryMax || 0) - (h.memoryUsed || 0) >= minMemory
-            return cpuAvailable && memoryAvailable
-          })
-          
-          soldOut = !hasAvailable
-        }
-      } else {
-        // 没有绑定宿主机，视为售罄
-        soldOut = true
-      }
+      const soldOut = (await db.checkPackagesSoldOut([pkg.id])).get(pkg.id) ?? true
       
       // 判断是否为托管市场套餐
       const sourceType = pkg.user.role === 'admin' ? 'official' : 'market'

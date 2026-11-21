@@ -6383,6 +6383,7 @@ const zhTW = {
             calibrateAllNoChange: '已對齊 {total} 個節點，無差異',
             nameHint: '節點名稱以 PEER + 您的用戶ID 作為前綴，後面可自訂',
             nameSuffixRequired: '請輸入節點名稱後綴',
+            cpuCapacityHint: '設定此節點可售出的 CPU 時間片配額。100 約等於 1 Core；填寫 0 會在 Agent 連線後自動偵測節點容量。',
             // 管理員專用：節點切換器
             mine: '我的節點',
             hosted: '託管節點',

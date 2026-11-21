@@ -476,7 +476,7 @@ const hostsInsufficient = computed<boolean>(() => {
          availableHosts.value.length === 0
 })
 
-const createPageTextPrefix = computed(() => configStore.freeSiteMode ? 'instance.createPage.fun' : 'instance.selector')
+const createPageTextPrefix = computed(() => configStore.freeSiteMode ? 'instance.createPage.fun' : 'instance.createPage')
 const packageCountLabelKey = computed(() => `${createPageTextPrefix.value}.packageCount`)
 
 function getCreatePageText(key: string): string {
@@ -1325,7 +1325,7 @@ async function handleSubmit(): Promise<void> {
             @select="selectPackage"
             @show-owner-info="(packageId) => loadHostOwnerInfo(packageId)"
           />
-          <div ref="rightPanelScrollRef" class="nimbus-pane space-y-4">
+          <div ref="rightPanelScrollRef" class="nimbus-pane min-h-0 space-y-4 overflow-y-auto">
             <section class="create-step-heading">
               <span class="create-step-number">{{ regions.length > 0 ? 3 : 2 }}</span>
               <div><h2>{{ getCreatePageText('configurationTitle') }}</h2><p>{{ getCreatePageText('configurationHint') }}</p></div>

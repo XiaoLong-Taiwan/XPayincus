@@ -42,6 +42,15 @@ class PanelTrustDiagnosticsTests(unittest.TestCase):
         self.assertIn('HTTP 502', self.run_failure(error))
         self.assertEqual(body.tell(), 0)
 
+    def test_forbidden_suggests_host_verification_without_exposing_response(self):
+        body = io.BytesIO(SENSITIVE.encode())
+        error = urllib.error.HTTPError('https://panel.example.org', 403, SENSITIVE, {'X-Private': SENSITIVE}, body)
+        diagnostic = self.run_failure(error)
+        self.assertIn('HTTP 403', diagnostic)
+        self.assertIn('连接验证', diagnostic)
+        self.assertIn('反向代理', diagnostic)
+        self.assertEqual(body.tell(), 0)
+
     def test_network_and_unexpected_errors_are_private(self):
         for error in [urllib.error.URLError(SENSITIVE), RuntimeError(SENSITIVE)]:
             with self.subTest(error=type(error).__name__):

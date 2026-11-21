@@ -22,6 +22,8 @@ function section(source: string, startPattern: string, endPattern: string): stri
 const quotaSource = readRepoFile('server/src/db/quota-operations.ts')
 const resourcePoolSource = readRepoFile('server/src/db/resource-pool.ts')
 const hostsSource = readRepoFile('server/src/db/hosts.ts')
+const hostsRouteSource = readRepoFile('server/src/routes/hosts.ts')
+const apiTypesSource = readRepoFile('client/src/types/api.ts')
 
 const reserveSection = section(
   quotaSource,
@@ -119,6 +121,38 @@ assert.ok(
     !rollbackSection.includes('Math.max(0, host.natPortsUsedCount - portCount)') &&
     !rollbackSection.includes('where: { id: hostId },\n        data:'),
   'host resource rollback must not use stale read-modify-write updates'
+)
+
+const createHostRequestSection = section(
+  apiTypesSource,
+  'export interface CreateHostRequest {',
+  'export interface UpdateHostRequest {'
+)
+const updateHostRouteSection = section(
+  hostsRouteSource,
+  "fastify.patch<{\n    Params: { id: string }",
+  "fastify.delete<{\n    Params: { id: string }"
+)
+const recalculateResourcesSection = section(
+  hostsRouteSource,
+  "fastify.post<{\n    Params: { id: string }\n  }>('/:id/recalculate-resources'",
+  "// ===================="
+)
+
+assert.ok(
+  createHostRequestSection.includes('cpuAllowanceMax?: number'),
+  'host creation request must expose the custom CPU allowance quota'
+)
+assert.ok(
+  updateHostRouteSection.includes('cpuAllowanceMax: { type: \'integer\', minimum: 0 }') &&
+    updateHostRouteSection.includes('updates.cpuAllowanceMax < cpuUsedEffective') &&
+    updateHostRouteSection.includes('Math.max(usedResources.cpuUsed, host.cpu_used || 0)'),
+  'host CPU quota updates must reject negative values and quotas below effective reserved usage'
+)
+assert.ok(
+  recalculateResourcesSection.includes('cpuAllowanceMax: before.cpuAllowanceMax') &&
+    !recalculateResourcesSection.includes('cpuAllowanceMax: usedResources.cpuUsed'),
+  'resource recalculation must preserve the configured CPU allowance quota'
 )
 
 console.log('host resource atomic guard checks passed')

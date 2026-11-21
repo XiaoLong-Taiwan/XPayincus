@@ -49,6 +49,7 @@ const adminImagesViewSource = readRepoFile('client/src/views/admin/ImagesView.vu
 const extensionsViewSource = readRepoFile('client/src/views/ExtensionsView.vue')
 const instancesViewSource = readRepoFile('client/src/views/InstancesView.vue')
 const instanceCreateViewSource = readRepoFile('client/src/views/InstanceCreateView.vue')
+const publicPackagesRouteSource = readRepoFile('server/src/routes/packages.ts')
 const instanceDetailViewSource = readRepoFile('client/src/views/InstanceDetailView.vue')
 const trafficStatsSource = readRepoFile('client/src/components/instance/TrafficStats.vue')
 const packageFormViewSource = readRepoFile('client/src/views/resources/PackageFormView.vue')
@@ -683,6 +684,17 @@ assert.ok(
     sideNavAdminItemsSource.includes("path: '/admin/profile'") &&
     sideNavAdminItemsSource.includes("path: '/admin/resources/hosts'"),
   'shared SideNav menu tables must be build-time aliased so customer bundles do not keep admin navigation entries'
+)
+assert.ok(
+  sideNavSource.includes("item.icon === 'clipboard'") &&
+    instanceCreateViewSource.includes("'instance.createPage'") &&
+    instanceCreateViewSource.includes('min-h-0 space-y-4 overflow-y-auto') &&
+    !instanceCreateViewSource.includes("'instance.selector'"),
+  'hosting application navigation and instance creation layout must render the configured icon, translated headings, and a desktop scroll container'
+)
+assert.ok(
+  publicPackagesRouteSource.includes('db.checkPackagesSoldOut([pkg.id])'),
+  'public package listings must share the complete package sold-out capacity check'
 )
 assert.ok(
   viteConfigSource.includes("name: 'xpayincus-admin-locale-prune'") &&

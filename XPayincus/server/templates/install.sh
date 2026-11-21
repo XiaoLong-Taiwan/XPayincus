@@ -2256,6 +2256,8 @@ try:
     with open(target, 'wb') as output:
         output.write(certificate)
 except urllib.error.HTTPError as error:
+    if error.code == 403:
+        bail('面板拒绝请求 HTTP 403；若节点仍待验证，请先由节点所有者或管理员在面板执行连接验证；若已验证，请检查面板 API 与反向代理的请求日志')
     bail('面板拒绝请求 HTTP %d' % error.code)
 except urllib.error.URLError:
     bail('无法连接面板 HTTPS，请检查网络、DNS 与 TLS 证书')

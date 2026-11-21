@@ -103,6 +103,35 @@ func TestExecuteLimitsRedirectAndCancellation(t *testing.T) {
 	}
 }
 
+func TestExecuteUsesTargetRequestHost(t *testing.T) {
+	var incusHost, caddyHost string
+	client := &http.Client{Transport: streamRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/1.0":
+			incusHost = r.Host
+		case "/config/":
+			caddyHost = r.Host
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+	for _, request := range []Frame{
+		{Target: "incus", Method: "GET", Path: "/1.0", Timeout: 1000},
+		{Target: "caddy", Method: "GET", Path: "/config/", Timeout: 1000},
+	} {
+		if result := Execute(context.Background(), request, client); result.Error != "" {
+			t.Fatalf("request failed: %+v", result)
+		}
+	}
+	if incusHost != "localhost" {
+		t.Fatalf("Incus Host = %q, want localhost", incusHost)
+	}
+	if caddyHost != CaddyAddress {
+		t.Fatalf("Caddy Host = %q, want %q", caddyHost, CaddyAddress)
+	}
+}
+
 type rewriteTransport struct {
 	base   http.RoundTripper
 	origin string

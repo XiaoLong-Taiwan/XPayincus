@@ -94,9 +94,9 @@ onMounted(loadApplications)
 .page-heading, .item-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .eyebrow { margin: 0 0 6px; color: #64748b; font-size: 13px; }
 h1 { margin: 0 0 24px; font-size: 24px; }
-select { min-width: 120px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+select { min-width: 120px; padding: 8px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; background: var(--bg-primary, #fff); color: var(--text-primary, #171717); }
 .application-list { display: grid; gap: 12px; }
-.application-item { padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background: var(--color-bg-secondary, #fff); }
+.application-item { padding: 20px; border: 1px solid var(--color-border, #e2e8f0); border-radius: 8px; background: var(--bg-primary, #fff); }
 .item-heading span, .item-heading small { display: block; margin-top: 5px; color: #64748b; font-size: 13px; }
 .reason { margin: 18px 0; white-space: pre-wrap; line-height: 1.6; }
 .review-reason { color: #92400e; }

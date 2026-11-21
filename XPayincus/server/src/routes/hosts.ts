@@ -984,7 +984,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           ipv6Subnet: { type: 'string' },
           ipv6Gateway: { type: 'string' },
           ipv6ParentInterface: { type: 'string' },
-          cpuAllowanceMax: { type: 'integer' },
+          cpuAllowanceMax: { type: 'integer', minimum: 0 },
           memoryMax: { type: 'integer' },
           instanceType: { type: 'string', enum: ['container', 'vm', 'both'] }
         }
@@ -2153,7 +2153,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           certPath: { type: 'string' },
           keyPath: { type: 'string' },
           natConfig: { type: 'object' },
-          cpuAllowanceMax: { type: 'integer' },
+          cpuAllowanceMax: { type: 'integer', minimum: 0 },
           memoryMax: { type: 'integer' },
           instanceType: { type: 'string', enum: ['container', 'vm', 'both'] },
           ipv6ParentInterface: { type: 'string' },
@@ -2252,8 +2252,9 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       }
     }
 
-    // 验证最小值限制 - 由于 cpu_total 字段已删除，不再检查 CPU 最小值限制
-    // 用户可以自由设置 CPU 配额上限
+    if (updates.cpuAllowanceMax !== undefined && updates.cpuAllowanceMax < 0) {
+      return reply.code(400).send(apiError(ErrorCode.HOST_INVALID_CPU_MAX))
+    }
 
     if (updates.memoryMax !== undefined) {
       const minMemory = 256
@@ -2266,16 +2267,18 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     // 检查新配置是否低于实例已使用的资源
     const usedResources = await db.calculateHostResourcesFromInstances(hostId)
+    const cpuUsedEffective = Math.max(usedResources.cpuUsed, host.cpu_used || 0)
+    const memoryUsedEffective = Math.max(usedResources.memoryUsed, host.memory_used || 0)
 
-    if (updates.cpuAllowanceMax !== undefined && updates.cpuAllowanceMax > 0) {
-      if (updates.cpuAllowanceMax < usedResources.cpuUsed) {
-        return reply.code(400).send(apiError(ErrorCode.HOST_CPU_BELOW_USED, `当前已使用: ${usedResources.cpuUsed}%`))
+    if (updates.cpuAllowanceMax !== undefined) {
+      if (updates.cpuAllowanceMax < cpuUsedEffective) {
+        return reply.code(400).send(apiError(ErrorCode.HOST_CPU_BELOW_USED, `当前已使用: ${cpuUsedEffective}%`))
       }
     }
 
     if (updates.memoryMax !== undefined && updates.memoryMax > 0) {
-      if (updates.memoryMax < usedResources.memoryUsed) {
-        return reply.code(400).send(apiError(ErrorCode.HOST_MEMORY_BELOW_USED, `当前已使用: ${usedResources.memoryUsed}MB`))
+      if (updates.memoryMax < memoryUsedEffective) {
+        return reply.code(400).send(apiError(ErrorCode.HOST_MEMORY_BELOW_USED, `当前已使用: ${memoryUsedEffective}MB`))
       }
     }
 
@@ -4787,14 +4790,11 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       diskUsed: usedResources.diskUsed
     })
 
-    // 更新端口使用量，同时将配额对齐到已用配额
+    // 更新端口使用量
     await prisma.host.update({
       where: { id: hostId },
       data: {
-        natPortsUsedCount: portMappingsCount,
-        // 将配额对齐到已用配额
-        cpuAllowanceMax: usedResources.cpuUsed,
-        memoryMax: usedResources.memoryUsed
+        natPortsUsedCount: portMappingsCount
       }
     })
 
@@ -4803,8 +4803,8 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       memoryUsed: usedResources.memoryUsed,
       diskUsed: usedResources.diskUsed,
       natPortsUsedCount: portMappingsCount,
-      cpuAllowanceMax: usedResources.cpuUsed,
-      memoryMax: usedResources.memoryUsed
+      cpuAllowanceMax: before.cpuAllowanceMax,
+      memoryMax: before.memoryMax
     }
 
     // 计算差异

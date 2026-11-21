@@ -5824,6 +5824,7 @@ export default {
             calibrateAllNoChange: '已对齐 {total} 个节点，无差异',
             nameHint: '节点名称以 PEER + 您的用户ID 作为前缀，后面可自定义',
             nameSuffixRequired: '请输入节点名称后缀',
+            cpuCapacityHint: '设置此节点可售出的 CPU 时间片配额。100 约等于 1 Core；填写 0 会在 Agent 连接后自动检测节点容量。',
             // 管理员专用：节点切换器
             mine: '我的节点',
             hosted: '托管节点',

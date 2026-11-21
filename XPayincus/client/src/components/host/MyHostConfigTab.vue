@@ -333,7 +333,7 @@ async function saveConfig() {
       ...(url ? { url } : {}),
       location: form.value.location || undefined,
       countryCode: form.value.countryCode,
-      cpuAllowanceMax: form.value.cpuAllowanceMax || undefined,
+      cpuAllowanceMax: form.value.cpuAllowanceMax,
       memoryMax: form.value.memoryMax || undefined,
       instanceType: form.value.instanceType,
       ipv6Mode: form.value.ipv6Mode,
@@ -505,7 +505,7 @@ async function saveConfig() {
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label class="block text-xs text-themed-muted mb-1.5">{{ t('admin.hosts.cpuAllowanceMax') }}</label>
-            <input v-model.number="form.cpuAllowanceMax" type="number" class="input" placeholder="0" :min="0" step="5" />
+            <input v-model.number="form.cpuAllowanceMax" type="number" class="input" placeholder="0" :min="0" step="1" />
           </div>
           <div>
             <label class="block text-xs text-themed-muted mb-1.5">{{ t('admin.hosts.memoryMax') }} (MB)</label>

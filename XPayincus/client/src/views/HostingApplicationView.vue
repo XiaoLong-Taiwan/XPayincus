@@ -100,7 +100,7 @@ onMounted(loadApplication)
 }
 .application-panel {
   padding: 28px;
-  background: var(--color-bg-secondary, #fff);
+  background: var(--bg-primary, #fff);
   border: 1px solid var(--color-border, #e5e7eb);
   border-radius: 8px;
 }

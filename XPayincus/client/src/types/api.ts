@@ -1262,6 +1262,7 @@ export interface HostAgentInstallCommandResponse extends HostInstallDetails {
 
 export interface CreateHostRequest {
   name: string
+  cpuAllowanceMax?: number
   url?: string
   location?: string
   countryCode?: string
