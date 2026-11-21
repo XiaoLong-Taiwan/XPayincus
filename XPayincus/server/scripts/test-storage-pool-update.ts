@@ -51,9 +51,10 @@ assert.equal(rows[1]!.description, 'other')
 await assert.rejects(storage.updateStoragePool(3, 'shared', { purpose: 'instance_data' }), /先关联/)
 rows[0]!.description = 'original'
 
-const routeSource = readFileSync(new URL('../src/routes/hosts.ts', import.meta.url), 'utf8')
+const routeSource = readFileSync(new URL('../src/routes/hosts.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const start = routeSource.indexOf('  fastify.patch<{', routeSource.indexOf('// 修改存储池配置'))
-const end = routeSource.indexOf('\n}', start)
+const closingLine = '\n  })\n'
+const end = routeSource.indexOf(closingLine, start)
 assert.ok(start > 0 && end > start)
 let incusClients = 0
 const incusUpdates: unknown[][] = []
@@ -66,7 +67,7 @@ app.decorate('authenticate', async (request, reply) => {
   request.user = { id, role: request.headers['x-test-role'] ?? 'user' } as typeof request.user
 })
 new Function('fastify', 'db', 'parsePositiveRouteId', 'apiError', 'ErrorCode', 'getIncusClient', 'updateStoragePool', 'createLog',
-  ts.transpile(routeSource.slice(start, end), { target: ts.ScriptTarget.ES2022 }))(
+  ts.transpile(routeSource.slice(start, end + closingLine.length), { target: ts.ScriptTarget.ES2022 }))(
   app,
   { ...storage, getHostById: async (id: number) => id <= 3 ? { id, user_id: 1, name: `host-${id}` } : null },
   (value: string) => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null,
