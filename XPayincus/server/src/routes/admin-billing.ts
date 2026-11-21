@@ -2227,7 +2227,6 @@ export default async function adminBillingRoutes(app: FastifyInstance): Promise<
         await prisma.snapshot.deleteMany({ where: { instanceId } })
         await prisma.backup.deleteMany({ where: { instanceId } })
         await prisma.portMapping.deleteMany({ where: { instanceId } })
-        await prisma.proxySite.deleteMany({ where: { instanceId } })
         await prisma.dailyTraffic.deleteMany({ where: { instanceId } })
         await prisma.ipAddress.deleteMany({ where: { instanceId } })
         await prisma.ipv6Subnet.deleteMany({ where: { instanceId } })
@@ -3663,7 +3662,7 @@ if (provider.type === 'yipay') {
 
       // 9. 选择宿主机
       const packageHostIds = (pkg as { host_ids?: number[] }).host_ids || []
-      const pkgWithExtras = pkg as typeof pkg & { node_selectors?: string; port_limit?: number; snapshot_limit?: number; backup_limit?: number; site_limit?: number }
+      const pkgWithExtras = pkg as typeof pkg & { node_selectors?: string; port_limit?: number; snapshot_limit?: number; backup_limit?: number }
 
       const preCheckHost = await db.selectAvailableHost({
         packageHostIds: packageHostIds.length > 0 ? packageHostIds : undefined,
@@ -3794,7 +3793,6 @@ if (provider.type === 'yipay') {
           portLimit: selectedPlan.portLimit,
           snapshotLimit: selectedPlan.snapshotLimit,
           backupLimit: selectedPlan.backupLimit,
-          siteLimit: selectedPlan.siteLimit,
           swapSize: effectiveInstanceType === 'container' ? selectedPlan.swapSize : null,
           monthlyTrafficLimit: effectiveMonthlyTrafficLimit,
           limitsIngress: planBandwidthLimit,
@@ -3803,7 +3801,6 @@ if (provider.type === 'yipay') {
           portLimit: pkgWithExtras.port_limit ?? null,
           snapshotLimit: pkgWithExtras.snapshot_limit ?? null,
           backupLimit: pkgWithExtras.backup_limit ?? null,
-          siteLimit: pkgWithExtras.site_limit ?? null,
           swapSize: null as number | null,
           monthlyTrafficLimit: effectiveMonthlyTrafficLimit,
           limitsIngress: null as string | null,
@@ -3913,7 +3910,6 @@ if (provider.type === 'yipay') {
             portLimit: instanceQuota.portLimit,
             snapshotLimit: instanceQuota.snapshotLimit,
             backupLimit: instanceQuota.backupLimit,
-            siteLimit: instanceQuota.siteLimit,
             swapEnabled: false,
             swapSize: instanceQuota.swapSize,
             limitsIngress: instanceQuota.limitsIngress,
@@ -4120,7 +4116,6 @@ if (provider.type === 'yipay') {
           portLimit: plan.portLimit,
           snapshotLimit: plan.snapshotLimit,
           backupLimit: plan.backupLimit,
-          siteLimit: plan.siteLimit,
           swapSize: (instance.package?.instanceType === 'vm' ? 0 : plan.swapSize),
           trafficLimit: plan.trafficLimit.toString(),
           isSoldOut: plan.isSoldOut,
@@ -4334,7 +4329,6 @@ if (provider.type === 'yipay') {
             portLimit: newPlan.portLimit,
             snapshotLimit: newPlan.snapshotLimit,
             backupLimit: newPlan.backupLimit,
-            siteLimit: newPlan.siteLimit,
             swapEnabled: instance.package?.instanceType === 'vm' ? false : instance.swapEnabled,
             swapSize: instance.package?.instanceType === 'vm'
               ? null

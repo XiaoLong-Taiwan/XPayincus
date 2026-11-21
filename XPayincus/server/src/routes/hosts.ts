@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
-import { AgentTunnelError, getAgentTunnel } from '../lib/agent-tunnel.js'
+import { getAgentTunnel } from '../lib/agent-tunnel.js'
 import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
 import { checkHostingAccess } from '../lib/hosting-access.js'
@@ -30,15 +30,13 @@ import { selectBindableIpv4ListenAddress } from '../lib/network-address.js'
 import { listStoragePools, getStoragePoolResources, createStoragePool, deleteStoragePool, updateStoragePool } from '../lib/incus/incus-storage.js'
 import type { CreateHostRequest, UpdateHostRequest } from '../types/api.js'
 import type { Host } from '../types/database.js'
-import { validateName, validateUrl, validateIpAddress, validateIdentifier, validateIpOrDomain, encryptSensitiveData, getJwtSigningSecret } from '../lib/security.js'
+import { validateName, validateUrl, validateIpAddress, validateIdentifier, validateIpOrDomain, encryptSensitiveData } from '../lib/security.js'
 import { sendNotification } from '../lib/notifier.js'
 import { sendReleaseNotification } from '../lib/release-notifier.js'
-import { createCaddyClient } from '../lib/caddy-client.js'
 import { normalizeArchitecture } from '../lib/architecture.js'
 import { generateIncusConfig } from '../lib/incus-config-generator.js'
 import { sendRenewalPriceUpdatedEmail } from '../lib/mailer.js'
 import { calculateCreateBilling } from '../db/billing-operations.js'
-import { getDnsRecordType } from '../lib/network-address.js'
 import { resolveInstanceTrafficLimitForHost } from '../lib/traffic-multiplier.js'
 import { normalizePlanTrafficLimitSpeed } from '../services/traffic-bandwidth.js'
 import {
@@ -79,7 +77,6 @@ import {
   parseStartupItems
 } from '../lib/instance-audit.js'
 import { createPreparingProvisionJob } from '../lib/durable-instance-provision.js'
-import crypto from 'crypto'
 import type { InstanceStatus } from '@prisma/client'
 import { PANEL_CERTIFICATE_ERROR, readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
 
@@ -1469,12 +1466,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       // 注入面板地址（与 INJECT_TOKEN 使用相同的行锚定注入方式）
       const frontendUrl = derivePanelUrl(request)
       script = injectInstallVariable(script, 'INJECT_PANEL_URL', frontendUrl)
-      script = injectInstallVariable(
-        script,
-        'INJECT_CADDY_INSTALL_URL',
-        `${frontendUrl}/api/hosts/caddy-script/${generateCaddyScriptToken(host.id)}`
-      )
-
       // 将 token 注入脚本，用户无需手动输入
       script = injectInstallVariable(script, 'INJECT_TOKEN', token)
 
@@ -2895,7 +2886,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     const incusInstanceOperations = databaseOnly
       ? null
       : await import('../lib/incus/index.js')
-    const { getProxySitesByInstanceId, deleteProxySite } = await import('../db/proxy-sites.js')
     const incusSnapshotOperations = databaseOnly
       ? null
       : await import('../lib/incus/incus-snapshots.js')
@@ -2934,28 +2924,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           if (!claimed) {
             results.push({ id: instance.id, name: instance.name, success: false, error: '实例正在删除或有正在进行的任务' })
             continue
-          }
-        }
-
-        // ===== 1. 删除反代站点（完整删除清 Caddy，DB-only 只清数据库）=====
-        const proxySites = await getProxySitesByInstanceId(instance.id)
-        if (proxySites.length > 0) {
-          // 仅完整删除模式尝试删除 Caddy 远程配置；DB-only 无论宿主机是否在线都不碰远端。
-          if (!databaseOnly && host.caddy_enabled) {
-            {
-              const caddyClient = createCaddyClient({
-                hostId: host.id,
-                host: '127.0.0.1',
-                port: 2019
-              })
-              for (const site of proxySites) {
-                try {
-                  await caddyClient.deleteSite(site.domain)
-                } catch (caddyError) {
-                  // 忽略 Caddy 删除错误
-                }
-              }
-            }
           }
         }
 
@@ -3078,9 +3046,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         }
 
         // ===== 7. 删除数据库附属记录 =====
-        for (const site of proxySites) {
-          await deleteProxySite(site.id)
-        }
         for (const mapping of portMappings || []) {
           await db.deletePortMapping((mapping as { id: number }).id)
         }
@@ -3801,76 +3766,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     }
   })
 
-  // ==================== Caddy 反代管理路由 ====================
-
-  /**
-   * 生成随机字符串
-   */
-  function generateRandomString(length: number): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    let result = ''
-    const randomBytes = crypto.randomBytes(length)
-    for (let i = 0; i < length; i++) {
-      result += chars[randomBytes[i] % chars.length]
-    }
-    return result
-  }
-
-  /**
-   * 生成 Caddy 脚本下载 token（有效期 30 分钟）
-   * 使用 HMAC-SHA256 签名，包含 hostId 和过期时间
-   */
-  function generateCaddyScriptToken(hostId: number): string {
-    const secret = getJwtSigningSecret('Caddy script token signing')
-    const expireAt = Date.now() + 30 * 60 * 1000 // 30 分钟有效期
-    const payload = `${hostId}:${expireAt}`
-    const signature = crypto.createHmac('sha256', secret).update(payload).digest('hex')
-    // 返回 base64url 编码的 token: hostId:expireAt:signature
-    return Buffer.from(`${payload}:${signature}`).toString('base64url')
-  }
-
-  /**
-   * 验证 Caddy 脚本下载 token
-   * @returns hostId 如果验证成功，否则返回 null
-   */
-  function verifyCaddyScriptToken(token: string): number | null {
-    try {
-      const decoded = Buffer.from(token, 'base64url').toString('utf-8')
-      const parts = decoded.split(':')
-      if (parts.length !== 3) return null
-      
-      const [hostIdStr, expireAtStr, signature] = parts
-      const hostId = parseInt(hostIdStr, 10)
-      const expireAt = parseInt(expireAtStr, 10)
-      
-      if (isNaN(hostId) || isNaN(expireAt)) return null
-      if (hostId <= 0) return null // hostId 必须是正整数
-      
-      // 检查是否过期
-      if (Date.now() > expireAt) return null
-      
-      // 验证签名（使用常量时间比较防止时序攻击）
-      const secret = getJwtSigningSecret('Caddy script token verification')
-      const payload = `${hostId}:${expireAt}`
-      const expectedSignature = crypto.createHmac('sha256', secret).update(payload).digest('hex')
-      
-      // 使用 timingSafeEqual 防止时序攻击
-      const signatureBuffer = Buffer.from(signature, 'utf-8')
-      const expectedBuffer = Buffer.from(expectedSignature, 'utf-8')
-      if (signatureBuffer.length !== expectedBuffer.length) return null
-      if (!crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) return null
-      
-      return hostId
-    } catch {
-      return null
-    }
-  }
-
-  /**
-   * 获取宿主机 Caddy 状态和安装命令
-   * GET /hosts/:id/caddy
-   */
-
   function parsePublicIpv4Lines(value: unknown): string[] {
     if (Array.isArray(value)) return value.flatMap(item => parsePublicIpv4Lines(item))
     if (typeof value !== 'string') return []
@@ -4008,433 +3903,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     }
   })
 
-  fastify.get<{
-    Params: { id: string }
-  }>('/:id/caddy', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{
-    Params: { id: string }
-  }>, reply: FastifyReply) => {
-    const { user } = request
-    const hostId = parsePositiveRouteId(request.params.id)
-
-    if (!hostId) {
-      return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
-    }
-
-    const host = await db.getHostById(hostId)
-    if (!host) {
-      return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
-    }
-
-    // 权限检查：只有节点所有者可以查看
-    if (host.user_id !== user.id && user.role !== 'admin') {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
-
-    // 统计该宿主机的站点数量（从数据库）
-    const { getProxySiteCountByHost } = await import('../db/proxy-sites.js')
-    const sitesCount = await getProxySiteCountByHost(hostId)
-
-    return {
-      enabled: host.caddy_enabled || false,
-      username: host.caddy_username || null,
-      port: 2019,
-      // 不返回密码，只返回是否已配置
-      hasPassword: !!host.caddy_password,
-      natPublicIp: host.nat_public_ip || host.ip_address || null,
-      sitesCount
-    }
-  })
-
-  /**
-   * 生成 Caddy 安装命令（生成账号密码）
-   * POST /hosts/:id/caddy/generate
-   */
-  fastify.post<{
-    Params: { id: string }
-  }>('/:id/caddy/generate', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{
-    Params: { id: string }
-  }>, reply: FastifyReply) => {
-    const { user } = request
-    const hostId = parsePositiveRouteId(request.params.id)
-
-    if (!hostId) {
-      return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
-    }
-
-    const host = await db.getHostById(hostId)
-    if (!host) {
-      return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
-    }
-
-    // 权限检查：只有节点所有者可以操作
-    if (host.user_id !== user.id && user.role !== 'admin') {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
-
-    // 如果已有凭据，复用现有的；否则生成新的
-    let username = host.caddy_username
-    let password = host.caddy_password
-    const port = 2019
-    let isNewCredentials = false
-
-    if (!username || !password) {
-      // 生成新凭据
-      username = 'caddy_' + generateRandomString(8)
-      password = generateRandomString(24)
-      isNewCredentials = true
-
-      // 更新数据库
-      await prisma.host.update({
-        where: { id: hostId },
-        data: {
-          caddyUsername: username,
-          caddyPassword: password,
-          caddyPort: port
-        }
-      })
-
-      await createLog(
-        user.id,
-        'host',
-        'caddy.generate',
-        `Generated Caddy credentials for host "${host.name}"`,
-        'success'
-      )
-    }
-
-    // 构建安装命令
-    // 使用FRONTEND_URL，如果包含多个URL（逗号分隔），使用第一个
-    const panelUrl = process.env.FRONTEND_URL
-      ? process.env.FRONTEND_URL.split(',')[0].trim()
-      : 'https://incudal.com'
-    // 生成带鉴权 token 的脚本下载 URL
-    const scriptToken = generateCaddyScriptToken(hostId)
-    const installCommand = `curl -fsSL "${panelUrl}/api/hosts/caddy-script/${scriptToken}" | sudo bash`
-
-    return {
-      installCommand,
-      username,
-      password,
-      port,
-      isNewCredentials
-    }
-  })
-
-  /**
-   * 重置 Caddy 凭据
-   * POST /hosts/:id/caddy/reset
-   */
-  fastify.post<{
-    Params: { id: string }
-  }>('/:id/caddy/reset', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{
-    Params: { id: string }
-  }>, reply: FastifyReply) => {
-    const { user } = request
-    const hostId = parsePositiveRouteId(request.params.id)
-
-    if (!hostId) {
-      return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
-    }
-
-    const host = await db.getHostById(hostId)
-    if (!host) {
-      return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
-    }
-
-    if (host.user_id !== user.id && user.role !== 'admin') {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
-
-    // 强制生成新凭据
-    const username = 'caddy_' + generateRandomString(8)
-    const password = generateRandomString(24)
-    const port = 2019
-
-    // 更新数据库，同时禁用 Caddy（需要重新安装）
-    await prisma.host.update({
-      where: { id: hostId },
-      data: {
-        caddyUsername: username,
-        caddyPassword: password,
-        caddyPort: port,
-        caddyEnabled: false
-      }
-    })
-
-    // 使用FRONTEND_URL，如果包含多个URL（逗号分隔），使用第一个
-    const panelUrl = process.env.FRONTEND_URL
-      ? process.env.FRONTEND_URL.split(',')[0].trim()
-      : 'https://incudal.com'
-    // 生成带鉴权 token 的脚本下载 URL
-    const scriptToken = generateCaddyScriptToken(hostId)
-    const installCommand = `curl -fsSL "${panelUrl}/api/hosts/caddy-script/${scriptToken}" | sudo bash`
-
-    await createLog(
-      user.id,
-      'host',
-      'caddy.reset',
-      `Reset Caddy credentials for host "${host.name}"`,
-      'success'
-    )
-
-    return {
-      installCommand,
-      username,
-      password,
-      port
-    }
-  })
-
-  /**
-   * 确认 Caddy 已安装
-   * POST /hosts/:id/caddy/confirm
-   */
-  fastify.post<{
-    Params: { id: string }
-  }>('/:id/caddy/confirm', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{
-    Params: { id: string }
-  }>, reply: FastifyReply) => {
-    const { user } = request
-    const hostId = parsePositiveRouteId(request.params.id)
-
-    if (!hostId) {
-      return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
-    }
-
-    const host = await db.getHostById(hostId)
-    if (!host) {
-      return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
-    }
-
-    // 权限检查
-    if (host.user_id !== user.id && user.role !== 'admin') {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
-
-    // 尝试连接测试
-    const targetHost = '127.0.0.1'
-
-    request.log.info({
-      hostId,
-      hostName: host.name,
-      targetHost,
-      port: 2019,
-    }, '[Caddy Confirm] 开始测试连接')
-
-    const client = createCaddyClient({
-      hostId: host.id,
-      host: targetHost,
-      port: 2019,
-    })
-
-    try {
-      await client.getConfig()
-    } catch (err) {
-      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED', 'TUNNEL_TIMEOUT'].includes(err.code)
-      request.log.warn({ hostId, offline }, '[Caddy Confirm] Verification failed')
-      return reply.code(offline ? 503 : 502).send({
-        error: offline
-          ? 'Agent WSS 隧道離線，請確認 Agent 已連線後重試，無需重新安裝 Caddy'
-          : '無法經 Agent 驗證本機 Caddy，請檢查 caddy systemd 服務與 127.0.0.1:2019 管理 API'
-      })
-    }
-
-    // 更新状态
-    await prisma.host.update({
-      where: { id: hostId },
-      data: { caddyEnabled: true }
-    })
-
-    await createLog(
-      user.id,
-      'host',
-      'caddy.confirm',
-      `Confirmed Caddy installation for host "${host.name}"`,
-      'success'
-    )
-
-    return { message: 'Caddy 已确认安装' }
-  })
-
-  /**
-   * 获取 Caddy 安装脚本（需要 token 鉴权）
-   * GET /hosts/caddy-script/:token
-   */
-  fastify.get<{ Params: { token: string } }>('/caddy-script/:token', {
-    logLevel: 'silent',
-    config: {
-      rateLimit: {
-        max: 10,
-        timeWindow: '1 minute'
-      }
-    }
-  }, async (request: FastifyRequest<{ Params: { token: string } }>, reply: FastifyReply) => {
-    const { token } = request.params
-
-    // 验证 token
-    const hostId = verifyCaddyScriptToken(token)
-    if (hostId === null) {
-      request.log.warn('Invalid or expired caddy script token')
-      return reply.code(403).send('# Error: Invalid or expired token')
-    }
-
-    // 验证宿主机存在
-    const host = await prisma.host.findUnique({
-      where: { id: hostId },
-      select: { id: true, name: true, caddyPassword: true }
-    })
-    if (!host) {
-      request.log.warn(`Caddy script download failed: host ${hostId} not found`)
-      return reply.code(404).send('# Error: Host not found')
-    }
-    try {
-      const scriptPath = join(__dirname, '../../templates/caddy.sh')
-      const scriptContent = readFileSync(scriptPath, 'utf-8')
-      request.log.info(`Caddy script downloaded for host ${host.name}`)
-      reply.header('Cache-Control', 'no-store')
-      reply.type('text/plain').send(scriptContent)
-    } catch (err) {
-      request.log.error(err, 'Failed to read caddy.sh')
-      return reply.code(500).send('# Error: Failed to read script')
-    }
-  })
-
-  /**
-   * 测试 Caddy 连接
-   * POST /hosts/:id/caddy/test
-   */
-  fastify.post<{
-    Params: { id: string }
-  }>('/:id/caddy/test', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{
-    Params: { id: string }
-  }>, reply: FastifyReply) => {
-    const { user } = request
-    const hostId = parsePositiveRouteId(request.params.id)
-
-    if (!hostId) {
-      return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
-    }
-
-    const host = await db.getHostById(hostId)
-    if (!host) {
-      return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
-    }
-
-    if (host.user_id !== user.id && user.role !== 'admin') {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
-
-    if (!host.caddy_enabled) {
-      return reply.code(400).send({ error: 'Caddy 未启用' })
-    }
-
-    const targetHost = '127.0.0.1'
-
-    const client = createCaddyClient({
-      hostId: host.id,
-      host: targetHost,
-      port: 2019,
-    })
-
-    try {
-        const config = await client.getConfig()
-        const sites = client.getSitesFromConfig(config)
-        return {
-          connected: true,
-          sitesCount: sites.length,
-          dnsRecordType: getDnsRecordType(host.nat_public_ip || host.ip_address || ''),
-          dnsRecordValue: host.nat_public_ip || host.ip_address || ''
-        }
-    } catch (err) {
-      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED', 'TUNNEL_TIMEOUT'].includes(err.code)
-      return reply.code(offline ? 503 : 502).send({
-        error: offline
-          ? 'Agent WSS 隧道離線，請確認 Agent 已連線後重試，無需重新安裝 Caddy'
-          : '無法經 Agent 驗證本機 Caddy，請檢查 caddy systemd 服務與 127.0.0.1:2019 管理 API'
-      })
-    }
-  })
-
-  /**
-   * 获取宿主机的所有反代站点列表
-   * GET /hosts/:id/caddy/sites
-   */
-  fastify.get<{
-    Params: { id: string }
-    Querystring: { page?: string; pageSize?: string }
-  }>('/:id/caddy/sites', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{
-    Params: { id: string }
-    Querystring: { page?: string; pageSize?: string }
-  }>, reply: FastifyReply) => {
-    const { user } = request
-    const hostId = parsePositiveRouteId(request.params.id)
-    // 分页参数边界验证：page >= 1, pageSize 在 1-100 之间
-    const rawPage = parseInt(request.query.page || '1', 10)
-    const rawPageSize = parseInt(request.query.pageSize || '10', 10)
-    const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage
-    const pageSize = isNaN(rawPageSize) ? 10 : Math.min(100, Math.max(1, rawPageSize))
-
-    if (!hostId) {
-      return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
-    }
-
-    const host = await db.getHostById(hostId)
-    if (!host) {
-      return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
-    }
-
-    // 权限检查：只有节点所有者可以查看
-    if (host.user_id !== user.id && user.role !== 'admin') {
-      return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    }
-
-    // 获取该宿主机上的所有反代站点
-    const { getProxySitesByHostId } = await import('../db/proxy-sites.js')
-    const allSites = await getProxySitesByHostId(hostId)
-
-    // 分页
-    const total = allSites.length
-    const totalPages = Math.ceil(total / pageSize)
-    const startIndex = (page - 1) * pageSize
-    const paginatedSites = allSites.slice(startIndex, startIndex + pageSize)
-
-    return {
-      sites: paginatedSites.map(site => ({
-        id: site.id,
-        domain: site.domain,
-        targetPort: site.targetPort,
-        httpsEnabled: site.httpsEnabled,
-        status: site.status,
-        enabled: site.enabled,
-        error: site.error,
-        createdAt: site.createdAt,
-        // 实例信息
-        instance: site.instance ? {
-          id: site.instance.id,
-          name: site.instance.name,
-          ipv4: site.instance.ipv4,
-          status: site.instance.status
-        } : null
-      })),
-      total,
-      page,
-      pageSize,
-      totalPages
-    }
-  })
-
   // 批量同步实例状态（仅节点所有者）
   fastify.post<{
     Params: { id: string }
@@ -4501,11 +3969,10 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     // 导入状态同步相关函数
     const { getInstance, getInstanceState } = await import('../lib/incus/incus-instances.js')
     const { mapInstanceStatus } = await import('../lib/incus/incus-utils.js')
-    const { getProxySitesByInstanceId } = await import('../db/proxy-sites.js')
 
     // 从 Incus state.network 中提取 IPv4 地址
     // 优先选择 eth0 接口的 IP（这是我们配置的主网卡）
-    const results: { id: number; name: string; success: boolean; from?: string; to?: string; ipv4Changed?: boolean; oldIpv4?: string | null; newIpv4?: string | null; ipv6Changed?: boolean; oldIpv6?: string | null; newIpv6?: string | null; proxySitesUpdated?: number; error?: string }[] = []
+    const results: { id: number; name: string; success: boolean; from?: string; to?: string; ipv4Changed?: boolean; oldIpv4?: string | null; newIpv4?: string | null; ipv6Changed?: boolean; oldIpv6?: string | null; newIpv6?: string | null; error?: string }[] = []
     let syncedCount = 0
     let changedCount = 0
     let ipv4ChangedCount = 0
@@ -4556,7 +4023,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         let ipv6Changed = false
         let oldIpv6: string | null = null
         let newIpv6: string | null = null
-        let proxySitesUpdated = 0
 
         if (currentStatus !== incusStatus) {
           await db.updateInstanceStatus(
@@ -4606,33 +4072,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           ipv6ChangedCount++
         }
 
-        if (ipv4Changed && newIpv4) {
-          console.log(`[BatchSyncStatus] Instance ${instance.id} IPv4 changed: ${oldIpv4} -> ${newIpv4}`)
-
-          const proxySites = await getProxySitesByInstanceId(instance.id)
-          if (proxySites.length > 0 && host.caddy_enabled) {
-            {
-              const caddyClient = createCaddyClient({
-                hostId: host.id,
-                host: '127.0.0.1',
-                port: 2019
-              })
-
-              for (const site of proxySites) {
-                if (site.status === 'active' && site.enabled) {
-                  try {
-                    await caddyClient.deleteSite(site.domain)
-                    await caddyClient.addSite(site.domain, newIpv4, site.targetPort, site.httpsEnabled)
-                    proxySitesUpdated++
-                    console.log(`[BatchSyncStatus] Updated proxy site "${site.domain}" to new IP ${newIpv4}`)
-                  } catch (caddyErr) {
-                    console.error(`[BatchSyncStatus] Failed to update proxy site "${site.domain}":`, caddyErr)
-                  }
-                }
-              }
-            }
-          }
-        }
         results.push({
           id: instance.id,
           name: instance.name,
@@ -4645,7 +4084,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           ipv6Changed: ipv6Changed || undefined,
           oldIpv6: ipv6Changed ? oldIpv6 : undefined,
           newIpv6: ipv6Changed ? newIpv6 : undefined,
-          proxySitesUpdated: ipv4Changed ? proxySitesUpdated : undefined
         })
         syncedCount++
       } catch (err) {
@@ -5877,7 +5315,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
               portLimit: instance.portLimit,
               snapshotLimit: instance.snapshotLimit,
               backupLimit: instance.backupLimit,
-              siteLimit: instance.siteLimit,
               // 保留原到期时间，更新续费价格为新方案
               expiresAt: instance.expiresAt,
               billingPrice: finalBillingPrice,
@@ -6265,7 +5702,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       port_limit?: number
       snapshot_limit?: number
       backup_limit?: number
-      site_limit?: number
       monthly_traffic_limit?: string | null
       io_limit_mode?: string
       limits_read?: string | null
@@ -6384,7 +5820,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           portLimit: selectedPlan.portLimit,
           snapshotLimit: selectedPlan.snapshotLimit,
           backupLimit: selectedPlan.backupLimit,
-          siteLimit: selectedPlan.siteLimit,
           swapSize: pkgInstanceType === 'container' ? selectedPlan.swapSize : null,
           monthlyTrafficLimit: effectiveMonthlyTrafficLimit,
           limitsIngress: planTrafficSpeed,
@@ -6393,7 +5828,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           portLimit: pkgWithExtras.port_limit ?? null,
           snapshotLimit: pkgWithExtras.snapshot_limit ?? null,
           backupLimit: pkgWithExtras.backup_limit ?? null,
-          siteLimit: pkgWithExtras.site_limit ?? null,
           swapSize: null as number | null,
           monthlyTrafficLimit: effectiveMonthlyTrafficLimit,
           limitsIngress: null as string | null,
@@ -6444,7 +5878,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
             portLimit: instanceQuota.portLimit,
             snapshotLimit: instanceQuota.snapshotLimit,
             backupLimit: instanceQuota.backupLimit,
-            siteLimit: instanceQuota.siteLimit,
             swapEnabled: false,
             swapSize: instanceQuota.swapSize,
             limitsIngress: instanceQuota.limitsIngress,

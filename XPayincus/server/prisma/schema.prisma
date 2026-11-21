@@ -100,13 +100,6 @@ enum StoragePurpose {
   instance_storage // 用于实例存储盘（可手动挂载）
 }
 
-// 反代站点状态枚举
-enum ProxySiteStatus {
-  pending // 等待 DNS 解析
-  active // 已生效
-  error // 配置失败
-}
-
 enum InstanceStatus {
   creating
   running
@@ -801,12 +794,6 @@ model Host {
   createdAt           DateTime     @default(now()) @map("created_at")
   updatedAt           DateTime     @updatedAt @map("updated_at")
 
-  // Caddy 反代配置
-  caddyEnabled  Boolean @default(false) @map("caddy_enabled") // 是否已安装 Caddy
-  caddyUsername String? @map("caddy_username") // Basic Auth 用户名
-  caddyPassword String? @map("caddy_password") // Basic Auth 密码
-  caddyPort     Int     @default(8444) @map("caddy_port") // Caddy API 端口
-
   // 转移控制
   transferEnabled Boolean @default(true) @map("transfer_enabled") // 是否允许该宿主机下的实例进行转移
 
@@ -837,7 +824,6 @@ model Host {
   portMappings PortMapping[]
   packageHosts PackageHost[]
   storagePools StoragePool[]
-  proxySites   ProxySite[]
   announcements Announcement[] @relation("HostAnnouncements")
   tickets       Ticket[]       @relation("HostTickets")
   redeemCodes   RedeemCode[]
@@ -1020,7 +1006,6 @@ model Package {
   portLimit           Int          @default(20) @map("port_limit") // 端口映射数上限
   snapshotLimit       Int          @default(5) @map("snapshot_limit") // 快照数上限
   backupLimit         Int          @default(3) @map("backup_limit") // 备份数上限
-  siteLimit           Int          @default(10) @map("site_limit") // 反代站点数上限
   monthlyTrafficLimit BigInt?      @map("monthly_traffic_limit") // 月流量限额 (Bytes)，null = 无限制
   trafficResetPrice   Decimal      @default(0) @map("traffic_reset_price") @db.Decimal(10, 2) // 用户自助重置月流量价格（元）
 
@@ -1105,7 +1090,6 @@ model Instance {
   portLimit        Int?           @map("port_limit")
   snapshotLimit    Int?           @map("snapshot_limit")
   backupLimit      Int?           @map("backup_limit")
-  siteLimit        Int?           @map("site_limit")
   swapEnabled      Boolean        @default(false) @map("swap_enabled")
   swapSize         Int?           @map("swap_size") // SWAP 大小(MB)，null/0 表示未配置
 
@@ -1190,7 +1174,6 @@ model Instance {
   ipAddresses     IpAddress[]
   publicIpv4Address PublicIpv4Address?
   ipv6Subnets     Ipv6Subnet[]
-  proxySites       ProxySite[]
   instanceTasks    InstanceTask[]
   tickets          Ticket[]          @relation("InstanceTickets")
   checkinRecords   CheckinRecord[]
@@ -2221,31 +2204,6 @@ model HostNotificationEmailTask {
   @@map("host_notification_email_tasks")
 }
 
-// ==================== 反代站点模型 ====================
-
-model ProxySite {
-  id           Int             @id @default(autoincrement())
-  instanceId   Int             @map("instance_id")
-  hostId       Int             @map("host_id") // 冗余存储，方便查询
-  domain       String // 域名（不允许泛域名）
-  targetPort   Int             @map("target_port") // 实例内部端口
-  httpsEnabled Boolean         @default(true) @map("https_enabled") // 是否启用 HTTPS（自动申请 Let's Encrypt 证书）
-  remark       String? // 站点备注
-  status       ProxySiteStatus @default(pending)
-  enabled      Boolean         @default(true)
-  error        String? // 错误信息
-  createdAt    DateTime        @default(now()) @map("created_at")
-  updatedAt    DateTime        @updatedAt @map("updated_at")
-
-  instance Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
-  host     Host     @relation(fields: [hostId], references: [id], onDelete: Cascade)
-
-  @@unique([hostId, domain]) // 同一宿主机下域名唯一
-  @@index([instanceId])
-  @@index([hostId])
-  @@map("proxy_sites")
-}
-
 // ==================== 登录记录模型 ====================
 
 model LoginRecord {
@@ -2878,7 +2836,6 @@ model PackagePlan {
   portLimit         Int    @map("port_limit")          // 端口映射数上限
   snapshotLimit     Int    @map("snapshot_limit")      // 快照数上限
   backupLimit       Int    @map("backup_limit")        // 备份数上限
-  siteLimit         Int    @map("site_limit")          // 反代站点数上限
   swapSize          Int    @default(0) @map("swap_size") // SWAP 大小(MB)，0 表示不提供
   trafficLimit      BigInt @map("traffic_limit")       // 月流量限额 (Bytes)
   trafficLimitSpeed String @default("1Mbit") @map("traffic_limit_speed") // 流量超限后的限速值

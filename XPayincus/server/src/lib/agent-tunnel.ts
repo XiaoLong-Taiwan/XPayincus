@@ -9,7 +9,7 @@ export const TUNNEL_MAX_BODY = 512 * 1024
 export const TUNNEL_MAX_FRAME = 768 * 1024
 export const TUNNEL_MAX_WS_DATA = 64 * 1024
 export const TUNNEL_MAX_CONCURRENT = 8
-export type TunnelTarget = 'incus' | 'caddy'
+export type TunnelTarget = 'incus'
 export interface TunnelResponse { statusCode: number; headers: Record<string, string>; body: Buffer }
 interface Frame {
   type: string
@@ -44,8 +44,6 @@ export function validateTunnelPath(target: TunnelTarget, path: string, websocket
     if (target !== 'incus' || !/^\/1\.0\/operations\/[A-Za-z0-9-]+\/websocket$/.test(decoded) || [...url.searchParams.keys()].length !== 1 || url.searchParams.getAll('secret').length !== 1 || (url.searchParams.get('secret')?.length ?? 0) < 8) throw new AgentTunnelError('TUNNEL_INVALID_WS_PATH')
   } else if (target === 'incus') {
     if (decoded !== '/1.0' && !decoded.startsWith('/1.0/')) throw new AgentTunnelError('TUNNEL_INVALID_PATH')
-  } else if (target === 'caddy') {
-    if (!decoded.startsWith('/config/') && !decoded.startsWith('/id/')) throw new AgentTunnelError('TUNNEL_INVALID_PATH')
   } else throw new AgentTunnelError('TUNNEL_INVALID_TARGET')
 }
 

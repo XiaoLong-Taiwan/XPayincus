@@ -8,7 +8,7 @@ for (const file of [
   'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml',
   'client/package.json', 'client/index.html', 'client/vite.config.ts', 'client/tsconfig.json', 'client/tsconfig.node.json', 'client/src/main.ts', 'client/src/admin/main.ts',
   'server/package.json', 'server/tsconfig.json', 'server/src/app.ts', 'server/prisma.config.ts', 'server/prisma/schema.prisma', 'server/prisma/migrations/migration_lock.toml',
-  'server/templates/install.sh', 'server/templates/agent-install.sh', 'server/templates/caddy.sh',
+  'server/templates/install.sh', 'server/templates/agent-install.sh',
   'server/scripts/export-legacy-host.mjs', 'server/scripts/LEGACY_HOST_EXPORT.md',
   'deploy/compose/docker-compose.yml', 'deploy/compose/compose.yaml', 'deploy/compose/compose.build.yaml', 'deploy/compose/Dockerfile', 'deploy/compose/Dockerfile.dockerignore',
   'deploy/compose/web-entrypoint.sh', 'client/public/runtime-config.js', 'client/src/utils/runtime-config.ts',

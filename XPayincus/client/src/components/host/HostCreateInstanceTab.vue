@@ -43,7 +43,6 @@ interface GiftPlan {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   trafficLimit: string
   trafficLimitSpeed: string
   price: number

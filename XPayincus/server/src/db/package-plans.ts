@@ -89,7 +89,6 @@ export interface CreatePlanInput {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   trafficLimit: bigint
   trafficLimitSpeed?: string
@@ -117,7 +116,6 @@ export async function createPlan(input: CreatePlanInput): Promise<PackagePlan> {
     portLimit,
     snapshotLimit,
     backupLimit,
-    siteLimit,
     swapSize,
     trafficLimit,
     trafficLimitSpeed = '1Mbit',
@@ -142,7 +140,6 @@ export async function createPlan(input: CreatePlanInput): Promise<PackagePlan> {
       portLimit,
       snapshotLimit,
       backupLimit,
-      siteLimit,
       swapSize,
       trafficLimit,
       trafficLimitSpeed,
@@ -169,7 +166,6 @@ export interface UpdatePlanInput {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   swapSize?: number
   trafficLimit?: bigint
   trafficLimitSpeed?: string
@@ -251,7 +247,6 @@ export async function syncPlanQuotaToInstances(
         portLimit: plan.portLimit,
         snapshotLimit: plan.snapshotLimit,
         backupLimit: plan.backupLimit,
-        siteLimit: plan.siteLimit,
         swapEnabled: false,
         swapSize: null
       }
@@ -266,7 +261,6 @@ export async function syncPlanQuotaToInstances(
       portLimit: plan.portLimit,
       snapshotLimit: plan.snapshotLimit,
       backupLimit: plan.backupLimit,
-      siteLimit: plan.siteLimit
     }
   })
 
@@ -279,7 +273,6 @@ export async function syncPlanQuotaToInstances(
       portLimit: plan.portLimit,
       snapshotLimit: plan.snapshotLimit,
       backupLimit: plan.backupLimit,
-      siteLimit: plan.siteLimit
     }
   })
 
@@ -372,7 +365,6 @@ export function getPlanResources(plan: PackagePlan) {
     portLimit: plan.portLimit,
     snapshotLimit: plan.snapshotLimit,
     backupLimit: plan.backupLimit,
-    siteLimit: plan.siteLimit,
     swapSize: plan.swapSize,
     trafficLimit: plan.trafficLimit.toString(),
     trafficLimitSpeed: plan.trafficLimitSpeed

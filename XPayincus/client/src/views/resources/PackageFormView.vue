@@ -115,7 +115,6 @@ interface PackageForm {
   // 实例配额
   portLimit: number | null
   snapshotLimit: number | null
-  siteLimit: number | null
   // Storage I/O
   ioLimitMode: 'throughput' | 'iops'
   limitsRead: string
@@ -206,7 +205,6 @@ function resetPackageLevelInstanceDefaults(): void {
   form.value.monthlyTrafficLimitGB = defaults.monthlyTrafficLimitGB
   form.value.portLimit = defaults.portLimit
   form.value.snapshotLimit = defaults.snapshotLimit
-  form.value.siteLimit = defaults.siteLimit
   form.value.limitsIngress = defaults.limitsIngress
   form.value.limitsIngressUnit = defaults.limitsIngressUnit
   form.value.limitsEgress = defaults.limitsEgress
@@ -248,7 +246,6 @@ function getDefaultForm(): PackageForm {
     // 实例配额默认值
     portLimit: 20,
     snapshotLimit: 10,
-    siteLimit: 10,
     // Storage I/O defaults
     ioLimitMode: 'throughput',
     limitsRead: '100',
@@ -603,7 +600,6 @@ async function loadPackage(id: number): Promise<void> {
       // 实例配额
       portLimit: pkg.port_limit ?? 20,
       snapshotLimit: pkg.snapshot_limit ?? 10,
-      siteLimit: pkg.site_limit ?? 10,
       // Storage I/O
       ioLimitMode: (pkg.io_limit_mode === 'iops' ? 'iops' : 'throughput') as 'throughput' | 'iops',
       limitsRead: readParsed.value || '100',
@@ -758,7 +754,6 @@ async function savePackage(): Promise<void> {
       // 实例配额
       portLimit: form.value.portLimit ?? undefined,
       snapshotLimit: form.value.snapshotLimit ?? undefined,
-      siteLimit: form.value.siteLimit ?? undefined,
       // Storage I/O
       ioLimitMode: form.value.ioLimitMode,
       limitsRead: combineStorageValue(form.value.limitsRead, form.value.limitsReadUnit) || undefined,
@@ -1289,11 +1284,6 @@ function goBack(): void {
             <label class="block text-sm font-medium text-themed-secondary mb-1.5">{{ t('packageForm.fields.snapshotLimit') }}</label>
             <input v-model.number="form.snapshotLimit" type="number" class="input font-mono tabular-nums" min="0" max="1000" />
             <p class="text-xs text-themed-muted mt-1">{{ t('packageForm.hints.snapshotLimit') }}</p>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-themed-secondary mb-1.5">{{ t('packageForm.fields.siteLimit') }}</label>
-            <input v-model.number="form.siteLimit" type="number" class="input font-mono tabular-nums" min="0" max="1000" />
-            <p class="text-xs text-themed-muted mt-1">{{ t('packageForm.hints.siteLimit') }}</p>
           </div>
         </div>
       </section>

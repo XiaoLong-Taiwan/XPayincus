@@ -69,17 +69,16 @@ export function translateError(error: unknown): string {
             return turnstileMessage
         }
 
-        // 优先使用 details（包含详细的错误信息）
-        if (err.details) {
-            return err.details
-        }
-
-        // Check for error code and translate
+// Check for error code and translate
         if (err.code) {
             const key = `errors.${err.code}`
             if (te(key)) {
                 return t(key) as string
             }
+        }
+
+        if (err.details) {
+            return err.details
         }
 
         // Fallback to error message

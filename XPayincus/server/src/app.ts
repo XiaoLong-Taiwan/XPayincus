@@ -64,7 +64,6 @@ import transferRoutes from './routes/transfers.js'
 import friendsRoutes from './routes/friends.js'
 import ipAddressRoutes from './routes/ip-addresses.js'
 import verificationRoutes from './routes/verification.js'
-import proxySitesRoutes from './routes/proxy-sites.js'
 import inboxRoutes from './routes/inbox.js'
 import terminalRoutes from './routes/terminal.js'
 import terminalSavedCommandRoutes from './routes/terminal-saved-commands.js'
@@ -542,7 +541,6 @@ await fastify.register(transferRoutes, { prefix: '/api/transfers' })
 await fastify.register(friendsRoutes, { prefix: '/api/friends' })
 await fastify.register(ipAddressRoutes, { prefix: '/api' })
 await fastify.register(verificationRoutes, { prefix: '/api/verification' })
-await fastify.register(proxySitesRoutes, { prefix: '/api' })
 await fastify.register(inboxRoutes, { prefix: '/api/inbox' })
 await fastify.register(terminalRoutes, { prefix: '/api/ws/instances' })
 await fastify.register(terminalSavedCommandRoutes, { prefix: '/api/terminal-saved-commands' })

@@ -51,7 +51,7 @@ async function preflight(sourceHostId: number, targetHostId: number, ids: number
   const [sourceRow, targetRow, instances] = await Promise.all([
     prisma.host.findUniqueOrThrow({ where: { id: sourceHostId } }),
     prisma.host.findUniqueOrThrow({ where: { id: targetHostId }, include: { instances: { where: { status: { not: 'deleted' } } } } }),
-    prisma.instance.findMany({ where: { id: { in: ids }, hostId: sourceHostId }, include: { portMappings: true, proxySites: true } })
+    prisma.instance.findMany({ where: { id: { in: ids }, hostId: sourceHostId }, include: { portMappings: true } })
   ])
   if (instances.length !== ids.length) throw new Error('實例不存在或不屬於來源節點')
   if (sourceRow.architecture !== targetRow.architecture || sourceRow.instanceType !== targetRow.instanceType) throw new Error('節點架構或實例類型不相容')
@@ -59,7 +59,7 @@ async function preflight(sourceHostId: number, targetHostId: number, ids: number
   const memory = instances.reduce((n, i) => n + i.memory, 0)
   const disk = instances.reduce((n, i) => n + i.disk, 0)
   const calculated = await db.calculateHostResourcesFromInstances(targetHostId)
-  const used = { cpu: Math.max(calculated.cpuUsed, targetRow.cpuUsed), memory: Math.max(calculated.memoryUsed, targetRow.memoryUsed), disk: Math.max(calculated.diskUsed, targetRow.diskUsed) }
+  const used = { cpu: calculated.cpuUsed, memory: calculated.memoryUsed, disk: calculated.diskUsed }
   if (executing) {
     const plan = await prisma.hostMaintenancePlan.findFirst({ where: { sourceHostId, targetHostId, status: { in: ['running', 'recovering'] } }, orderBy: { id: 'desc' } })
     const reservations = (plan?.results || []) as Array<{ instanceId: number; targetRetained?: boolean; cpu?: number; memory?: number; disk?: number }>
@@ -79,7 +79,7 @@ async function preflight(sourceHostId: number, targetHostId: number, ids: number
   const poolRequirements = new Map<string, number>()
   for (const instance of instances) {
     if (!['running', 'stopped'].includes(instance.status)) throw new Error(`實例 #${instance.id} 狀態不允許搬遷`)
-    if (instance.networkMode !== 'nat' || instance.ipv6 || instance.portMappings.length || instance.proxySites.length) throw new Error(`實例 #${instance.id} 僅支援無端口映射、無反向代理的 IPv4 NAT 冷搬遷`)
+    if (instance.networkMode !== 'nat' || instance.ipv6 || instance.portMappings.length) throw new Error(`實例 #${instance.id} 僅支援無端口映射的 IPv4 NAT 冷搬遷`)
     if (!sourceRow.natPublicIp || sourceRow.natPublicIp !== targetRow.natPublicIp) throw new Error('冷搬遷需要相同對外 NAT 位址及共享網路')
     const remote = await getInstance(sourceClient, instance.incusId) as { expanded_devices?: Record<string, { type?: string; path?: string; network?: string; nictype?: string; parent?: string }> }
     const devices = Object.values(remote.expanded_devices || {})
@@ -263,9 +263,9 @@ export async function registerHostMaintenanceRoutes(fastify: FastifyInstance) {
         const target = await tx.host.findUniqueOrThrow({ where: { id: request.body.targetHostId } })
         const source = await tx.host.findUniqueOrThrow({ where: { id: sourceHostId } })
         const usage = await db.calculateHostResourcesFromInstances(target.id, tx)
-        const cpuUsed = Math.max(target.cpuUsed, usage.cpuUsed)
-        const memoryUsed = Math.max(target.memoryUsed, usage.memoryUsed)
-        const diskUsed = Math.max(target.diskUsed, usage.diskUsed)
+        const cpuUsed = usage.cpuUsed
+        const memoryUsed = usage.memoryUsed
+        const diskUsed = usage.diskUsed
         if (source.status !== 'online' || target.status !== 'online' || target.cpuAllowanceMax - cpuUsed < checked.cpu || target.memoryMax - memoryUsed < checked.memory || target.storageSize * 1024 - diskUsed < checked.disk) throw new Error('目標容量或節點狀態已改變，請重新預檢')
         await tx.host.updateMany({ where: { id: { in: hostIds } }, data: { status: 'maintenance' } })
         await tx.host.update({ where: { id: request.body.targetHostId }, data: {

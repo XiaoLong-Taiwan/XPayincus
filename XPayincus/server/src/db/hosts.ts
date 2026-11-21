@@ -171,11 +171,6 @@ export async function getHostById(id: number): Promise<Host | null> {
     cpu_allowance_max: host.cpuAllowanceMax,
     memory_max: host.memoryMax,
     instance_type: host.instanceType,
-    // Caddy 反代配置
-    caddy_enabled: host.caddyEnabled,
-    caddy_username: host.caddyUsername,
-    caddy_password: host.caddyPassword,
-    caddy_port: host.caddyPort,
     // 转移控制
     transfer_enabled: host.transferEnabled,
     // 流量配置
@@ -899,9 +894,9 @@ export async function selectAvailableHost(options: {
     const cpuUsedCalculated = calculated.cpuUsed
     const memoryUsedCalculated = calculated.memoryUsed
     const diskUsedCalculated = calculated.diskUsed
-    const cpuUsedEffective = Math.max(cpuUsedCalculated, host.cpuUsed ?? 0)
-    const memoryUsedEffective = Math.max(memoryUsedCalculated, host.memoryUsed ?? 0)
-    const diskUsedEffective = Math.max(diskUsedCalculated, host.diskUsed ?? 0)
+    const cpuUsedEffective = cpuUsedCalculated
+    const memoryUsedEffective = memoryUsedCalculated
+    const diskUsedEffective = diskUsedCalculated
 
     console.log(`[selectAvailableHost] 检查宿主机 ${host.name} (ID: ${host.id})`)
     console.log(`  资源使用�? CPU=${cpuUsedCalculated}%, Memory=${memoryUsedCalculated}MB, Disk=${diskUsedCalculated}MB`)
@@ -1136,9 +1131,9 @@ export async function selectAndReserveHostWithLock(
     const cpuUsedCalculated = calculated.cpuUsed
     const memoryUsedCalculated = calculated.memoryUsed
     const diskUsedCalculated = calculated.diskUsed
-    const cpuUsedEffective = Math.max(cpuUsedCalculated, host.cpu_used ?? 0)
-    const memoryUsedEffective = Math.max(memoryUsedCalculated, host.memory_used ?? 0)
-    const diskUsedEffective = Math.max(diskUsedCalculated, host.disk_used ?? 0)
+    const cpuUsedEffective = cpuUsedCalculated
+    const memoryUsedEffective = memoryUsedCalculated
+    const diskUsedEffective = diskUsedCalculated
 
     console.log(`[selectAndReserveHostWithLock] 检查宿主机 ${host.name} (ID: ${host.id})`)
     console.log(`  实时资源使用�? CPU=${cpuUsedCalculated}%, Memory=${memoryUsedCalculated}MB, Disk=${diskUsedCalculated}MB`)

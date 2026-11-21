@@ -47,7 +47,6 @@ import { resetInstanceCloudInitState } from '../lib/cloud-init-status.js'
 import { resolveIncusSwapValue } from '../lib/instance-swap.js'
 import { selectBindableIpv4ListenAddress } from '../lib/network-address.js'
 import { getSystemImageAvailabilityForHost } from '../db/images.js'
-import { createCaddyClient } from '../lib/caddy-client.js'
 import { resolveInstanceTrafficLimitForHost } from '../lib/traffic-multiplier.js'
 import { calculateInstanceTrafficStatus } from '../services/traffic-utils.js'
 
@@ -156,7 +155,6 @@ async function cleanupRecreatedInstanceRecords(instanceId: number, hostId: numbe
 
     await tx.snapshot.deleteMany({ where: { instanceId } })
     await tx.backup.deleteMany({ where: { instanceId } })
-    await tx.proxySite.deleteMany({ where: { instanceId } })
     await tx.backupPolicy.deleteMany({ where: { instanceId } })
     await tx.snapshotPolicy.deleteMany({ where: { instanceId } })
     await tx.trafficSnapshot.deleteMany({ where: { instanceId } })
@@ -1292,7 +1290,7 @@ async function executeRecreateTask(
     id: number; incus_id: string; name: string; user_id: number; image: string; ipv4: string | null; ipv6: string | null;
     cpu: number; memory: number; disk: number; network_mode: string; ssh_port: number | null;
     root_password: string | null; package_id: number | null; host_id: number;
-    port_limit: number | null; snapshot_limit: number | null; backup_limit: number | null; site_limit: number | null;
+    port_limit: number | null; snapshot_limit: number | null; backup_limit: number | null;
     swap_enabled?: boolean; swap_size?: number | null;
     limits_read?: string | null; limits_write?: string | null; limits_read_iops?: number | null; limits_write_iops?: number | null;
     limits_ingress?: string | null; limits_egress?: string | null; limits_processes?: number | null; limits_cpu_priority?: number | null;
@@ -1939,9 +1937,6 @@ async function executeChangeHostTask(
 
     await updateInstanceTaskProgress(task.id, 'switching_database')
 
-    const proxySites = await prisma.proxySite.findMany({
-      where: { instanceId: task.instanceId }
-    })
     let deletedPortMappingsCount = 0
     let baseTrafficLimit = pkg.monthly_traffic_limit ? BigInt(pkg.monthly_traffic_limit) : null
     if (instance.package_plan_id) {
@@ -1978,7 +1973,6 @@ async function executeChangeHostTask(
           status: { in: ['COMPLETED', 'FAILED'] }
         }
       })
-      await tx.proxySite.deleteMany({ where: { instanceId: task.instanceId } })
       await tx.backupPolicy.deleteMany({ where: { instanceId: task.instanceId } })
       await tx.snapshotPolicy.deleteMany({ where: { instanceId: task.instanceId } })
       await tx.trafficSnapshot.deleteMany({ where: { instanceId: task.instanceId } })
@@ -2061,17 +2055,6 @@ async function executeChangeHostTask(
     })
     dbSwitched = true
 
-    if (proxySites.length > 0 && sourceHost.caddy_enabled) {
-      const caddyClient = createCaddyClient({ hostId: sourceHost.id, host: '127.0.0.1', port: 2019 })
-      for (const site of proxySites) {
-        try {
-          await caddyClient.deleteSite(site.domain)
-        } catch (err) {
-          console.warn(`[ChangeHost] 删除 Caddy 站点 ${site.domain} 失败，数据库记录已清理:`, err)
-        }
-      }
-    }
-
     await updateInstanceTaskProgress(task.id, 'deleting_old')
     let sourceClient: Awaited<ReturnType<typeof getIncusClient>> | null = null
     let sourceInstanceReleased = false
@@ -2117,7 +2100,7 @@ async function executeChangeHostTask(
             }
           }
         })
-        const [sourceResourcesCalculated, targetResourcesCalculated, sourceHostAfterRelease, targetHostCurrent] = await Promise.all([
+        const [sourceResourcesCalculated, targetResourcesCalculated, sourceHostAfterRelease] = await Promise.all([
           db.calculateHostResourcesFromInstances(sourceHostId),
           db.calculateHostResourcesFromInstances(targetHostId),
           prisma.host.findUnique({
@@ -2129,24 +2112,12 @@ async function executeChangeHostTask(
               natPortsUsedCount: true
             }
           }),
-          prisma.host.findUnique({
-            where: { id: targetHostId },
-            select: {
-              cpuUsed: true,
-              memoryUsed: true,
-              diskUsed: true
-            }
-          })
         ])
-        const sourceResources = {
-          cpuUsed: Math.max(sourceResourcesCalculated.cpuUsed, sourceHostAfterRelease?.cpuUsed ?? 0),
-          memoryUsed: Math.max(sourceResourcesCalculated.memoryUsed, sourceHostAfterRelease?.memoryUsed ?? 0),
-          diskUsed: Math.max(sourceResourcesCalculated.diskUsed, sourceHostAfterRelease?.diskUsed ?? 0)
-        }
+        const sourceResources = sourceResourcesCalculated
         const targetResources = {
-          cpuUsed: Math.max(targetResourcesCalculated.cpuUsed, targetHostCurrent?.cpuUsed ?? 0),
-          memoryUsed: Math.max(targetResourcesCalculated.memoryUsed, targetHostCurrent?.memoryUsed ?? 0),
-          diskUsed: Math.max(targetResourcesCalculated.diskUsed, targetHostCurrent?.diskUsed ?? 0)
+          cpuUsed: targetResourcesCalculated.cpuUsed,
+          memoryUsed: targetResourcesCalculated.memoryUsed,
+          diskUsed: targetResourcesCalculated.diskUsed
         }
         const sourceNatPortsUsed = Math.max(actualSourcePortsUsed, sourceHostAfterRelease?.natPortsUsedCount ?? 0)
         await Promise.all([
@@ -2158,22 +2129,8 @@ async function executeChangeHostTask(
           })
         ])
       } else {
-        const [targetResourcesCalculated, targetHostCurrent] = await Promise.all([
-          db.calculateHostResourcesFromInstances(targetHostId),
-          prisma.host.findUnique({
-            where: { id: targetHostId },
-            select: {
-              cpuUsed: true,
-              memoryUsed: true,
-              diskUsed: true
-            }
-          })
-        ])
-        const targetResources = {
-          cpuUsed: Math.max(targetResourcesCalculated.cpuUsed, targetHostCurrent?.cpuUsed ?? 0),
-          memoryUsed: Math.max(targetResourcesCalculated.memoryUsed, targetHostCurrent?.memoryUsed ?? 0),
-          diskUsed: Math.max(targetResourcesCalculated.diskUsed, targetHostCurrent?.diskUsed ?? 0)
-        }
+        const targetResourcesCalculated = await db.calculateHostResourcesFromInstances(targetHostId)
+        const targetResources = targetResourcesCalculated
         await db.updateHostResources(targetHostId, targetResources)
         console.warn(`[ChangeHost] 源实例 ${oldIncusId} 未确认删除，暂不释放源节点 ${sourceHost.name} 的资源占用`)
       }
@@ -2254,8 +2211,8 @@ async function executeChangeHostTask(
  */
 async function executeCloneTask(
   task: { id: number; userId: number; instanceId: number },
-  sourceInstance: { incus_id: string; name: string; user_id: number; image: string; cpu: number; memory: number; disk: number; network_mode: string; ssh_port: number | null; root_password: string | null; package_id: number | null; package_plan_id?: number | null; host_id: number; port_limit: number | null; snapshot_limit: number | null; backup_limit: number | null; site_limit: number | null; swap_enabled?: boolean; swap_size?: number | null; storage_pool_name?: string | null },
-  host: { id: number; name: string; nat_public_ip?: string | null; ip_address?: string | null; caddy_enabled?: boolean; nat_port_start: number | null; nat_port_end: number | null; nat_ports_used_count?: number; ipv6_subnet?: string | null; ipv6_gateway?: string | null; ipv6_parent_interface?: string | null; cpu_allowance_max?: number; memory_max?: number; instance_type?: 'container' | 'vm' | 'both' },
+  sourceInstance: { incus_id: string; name: string; user_id: number; image: string; cpu: number; memory: number; disk: number; network_mode: string; ssh_port: number | null; root_password: string | null; package_id: number | null; package_plan_id?: number | null; host_id: number; port_limit: number | null; snapshot_limit: number | null; backup_limit: number | null; swap_enabled?: boolean; swap_size?: number | null; storage_pool_name?: string | null },
+  host: { id: number; name: string; nat_public_ip?: string | null; ip_address?: string | null; nat_port_start: number | null; nat_port_end: number | null; nat_ports_used_count?: number; ipv6_subnet?: string | null; ipv6_gateway?: string | null; ipv6_parent_interface?: string | null; cpu_allowance_max?: number; memory_max?: number; instance_type?: 'container' | 'vm' | 'both' },
   client: Awaited<ReturnType<typeof getIncusClient>>
 ): Promise<void> {
   await updateInstanceTaskProgress(task.id, 'cloning')
@@ -2556,7 +2513,6 @@ async function executeCloneTask(
       portLimit: sourceInstance.port_limit,
       snapshotLimit: sourceInstance.snapshot_limit,
       backupLimit: sourceInstance.backup_limit,
-      siteLimit: sourceInstance.site_limit,
       swapEnabled: sourceInstance.swap_enabled === true,
       swapSize: sourceInstance.swap_size ?? null
     })

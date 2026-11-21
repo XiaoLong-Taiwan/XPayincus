@@ -163,7 +163,6 @@ function close(): void {
               <li>{{ t('recreateModal.warningList.dataLoss') }}</li>
               <li>{{ t('recreateModal.warningList.snapshotLoss') }}</li>
               <li>{{ t('recreateModal.warningList.portMappingLoss') }}</li>
-              <li>{{ t('recreateModal.warningList.proxySiteLoss') }}</li>
               <li>{{ t('recreateModal.warningList.irreversible') }}</li>
             </ul>
           </div>

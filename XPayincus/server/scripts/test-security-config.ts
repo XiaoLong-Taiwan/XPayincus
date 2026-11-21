@@ -188,11 +188,7 @@ try {
     'OAuth state and login-code signing must use the shared JWT signing secret helper'
   )
 
-  assert.ok(
-    hostRouteSource.includes("getJwtSigningSecret('Caddy script token signing')") &&
-      hostRouteSource.includes("getJwtSigningSecret('Caddy script token verification')"),
-    'Caddy script tokens must use the shared JWT signing secret helper'
-  )
+  assert.ok(!hostRouteSource.includes('Caddy script token'), 'host routes must not expose Caddy installer tokens')
 
   for (const forbiddenPattern of [
     'fallback-secret-key',

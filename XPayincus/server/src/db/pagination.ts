@@ -521,7 +521,6 @@ export async function getInstancesPaginated(options: PaginationOptions = {}): Pr
       port_limit: i.portLimit,
       snapshot_limit: i.snapshotLimit,
       backup_limit: i.backupLimit,
-      site_limit: i.siteLimit,
       swap_enabled: i.swapEnabled,
       swap_size: i.swapSize,
       monthly_traffic_limit: i.monthlyTrafficLimit ? i.monthlyTrafficLimit.toString() : null,

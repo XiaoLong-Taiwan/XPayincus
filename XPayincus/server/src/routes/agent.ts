@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join } from 'path'
 import { fileURLToPath } from 'url'
 import { prisma } from '../db/prisma.js'
 import { createLog, LogModule, LogResult } from '../db/logs.js'
-import { decryptSensitiveData, getJwtSigningSecret } from '../lib/security.js'
+import { decryptSensitiveData } from '../lib/security.js'
 import {
   agentNonceTtlMs,
   createAgentBodyHash,
@@ -381,13 +381,6 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-function generateCaddyScriptToken(hostId: number): string {
-  const expireAt = Date.now() + 30 * 60 * 1000
-  const payload = `${hostId}:${expireAt}`
-  const signature = createHmac('sha256', getJwtSigningSecret('Caddy script token signing')).update(payload).digest('hex')
-  return Buffer.from(`${payload}:${signature}`).toString('base64url')
-}
-
 function buildAgentInstallCommand(input: {
   panelUrl: string
   binaryUrl?: string | null
@@ -410,15 +403,13 @@ function buildAgentInstallConfig(input: {
   agentId: string
   agentSecret: string
   bootstrap?: { certificate: string; installed: boolean }
-  caddyInstallUrl?: string
 }): string {
   return [
     `INCUDAL_AGENT_ID=${shellEscape(input.agentId)}`,
     `INCUDAL_AGENT_SECRET=${shellEscape(input.agentSecret)}`,
     ...(input.bootstrap ? [
       `INCUDAL_PANEL_CERTIFICATE=${shellEscape(input.bootstrap.certificate)}`,
-      `INCUDAL_HOST_INSTALLED=${shellEscape(String(input.bootstrap.installed))}`,
-      ...(input.caddyInstallUrl ? [`INCUDAL_CADDY_INSTALL_URL=${shellEscape(input.caddyInstallUrl)}`] : [])
+      `INCUDAL_HOST_INSTALLED=${shellEscape(String(input.bootstrap.installed))}`
     ] : [])
   ].join('\n') + '\n'
 }
@@ -1187,10 +1178,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
         .send(buildAgentInstallConfig({
           agentId: result.agent.agentId,
           agentSecret: result.agentSecret,
-          bootstrap: certificate ? { certificate, installed: host!.isInstalled } : undefined,
-          caddyInstallUrl: bootstrap
-            ? `${derivePanelUrl(request)}/api/hosts/caddy-script/${generateCaddyScriptToken(result.host.id)}`
-            : undefined
+          bootstrap: certificate ? { certificate, installed: host!.isInstalled } : undefined
         }))
     } catch (error) {
       if (error instanceof Error && error.message === 'AGENT_INSTALL_TOKEN_EXPIRED') {

@@ -14,7 +14,7 @@ COPY server ./server
 ENV VITE_API_BASE_URL=/api
 RUN pnpm --filter client build && pnpm --filter server build
 RUN test -s client/dist/user/index.html && test -s client/dist/admin/index.html && test -s server/dist/app.js \
-    && test -s server/templates/install.sh && test -s server/templates/agent-install.sh && test -s server/templates/caddy.sh
+    && test -s server/templates/install.sh && test -s server/templates/agent-install.sh
 
 FROM node:22-bookworm-slim AS api
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates gosu iputils-ping curl gnupg \

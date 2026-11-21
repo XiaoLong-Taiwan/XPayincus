@@ -28,7 +28,6 @@ const MaxFrame = 768 * 1024
 const MaxWSData = 64 * 1024
 const MaxConcurrent = 8
 const IncusSocket = "/var/lib/incus/unix.socket"
-const CaddyAddress = "127.0.0.1:2019"
 
 type Frame struct {
 	Type    string            `json:"type"`
@@ -70,24 +69,17 @@ func ValidatePath(target, path string, ws bool) error {
 		if u.Path != "/1.0" && !strings.HasPrefix(u.Path, "/1.0/") {
 			return errors.New("invalid incus path")
 		}
-	} else if target == "caddy" {
-		if u.Path != "/config/" && !strings.HasPrefix(u.Path, "/config/") && !strings.HasPrefix(u.Path, "/id/") {
-			return errors.New("invalid caddy path")
-		}
 	} else {
 		return errors.New("invalid target")
 	}
 	return nil
 }
 
-func localClient(target string) *http.Client {
+func localClient() *http.Client {
 	transport := &http.Transport{DisableKeepAlives: true, ResponseHeaderTimeout: 30 * time.Second, MaxResponseHeaderBytes: 16384}
 	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		dialer := net.Dialer{Timeout: 5 * time.Second}
-		if target == "incus" {
-			return dialer.DialContext(ctx, "unix", IncusSocket)
-		}
-		return dialer.DialContext(ctx, "tcp", CaddyAddress)
+		return dialer.DialContext(ctx, "unix", IncusSocket)
 	}
 	return &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
@@ -114,9 +106,6 @@ func Execute(ctx context.Context, f Frame, client *http.Client) Frame {
 	if err != nil {
 		result.Error = "INVALID_REQUEST"
 		return result
-	}
-	if f.Target == "caddy" {
-		req.Host = CaddyAddress
 	}
 	for k, v := range f.Headers {
 		name := strings.ToLower(k)
@@ -218,7 +207,7 @@ func connect(parent context.Context, cfg config.Config, endpointURL string) erro
 	if conn.Subprotocol() != "xpayincus-tunnel-v1" {
 		return errors.New("tunnel protocol mismatch")
 	}
-	return serveConnection(parent, conn, map[string]*http.Client{"incus": localClient("incus"), "caddy": localClient("caddy")})
+	return serveConnection(parent, conn, map[string]*http.Client{"incus": localClient()})
 }
 
 func serveConnection(parent context.Context, conn *websocket.Conn, clients map[string]*http.Client) error {

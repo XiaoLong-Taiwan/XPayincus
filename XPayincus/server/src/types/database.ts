@@ -99,11 +99,6 @@ export interface Host {
   instance_type?: 'container' | 'vm' | 'both'
   nat_ports_used_count?: number
   tags?: string[]
-  // Caddy 反代配置
-  caddy_enabled?: boolean
-  caddy_username?: string | null
-  caddy_password?: string | null
-  caddy_port?: number
   // 转移控制
   transfer_enabled?: boolean
   // 流量配置
@@ -151,7 +146,6 @@ export interface Package {
   port_limit: number        // 端口映射数上限
   snapshot_limit: number    // 快照数上限
   backup_limit: number      // 备份数上限
-  site_limit: number        // 反代站点数上限
   monthly_traffic_limit: string | null  // BigInt as string
   traffic_reset_price?: number // 用户自助重置月流量价格（元）
   // 存储 I/O 限制
@@ -212,7 +206,6 @@ export interface Instance {
   port_limit: number | null
   snapshot_limit: number | null
   backup_limit: number | null
-  site_limit: number | null
   swap_enabled: boolean
   swap_size: number | null
   monthly_traffic_limit: string | null  // BigInt as string (Bytes)

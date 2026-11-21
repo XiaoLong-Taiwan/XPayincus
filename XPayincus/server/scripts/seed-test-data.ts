@@ -69,7 +69,6 @@ type SeedPlanSpec = {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   trafficLimit: bigint
   trafficLimitSpeed: string
@@ -98,7 +97,6 @@ type SeedPackageSpec = {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   monthlyTrafficLimit: bigint | null
   ioLimitMode: IoLimitMode
   limitsRead: string
@@ -341,7 +339,6 @@ async function ensurePackage(spec: SeedPackageSpec): Promise<number> {
     portLimit: spec.portLimit,
     snapshotLimit: spec.snapshotLimit,
     backupLimit: spec.backupLimit,
-    siteLimit: spec.siteLimit,
     monthlyTrafficLimit: spec.monthlyTrafficLimit,
     ioLimitMode: spec.ioLimitMode,
     limitsRead: spec.limitsRead,
@@ -401,7 +398,6 @@ async function ensurePlans(packageId: number, plans: SeedPlanSpec[]): Promise<vo
         portLimit: plan.portLimit,
         snapshotLimit: plan.snapshotLimit,
         backupLimit: plan.backupLimit,
-        siteLimit: plan.siteLimit,
         swapSize: plan.swapSize,
         trafficLimit: plan.trafficLimit,
         trafficLimitSpeed: plan.trafficLimitSpeed,
@@ -424,7 +420,6 @@ async function ensurePlans(packageId: number, plans: SeedPlanSpec[]): Promise<vo
       portLimit: plan.portLimit,
       snapshotLimit: plan.snapshotLimit,
       backupLimit: plan.backupLimit,
-      siteLimit: plan.siteLimit,
       swapSize: plan.swapSize,
       trafficLimit: plan.trafficLimit,
       trafficLimitSpeed: plan.trafficLimitSpeed,
@@ -629,7 +624,6 @@ const seedPackages: SeedPackageSpec[] = [
     portLimit: 40,
     snapshotLimit: 8,
     backupLimit: 4,
-    siteLimit: 12,
     monthlyTrafficLimit: bytesFromGb(800),
     ioLimitMode: 'throughput',
     limitsRead: '250MB',
@@ -658,7 +652,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 10,
         snapshotLimit: 3,
         backupLimit: 1,
-        siteLimit: 2,
         swapSize: 0,
         trafficLimit: bytesFromGb(120),
         trafficLimitSpeed: '3Mbit',
@@ -678,7 +671,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 20,
         snapshotLimit: 5,
         backupLimit: 2,
-        siteLimit: 5,
         swapSize: 512,
         trafficLimit: bytesFromGb(260),
         trafficLimitSpeed: '5Mbit',
@@ -698,7 +690,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 35,
         snapshotLimit: 8,
         backupLimit: 4,
-        siteLimit: 8,
         swapSize: 1024,
         trafficLimit: bytesFromGb(520),
         trafficLimitSpeed: '10Mbit',
@@ -728,7 +719,6 @@ const seedPackages: SeedPackageSpec[] = [
     portLimit: 20,
     snapshotLimit: 6,
     backupLimit: 4,
-    siteLimit: 2,
     monthlyTrafficLimit: bytesFromGb(1000),
     ioLimitMode: 'iops',
     limitsRead: '300MB',
@@ -757,7 +747,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 6,
         snapshotLimit: 2,
         backupLimit: 1,
-        siteLimit: 0,
         swapSize: 0,
         trafficLimit: bytesFromGb(200),
         trafficLimitSpeed: '5Mbit',
@@ -777,7 +766,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 12,
         snapshotLimit: 4,
         backupLimit: 2,
-        siteLimit: 1,
         swapSize: 0,
         trafficLimit: bytesFromGb(400),
         trafficLimitSpeed: '10Mbit',
@@ -807,7 +795,6 @@ const seedPackages: SeedPackageSpec[] = [
     portLimit: 32,
     snapshotLimit: 6,
     backupLimit: 3,
-    siteLimit: 6,
     monthlyTrafficLimit: bytesFromGb(500),
     ioLimitMode: 'throughput',
     limitsRead: '180MB',
@@ -836,7 +823,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 8,
         snapshotLimit: 2,
         backupLimit: 1,
-        siteLimit: 1,
         swapSize: 0,
         trafficLimit: bytesFromGb(80),
         trafficLimitSpeed: '2Mbit',
@@ -856,7 +842,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 16,
         snapshotLimit: 4,
         backupLimit: 2,
-        siteLimit: 3,
         swapSize: 512,
         trafficLimit: bytesFromGb(180),
         trafficLimitSpeed: '5Mbit',
@@ -876,7 +861,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 24,
         snapshotLimit: 6,
         backupLimit: 3,
-        siteLimit: 5,
         swapSize: 1024,
         trafficLimit: bytesFromGb(320),
         trafficLimitSpeed: '8Mbit',
@@ -906,7 +890,6 @@ const seedPackages: SeedPackageSpec[] = [
     portLimit: 28,
     snapshotLimit: 5,
     backupLimit: 3,
-    siteLimit: 4,
     monthlyTrafficLimit: bytesFromGb(420),
     ioLimitMode: 'throughput',
     limitsRead: '200MB',
@@ -935,7 +918,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 10,
         snapshotLimit: 2,
         backupLimit: 1,
-        siteLimit: 1,
         swapSize: 0,
         trafficLimit: bytesFromGb(100),
         trafficLimitSpeed: '3Mbit',
@@ -955,7 +937,6 @@ const seedPackages: SeedPackageSpec[] = [
         portLimit: 20,
         snapshotLimit: 4,
         backupLimit: 2,
-        siteLimit: 2,
         swapSize: 512,
         trafficLimit: bytesFromGb(220),
         trafficLimitSpeed: '6Mbit',

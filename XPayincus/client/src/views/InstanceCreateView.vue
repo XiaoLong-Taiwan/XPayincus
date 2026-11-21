@@ -60,7 +60,6 @@ interface PackagePlan {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   trafficLimit: string
   trafficLimitSpeed: string

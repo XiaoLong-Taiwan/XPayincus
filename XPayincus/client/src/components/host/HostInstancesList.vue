@@ -32,7 +32,6 @@ interface Instance {
   port_limit?: number | null
   snapshot_limit?: number | null
   backup_limit?: number | null
-  site_limit?: number | null
   swapSize?: number | null
   packagePlanId?: number | null
   instanceType?: 'container' | 'vm'

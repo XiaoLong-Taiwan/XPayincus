@@ -27,9 +27,6 @@ func TestDestinationValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if ValidatePath("caddy", "/load", false) == nil || ValidatePath("anything", "/1.0", false) == nil {
-		t.Fatal("accepted arbitrary target")
-	}
 	if ValidatePath("incus", "/1.0/operations/abc-123/websocket?secret=12345678", true) != nil {
 		t.Fatal("valid websocket rejected")
 	}
@@ -104,13 +101,11 @@ func TestExecuteLimitsRedirectAndCancellation(t *testing.T) {
 }
 
 func TestExecuteUsesTargetRequestHost(t *testing.T) {
-	var incusHost, caddyHost string
+	var incusHost string
 	client := &http.Client{Transport: streamRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
 		case "/1.0":
 			incusHost = r.Host
-		case "/config/":
-			caddyHost = r.Host
 		default:
 			t.Fatalf("unexpected request path: %s", r.URL.Path)
 		}
@@ -118,7 +113,6 @@ func TestExecuteUsesTargetRequestHost(t *testing.T) {
 	})}
 	for _, request := range []Frame{
 		{Target: "incus", Method: "GET", Path: "/1.0", Timeout: 1000},
-		{Target: "caddy", Method: "GET", Path: "/config/", Timeout: 1000},
 	} {
 		if result := Execute(context.Background(), request, client); result.Error != "" {
 			t.Fatalf("request failed: %+v", result)
@@ -126,9 +120,6 @@ func TestExecuteUsesTargetRequestHost(t *testing.T) {
 	}
 	if incusHost != "localhost" {
 		t.Fatalf("Incus Host = %q, want localhost", incusHost)
-	}
-	if caddyHost != CaddyAddress {
-		t.Fatalf("Caddy Host = %q, want %q", caddyHost, CaddyAddress)
 	}
 }
 

@@ -40,8 +40,7 @@ const quotaRoute = source.slice(routeStart, routeEnd)
 for (const [field, existingColumn] of [
   ['portLimit', 'port_limit'],
   ['snapshotLimit', 'snapshot_limit'],
-  ['backupLimit', 'backup_limit'],
-  ['siteLimit', 'site_limit']
+  ['backupLimit', 'backup_limit']
 ] as const) {
   assert.ok(
     quotaRoute.includes(`const new${field[0].toUpperCase()}${field.slice(1)} = ${field} !== undefined ? ${field} : instance.${existingColumn}`),
@@ -52,9 +51,7 @@ for (const [field, existingColumn] of [
 for (const unsafePattern of [
   'portLimit || null',
   'snapshotLimit || null',
-  'backupLimit || null',
-  'siteLimit || null',
-  'siteLimit === 0 ? 0 :'
+  'backupLimit || null'
 ] as const) {
   assert.ok(
     !quotaRoute.includes(unsafePattern),
@@ -64,9 +61,8 @@ for (const unsafePattern of [
 
 assert.ok(
   quotaRoute.includes("snapshotLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 }") &&
-    quotaRoute.includes("backupLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 }") &&
-    quotaRoute.includes("siteLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 }"),
-  'snapshot, backup, and site quota schemas must allow explicit zero as no quota'
+    quotaRoute.includes("backupLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 }"),
+  'snapshot and backup quota schemas must allow explicit zero as no quota'
 )
 
 assert.ok(
@@ -77,15 +73,13 @@ assert.ok(
 
 assert.ok(
   quotaRoute.includes('newSnapshotLimit !== null && (newSnapshotLimit < 0 || newSnapshotLimit > 1000)') &&
-    quotaRoute.includes('newBackupLimit !== null && (newBackupLimit < 0 || newBackupLimit > 1000)') &&
-    quotaRoute.includes('newSiteLimit !== null && (newSiteLimit < 0 || newSiteLimit > 1000)'),
-  'snapshot, backup, and site range checks must allow zero but cap values at 1000'
+    quotaRoute.includes('newBackupLimit !== null && (newBackupLimit < 0 || newBackupLimit > 1000)'),
+  'snapshot and backup range checks must allow zero but cap values at 1000'
 )
 
 assert.ok(
   quotaRoute.includes('snapshotLimit !== undefined ? (snapshotLimit ?? undefined) : undefined') &&
-    quotaRoute.includes('backupLimit !== undefined ? (backupLimit ?? undefined) : undefined') &&
-    quotaRoute.includes('siteLimit !== undefined ? (siteLimit ?? undefined) : undefined'),
+    quotaRoute.includes('backupLimit !== undefined ? (backupLimit ?? undefined) : undefined'),
   'quota persistence must keep explicit zero while still allowing null to clear the override'
 )
 

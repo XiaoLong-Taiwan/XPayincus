@@ -701,7 +701,7 @@ function getInstanceNetworkBadgeClass(instance: Instance): string {
 }
 
 function getInstanceQuotaSummary(instance: Instance): string {
-  return `${(instance as any).portLimit ?? '-'} ${t('instance.mobileCard.ports')} / ${(instance as any).snapshotLimit ?? '-'} ${t('instance.mobileCard.snapshots')} / ${(instance as any).siteLimit ?? '-'} ${t('instance.mobileCard.sites')}`
+  return `${(instance as any).portLimit ?? '-'} ${t('instance.mobileCard.ports')} / ${(instance as any).snapshotLimit ?? '-'} ${t('instance.mobileCard.snapshots')}`
 }
 
 function formatNetworkRate(value: unknown): string | null {

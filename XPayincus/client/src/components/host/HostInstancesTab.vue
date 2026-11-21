@@ -70,24 +70,20 @@ interface Instance {
   port_limit?: number | null
   snapshot_limit?: number | null
   backup_limit?: number | null
-  site_limit?: number | null
   remaining_quota?: {
     port: number
     snapshot: number
     backup: number
-    site: number
   }
   quota_usage?: {
     port: number
     snapshot: number
     backup: number
-    site: number
   }
   effective_quota_limit?: {
     port: number
     snapshot: number
     backup: number
-    site: number
   }
   swapEnabled?: boolean
   swapSize?: number | null
@@ -1054,18 +1050,17 @@ function getSummaryMeta(instance: Instance): string[] {
   return meta
 }
 
-function getQuotaLimit(instance: Instance, key: 'port' | 'snapshot' | 'site'): number | null {
+function getQuotaLimit(instance: Instance, key: 'port' | 'snapshot'): number | null {
   const detailLimit = instance.effective_quota_limit?.[key]
   if (detailLimit !== undefined && detailLimit !== null) {
     return detailLimit
   }
 
   if (key === 'port') return instance.port_limit ?? 20
-  if (key === 'snapshot') return instance.snapshot_limit ?? 5
-  return instance.site_limit ?? null
+  return instance.snapshot_limit ?? 5
 }
 
-function getQuotaUsage(instance: Instance, key: 'port' | 'snapshot' | 'site'): number | null {
+function getQuotaUsage(instance: Instance, key: 'port' | 'snapshot'): number | null {
   const detailUsage = instance.quota_usage?.[key]
   if (detailUsage !== undefined && detailUsage !== null) {
     return detailUsage
@@ -1102,10 +1097,6 @@ function getQuotaItems(instance: Instance): Array<{ label: string; value: string
       label: t('host.batchConfig.snapshotLimit'),
       value: formatQuotaPair(getQuotaUsage(instance, 'snapshot'), getQuotaLimit(instance, 'snapshot'))
     },
-    {
-      label: t('host.batchConfig.siteLimit'),
-      value: formatQuotaPair(getQuotaUsage(instance, 'site'), getQuotaLimit(instance, 'site'))
-    }
   ]
 }
 

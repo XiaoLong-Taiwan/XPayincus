@@ -34,7 +34,6 @@ const form = ref({
   // 配额限制
   portLimit: '',
   snapshotLimit: '',
-  siteLimit: '',
   // 容器权限
   nested: null as boolean | null,
   privileged: null as boolean | null,
@@ -64,7 +63,6 @@ const enabledFields = ref({
   swapSize: false,
   portLimit: false,
   snapshotLimit: false,
-  siteLimit: false,
   nested: false,
   privileged: false,
   limitsRead: false,
@@ -162,9 +160,6 @@ function buildConfig(): Record<string, unknown> {
   }
   if (enabledFields.value.snapshotLimit) {
     config.snapshotLimit = form.value.snapshotLimit ? parseInt(form.value.snapshotLimit, 10) : null
-  }
-  if (enabledFields.value.siteLimit) {
-    config.siteLimit = form.value.siteLimit ? parseInt(form.value.siteLimit, 10) : null
   }
   if (enabledFields.value.nested) {
     config.nested = form.value.nested
@@ -569,9 +564,6 @@ function normalizeStorageLimit(value: string): string | null {
                       <input v-model="form.snapshotLimit" type="number" min="0" :disabled="!enabledFields.snapshotLimit" :placeholder="t('host.batchConfig.placeholder.limit')" class="input flex-1" />
                     </div>
                     <div class="flex items-center gap-3">
-                      <input v-model="enabledFields.siteLimit" type="checkbox" class="rounded" />
-                      <label class="w-24 text-sm text-themed-secondary">{{ t('host.batchConfig.siteLimit') }}</label>
-                      <input v-model="form.siteLimit" type="number" min="0" :disabled="!enabledFields.siteLimit" :placeholder="t('host.batchConfig.placeholder.limit')" class="input flex-1" />
                     </div>
                   </div>
                 </div>

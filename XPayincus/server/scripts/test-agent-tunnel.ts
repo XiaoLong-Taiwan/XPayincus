@@ -6,11 +6,9 @@ import { request } from 'undici'
 import { AgentTunnelError, attachAgentTunnel, getAgentTunnel, closeAllAgentTunnels, validateTunnelPath, TUNNEL_MAX_BODY } from '../src/lib/agent-tunnel.js'
 import { AgentTunnelDispatcher } from '../src/lib/agent-tunnel-dispatcher.js'
 import { IncusClient } from '../src/lib/incus/incus-client.js'
-import { CaddyClient } from '../src/lib/caddy-client.js'
 import './test-agent-tunnel-lifecycle.js'
 
 for (const path of ['https://evil.test/1.0', '//evil.test/1.0', '/1.0/../config/', '/1.0/%2e%2e/config/', '/1.0\\evil', '/1.0#x']) assert.throws(() => validateTunnelPath('incus', path))
-assert.throws(() => validateTunnelPath('caddy', '/load'))
 assert.throws(() => validateTunnelPath('incus', '/1.0/events', true))
 assert.throws(() => validateTunnelPath('incus', '/1.0/operations/abc/websocket?secret=12345678&secret=abcdefgh', true))
 validateTunnelPath('incus', '/1.0/operations/abc/websocket?secret=12345678', true)
@@ -28,7 +26,7 @@ agent.on('message', raw => {
   const frame = JSON.parse(raw.toString())
   received.push(frame)
   if (frame.type === 'request' && respond) {
-    const data = frame.target === 'incus' ? { type: 'sync', metadata: { ok: true } } : { apps: {} }
+    const data = { type: 'sync', metadata: { ok: true } }
     const body = frame.path === '/1.0/large' ? Buffer.alloc(TUNNEL_MAX_BODY) : Buffer.from(JSON.stringify(data))
     agent.send(JSON.stringify({ type: 'response', id: frame.id, status: frame.path === '/config/missing' ? 404 : 200, headers: { 'content-type': 'application/json' }, body: body.toString('base64') }))
   }
@@ -55,8 +53,6 @@ try {
   const client = new IncusClient({ hostId: 1, url: 'https://must-never-connect.invalid:8443', certPath: null, keyPath: null })
   assert.deepEqual(await client.connect(), { ok: true })
   assert.deepEqual(await client.getResources(), { ok: true })
-  const caddy = new CaddyClient({ hostId: 1, host: 'must-never-connect.invalid', port: 8444, username: 'unused', password: 'unused' })
-  assert.deepEqual(await caddy.getConfig(), { apps: {} })
   const stream = await connection.openWebSocket('/1.0/operations/abc/websocket?secret=12345678')
   const message = once(stream, 'message')
   stream.send(Buffer.from([0, 1, 255]))
@@ -74,19 +70,13 @@ try {
   while (!received.some(frame => frame.type === 'cancel')) await once(agent, 'message')
   const canceledId = received.find(frame => frame.type === 'cancel')!.id
   assert.equal(received.filter(frame => frame.type === 'request' && frame.id === canceledId).length, 1)
-  const caddyRequests = received.filter(frame => frame.type === 'request' && frame.target === 'caddy').length
-  const disconnectedCaddy = assert.rejects(caddy.getConfig(), (error: unknown) =>
-    error instanceof AgentTunnelError && error.code === 'TUNNEL_DISCONNECTED' && error.outcomeUnknown)
-  while (received.filter(frame => frame.type === 'request' && frame.target === 'caddy').length === caddyRequests) await once(agent, 'message')
   const pending = Array.from({ length: 7 }, () => connection.request('incus', 'POST', '/1.0/instances'))
   const settled = Promise.allSettled(pending)
   await assert.rejects(connection.request('incus', 'GET', '/1.0'), /CAPACITY/)
   agent.terminate()
   const results = await settled
-  await disconnectedCaddy
   assert.ok(results.every(result => result.status === 'rejected' && result.reason instanceof AgentTunnelError && result.reason.outcomeUnknown))
   assert.throws(() => getAgentTunnel(1), /OFFLINE/)
-  await assert.rejects(caddy.getConfig(), (error: unknown) => error instanceof AgentTunnelError && error.code === 'TUNNEL_OFFLINE')
   await client.close()
   console.log('agent tunnel HTTP/WS, clients, bounds and disconnect behavior tests passed')
 } finally {

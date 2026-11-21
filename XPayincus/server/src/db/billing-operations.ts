@@ -926,7 +926,6 @@ export async function performPlanChange(
         portLimit: newPlan.portLimit,
         snapshotLimit: newPlan.snapshotLimit,
         backupLimit: newPlan.backupLimit,
-        siteLimit: newPlan.siteLimit,
         swapEnabled: isVmPackage ? false : instance.swapEnabled,
         swapSize: isVmPackage
           ? null

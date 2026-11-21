@@ -56,7 +56,6 @@ export async function getInstancesByUserId(userId: number): Promise<Array<Instan
     port_limit: inst.portLimit,
     snapshot_limit: inst.snapshotLimit,
     backup_limit: inst.backupLimit,
-    site_limit: inst.siteLimit,
     swap_enabled: inst.swapEnabled,
     swap_size: inst.swapSize,
     monthly_traffic_limit: inst.monthlyTrafficLimit ? inst.monthlyTrafficLimit.toString() : null,
@@ -139,7 +138,6 @@ export async function getAllInstances(): Promise<Array<Instance & {
     port_limit: inst.portLimit,
     snapshot_limit: inst.snapshotLimit,
     backup_limit: inst.backupLimit,
-    site_limit: inst.siteLimit,
     swap_enabled: inst.swapEnabled,
     swap_size: inst.swapSize,
     monthly_traffic_limit: inst.monthlyTrafficLimit ? inst.monthlyTrafficLimit.toString() : null,
@@ -230,7 +228,6 @@ export async function getInstanceById(id: number): Promise<(Instance & {
     port_limit: inst.portLimit,
     snapshot_limit: inst.snapshotLimit,
     backup_limit: inst.backupLimit,
-    site_limit: inst.siteLimit,
     swap_enabled: inst.swapEnabled,
     swap_size: inst.swapSize,
     monthly_traffic_limit: inst.monthlyTrafficLimit ? inst.monthlyTrafficLimit.toString() : null,
@@ -278,7 +275,6 @@ export async function updateInstanceQuota(instanceId: number, data: {
   portLimit?: number | null
   snapshotLimit?: number | null
   backupLimit?: number | null
-  siteLimit?: number | null
 }): Promise<void> {
   return await updateInstance(instanceId, data)
 }
@@ -306,7 +302,6 @@ export async function createInstance(data: {
   portLimit?: number | null
   snapshotLimit?: number | null
   backupLimit?: number | null
-  siteLimit?: number | null
   swapEnabled?: boolean
   swapSize?: number | null
 }): Promise<number> {
@@ -332,7 +327,6 @@ export async function createInstance(data: {
       portLimit: data.portLimit ?? null,
       snapshotLimit: data.snapshotLimit ?? null,
       backupLimit: data.backupLimit ?? null,
-      siteLimit: data.siteLimit ?? null,
       swapEnabled: data.swapEnabled ?? false,
       swapSize: data.swapSize ?? null
     }
@@ -392,7 +386,6 @@ export async function updateInstance(id: number, data: {
   portLimit?: number | null
   snapshotLimit?: number | null
   backupLimit?: number | null
-  siteLimit?: number | null
   swapEnabled?: boolean
   swapSize?: number | null
   storagePoolName?: string | null
@@ -406,8 +399,6 @@ export async function updateInstance(id: number, data: {
     portLimit?: number | null
     snapshotLimit?: number | null
     backupLimit?: number | null
-    siteLimit?: number | null
-    swapEnabled?: boolean
     swapSize?: number | null
     storagePoolName?: string | null
   } = {}
@@ -420,8 +411,6 @@ export async function updateInstance(id: number, data: {
   if (data.portLimit !== undefined) updateData.portLimit = data.portLimit ?? null
   if (data.snapshotLimit !== undefined) updateData.snapshotLimit = data.snapshotLimit ?? null
   if (data.backupLimit !== undefined) updateData.backupLimit = data.backupLimit ?? null
-  if (data.siteLimit !== undefined) updateData.siteLimit = data.siteLimit ?? null
-  if (data.swapEnabled !== undefined) updateData.swapEnabled = data.swapEnabled
   if (data.swapSize !== undefined) updateData.swapSize = data.swapSize ?? null
   if (data.storagePoolName !== undefined) updateData.storagePoolName = data.storagePoolName ?? null
 

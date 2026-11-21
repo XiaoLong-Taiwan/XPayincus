@@ -72,7 +72,6 @@ interface BatchConfigBody {
     portLimit?: number | null
     snapshotLimit?: number | null
     backupLimit?: number | null
-    siteLimit?: number | null
     // 容器权限（需要同步到 Incus）
     nested?: boolean
     privileged?: boolean
@@ -144,7 +143,6 @@ export default async function batchConfigRoutes(fastify: FastifyInstance) {
               portLimit: { type: ['integer', 'null'], minimum: 1, maximum: 1000 },
               snapshotLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 },
               backupLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 },
-              siteLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 },
               // 容器权限
               nested: { type: 'boolean' },
               privileged: { type: 'boolean' },
@@ -569,12 +567,11 @@ async function updateSingleInstance(
 
     // 4. 更新数据库中的配额限制
     if (config.portLimit !== undefined || config.snapshotLimit !== undefined ||
-        config.backupLimit !== undefined || config.siteLimit !== undefined) {
+        config.backupLimit !== undefined) {
       await db.updateInstanceQuota(instance.id, {
         portLimit: config.portLimit,
         snapshotLimit: config.snapshotLimit,
         backupLimit: config.backupLimit,
-        siteLimit: config.siteLimit
       })
     }
 

@@ -75,7 +75,7 @@ esac
 
 source_root="$(cd -- "$base/../.." && pwd -P)"
 if [[ -d "$base/source" ]]; then source_root="$base/source"; fi
-required_files=(package.json pnpm-lock.yaml pnpm-workspace.yaml client/package.json client/index.html client/vite.config.ts client/public/runtime-config.js client/src/utils/runtime-config.ts server/package.json server/tsconfig.json server/src/app.ts server/prisma.config.ts server/prisma/schema.prisma server/prisma/migrations/migration_lock.toml server/templates/install.sh server/templates/agent-install.sh server/templates/caddy.sh deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template deploy/compose/web-entrypoint.sh)
+required_files=(package.json pnpm-lock.yaml pnpm-workspace.yaml client/package.json client/index.html client/vite.config.ts client/public/runtime-config.js client/src/utils/runtime-config.ts server/package.json server/tsconfig.json server/src/app.ts server/prisma.config.ts server/prisma/schema.prisma server/prisma/migrations/migration_lock.toml server/templates/install.sh server/templates/agent-install.sh deploy/compose/Dockerfile deploy/compose/Dockerfile.dockerignore deploy/compose/api-entrypoint.sh deploy/compose/nginx.conf.template deploy/compose/web-entrypoint.sh)
 check_sources() {
   local required_file
   for required_file in "${required_files[@]}"; do

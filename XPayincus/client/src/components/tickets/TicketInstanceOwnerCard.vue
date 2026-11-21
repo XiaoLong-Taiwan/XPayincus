@@ -216,7 +216,7 @@ function getSwapDisplay(): string {
   return `${formatMemory(detailConfig.value.swap.sizeMb)}`
 }
 
-function getQuotaLimit(key: 'port' | 'snapshot' | 'backup' | 'site'): number | null {
+function getQuotaLimit(key: 'port' | 'snapshot' | 'backup'): number | null {
   const detailLimit = mergedInstance.value.effective_quota_limit?.[key]
   if (detailLimit !== undefined && detailLimit !== null) {
     return detailLimit
@@ -225,10 +225,10 @@ function getQuotaLimit(key: 'port' | 'snapshot' | 'backup' | 'site'): number | n
   if (key === 'port') return mergedInstance.value.port_limit ?? 20
   if (key === 'snapshot') return mergedInstance.value.snapshot_limit ?? 5
   if (key === 'backup') return mergedInstance.value.backup_limit ?? 3
-  return mergedInstance.value.site_limit ?? null
+  return mergedInstance.value.backup_limit ?? null
 }
 
-function getQuotaUsage(key: 'port' | 'snapshot' | 'backup' | 'site'): number | null {
+function getQuotaUsage(key: 'port' | 'snapshot' | 'backup'): number | null {
   const detailUsage = mergedInstance.value.quota_usage?.[key]
   if (detailUsage !== undefined && detailUsage !== null) {
     return detailUsage
@@ -258,7 +258,6 @@ function formatQuotaPair(used: number | null, limit: number | null): string {
 const quotaCards = computed(() => [
   { key: 'port', label: t('host.batchConfig.portLimit'), value: formatQuotaPair(getQuotaUsage('port'), getQuotaLimit('port')) },
   { key: 'snapshot', label: t('host.batchConfig.snapshotLimit'), value: formatQuotaPair(getQuotaUsage('snapshot'), getQuotaLimit('snapshot')) },
-  { key: 'site', label: t('host.batchConfig.siteLimit'), value: formatQuotaPair(getQuotaUsage('site'), getQuotaLimit('site')) },
   { key: 'backup', label: t('host.batchConfig.backupLimit'), value: formatQuotaPair(getQuotaUsage('backup'), getQuotaLimit('backup')) }
 ])
 

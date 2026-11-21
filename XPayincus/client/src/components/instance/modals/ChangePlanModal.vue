@@ -27,7 +27,6 @@ interface PackagePlanOption {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   monthlyTrafficLimit: string | null
   isActive: boolean

@@ -14,7 +14,6 @@ type SeedNetworkMode = 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6
 type SeedInstanceStatus = 'running' | 'stopped' | 'suspended' | 'error'
 type SeedTrafficStatus = 'NORMAL' | 'WARNING' | 'LIMITED'
 type SeedProtocol = 'tcp' | 'udp'
-type SeedProxyStatus = 'pending' | 'active' | 'error'
 type SeedBackupStatus = 'ready' | 'error'
 type SeedTicketPriority = 'low' | 'normal' | 'high' | 'urgent'
 type SeedTicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
@@ -65,7 +64,6 @@ type SeedHostSpec = {
   storageSize: number
   cpuAllowanceMax: number
   memoryMax: number
-  caddyEnabled: boolean
 }
 
 type SeedStoragePoolSpec = {
@@ -84,7 +82,6 @@ type SeedPlanSpec = {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   trafficLimit: bigint
   trafficLimitSpeed: string
@@ -114,7 +111,6 @@ type SeedPackageSpec = {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   monthlyTrafficLimit: bigint
   ioLimitMode: 'throughput' | 'iops'
   limitsRead: string
@@ -338,7 +334,6 @@ function createHostSpec(
     storageSize: 200 + index * 15,
     cpuAllowanceMax: 2200 + index * 180,
     memoryMax: 65536 + index * 4096,
-    caddyEnabled: index % 2 === 0
   }
 }
 
@@ -434,7 +429,6 @@ function buildPackageSpecs(): SeedPackageSpec[] {
         portLimit: 24,
         snapshotLimit: 5,
         backupLimit: 3,
-        siteLimit: 4,
         monthlyTrafficLimit: bytesFromGb(480 + ownerIndex * 40),
         ioLimitMode: ownerIndex % 2 === 0 ? 'throughput' : 'iops',
         globalQuotaMultiplier: 1.5
@@ -456,7 +450,6 @@ function buildPackageSpecs(): SeedPackageSpec[] {
         portLimit: 28,
         snapshotLimit: 6,
         backupLimit: 3,
-        siteLimit: 5,
         monthlyTrafficLimit: bytesFromGb(560 + ownerIndex * 40),
         ioLimitMode: 'throughput',
         globalQuotaMultiplier: 1.8
@@ -478,7 +471,6 @@ function buildPackageSpecs(): SeedPackageSpec[] {
         portLimit: thirdMode === 'ipv6_only' ? 0 : 18,
         snapshotLimit: 4,
         backupLimit: 2,
-        siteLimit: 4,
         monthlyTrafficLimit: bytesFromGb(360 + ownerIndex * 30),
         ioLimitMode: 'throughput',
         globalQuotaMultiplier: 1.2
@@ -500,7 +492,6 @@ function buildPackageSpecs(): SeedPackageSpec[] {
         portLimit: 10,
         snapshotLimit: 4,
         backupLimit: 3,
-        siteLimit: 1,
         monthlyTrafficLimit: bytesFromGb(700 + ownerIndex * 50),
         ioLimitMode: 'iops',
         globalQuotaMultiplier: 1.0
@@ -528,7 +519,6 @@ function createPackageSpec(input: {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   monthlyTrafficLimit: bigint
   ioLimitMode: 'throughput' | 'iops'
   globalQuotaMultiplier: number | null
@@ -552,7 +542,6 @@ function createPackageSpec(input: {
       portLimit: input.networkMode === 'ipv6_only' ? 0 : Math.max(0, Math.min(input.portLimit, 6 + index * (isVm ? 2 : 6))),
       snapshotLimit: Math.min(input.snapshotLimit, 2 + index),
       backupLimit: Math.min(input.backupLimit, 1 + Math.floor(index / 1)),
-      siteLimit: isVm ? Math.min(input.siteLimit, index === 2 ? 1 : 0) : Math.min(input.siteLimit, 1 + index * 2),
       swapSize: isVm ? 0 : index === 0 ? 0 : index * 512,
       trafficLimit: bytesFromGb((isVm ? 180 : 90) + index * (isVm ? 160 : 80) + input.index * 5),
       trafficLimitSpeed: ['2Mbit', '5Mbit', '10Mbit'][index],
@@ -583,7 +572,6 @@ function createPackageSpec(input: {
     portLimit: input.portLimit,
     snapshotLimit: input.snapshotLimit,
     backupLimit: input.backupLimit,
-    siteLimit: input.siteLimit,
     monthlyTrafficLimit: input.monthlyTrafficLimit,
     ioLimitMode: input.ioLimitMode,
     limitsRead: isVm ? '350MB' : '220MB',
@@ -819,10 +807,6 @@ async function syncHosts(userIds: Map<string, number>): Promise<Map<string, numb
         ipv6ParentInterface: 'eth0',
         enableApi: true,
         isInstalled: true,
-        caddyEnabled: host.caddyEnabled,
-        caddyUsername: host.caddyEnabled ? `${SEED_PREFIX}-caddy` : null,
-        caddyPassword: host.caddyEnabled ? `${SEED_PREFIX}-password` : null,
-        caddyPort: 8444 + (host.natPortStart % 10),
         transferEnabled: true,
         trafficResetDay: 1 + (host.natPortStart % 20),
         announcement: `${SEED_MARK} ${host.location} demo host`,
@@ -858,9 +842,6 @@ async function syncHosts(userIds: Map<string, number>): Promise<Map<string, numb
         ipv6ParentInterface: 'eth0',
         enableApi: true,
         isInstalled: true,
-        caddyEnabled: host.caddyEnabled,
-        caddyUsername: host.caddyEnabled ? `${SEED_PREFIX}-caddy` : null,
-        caddyPassword: host.caddyEnabled ? `${SEED_PREFIX}-password` : null,
         transferEnabled: true,
         announcement: `${SEED_MARK} ${host.location} demo host`,
         probeUrl: `https://${host.name}.probe.local/health`
@@ -939,7 +920,6 @@ async function syncPackages(
         portLimit: pkg.portLimit,
         snapshotLimit: pkg.snapshotLimit,
         backupLimit: pkg.backupLimit,
-        siteLimit: pkg.siteLimit,
         monthlyTrafficLimit: pkg.monthlyTrafficLimit,
         ioLimitMode: pkg.ioLimitMode,
         limitsRead: pkg.limitsRead,
@@ -973,7 +953,6 @@ async function syncPackages(
         portLimit: pkg.portLimit,
         snapshotLimit: pkg.snapshotLimit,
         backupLimit: pkg.backupLimit,
-        siteLimit: pkg.siteLimit,
         monthlyTrafficLimit: pkg.monthlyTrafficLimit,
         ioLimitMode: pkg.ioLimitMode,
         limitsRead: pkg.limitsRead,
@@ -1028,7 +1007,6 @@ async function syncPackages(
           portLimit: plan.portLimit,
           snapshotLimit: plan.snapshotLimit,
           backupLimit: plan.backupLimit,
-          siteLimit: plan.siteLimit,
           swapSize: plan.swapSize,
           trafficLimit: plan.trafficLimit,
           trafficLimitSpeed: plan.trafficLimitSpeed,
@@ -1047,7 +1025,6 @@ async function syncPackages(
           portLimit: plan.portLimit,
           snapshotLimit: plan.snapshotLimit,
           backupLimit: plan.backupLimit,
-          siteLimit: plan.siteLimit,
           swapSize: plan.swapSize,
           trafficLimit: plan.trafficLimit,
           trafficLimitSpeed: plan.trafficLimitSpeed,
@@ -1171,7 +1148,6 @@ function buildInstanceData(
     portLimit: plan.portLimit,
     snapshotLimit: plan.snapshotLimit,
     backupLimit: plan.backupLimit,
-    siteLimit: plan.siteLimit,
     swapEnabled: plan.swapSize > 0,
     swapSize: plan.swapSize,
     monthlyTrafficLimit: plan.trafficLimit,
@@ -1227,7 +1203,6 @@ async function syncInstanceChildren(
   await prisma.portMapping.deleteMany({ where: { instanceId } })
   await prisma.snapshot.deleteMany({ where: { instanceId } })
   await prisma.backup.deleteMany({ where: { instanceId } })
-  await prisma.proxySite.deleteMany({ where: { instanceId } })
   await prisma.ipAddress.deleteMany({ where: { instanceId } })
   await prisma.ipv6Subnet.deleteMany({ where: { instanceId } })
   await prisma.dailyTraffic.deleteMany({ where: { instanceId } })
@@ -1382,23 +1357,6 @@ async function syncInstanceChildren(
     })
   }
 
-  const proxyCount = pkg.instanceType === 'container' && plan.siteLimit > 0 && index % 3 !== 0 ? (index % 5 === 0 ? 2 : 1) : 0
-  if (proxyCount > 0) {
-    await prisma.proxySite.createMany({
-      data: Array.from({ length: proxyCount }, (_, siteIndex) => ({
-        instanceId,
-        hostId,
-        domain: `${spec.name}-${siteIndex + 1}.${SEED_PREFIX}.test`,
-        targetPort: [80, 443, 8080][siteIndex % 3],
-        httpsEnabled: siteIndex % 2 === 0,
-        remark: `${SEED_MARK} proxy ${siteIndex + 1}`,
-        status: pickProxyStatus(index, siteIndex),
-        enabled: siteIndex % 4 !== 0,
-        error: index % 9 === 0 && siteIndex === 0 ? `${SEED_MARK} DNS pending` : null
-      }))
-    })
-  }
-
   await prisma.instanceBillingRecord.create({
     data: {
       instanceId,
@@ -1445,12 +1403,6 @@ function pickPortSet(index: number, instanceType: SeedPackageInstanceType): numb
 function pickProtocol(index: number, mappingIndex: number): SeedProtocol {
   if (mappingIndex === 1 && index % 4 === 2) return 'udp'
   return 'tcp'
-}
-
-function pickProxyStatus(index: number, siteIndex: number): SeedProxyStatus {
-  if (index % 9 === 0 && siteIndex === 0) return 'error'
-  if (index % 4 === 0) return 'pending'
-  return 'active'
 }
 
 async function syncTickets(instances: GeneratedInstanceRecord[]): Promise<void> {
@@ -1650,7 +1602,7 @@ async function refreshHostAndQuotaUsage(
 }
 
 async function printSummary(): Promise<void> {
-  const [users, hosts, packages, plans, instances, ports, snapshots, backups, sites, tickets] = await Promise.all([
+  const [users, hosts, packages, plans, instances, ports, snapshots, backups, tickets] = await Promise.all([
     prisma.user.count({ where: { username: { startsWith: SEED_PREFIX } } }),
     prisma.host.count({ where: { name: { startsWith: `${SEED_PREFIX}-host-` } } }),
     prisma.package.count({ where: { name: { startsWith: `${SEED_PREFIX}-pkg-` } } }),
@@ -1659,13 +1611,12 @@ async function printSummary(): Promise<void> {
     prisma.portMapping.count({ where: { instance: { name: { startsWith: `${SEED_PREFIX}-inst-` } } } }),
     prisma.snapshot.count({ where: { instance: { name: { startsWith: `${SEED_PREFIX}-inst-` } } } }),
     prisma.backup.count({ where: { instance: { name: { startsWith: `${SEED_PREFIX}-inst-` } } } }),
-    prisma.proxySite.count({ where: { instance: { name: { startsWith: `${SEED_PREFIX}-inst-` } } } }),
     prisma.ticket.count({ where: { subject: { startsWith: SEED_MARK } } })
   ])
 
   console.log(`${SEED_MARK} completed`)
   console.log(`${SEED_MARK} users=${users}, hosts=${hosts}, packages=${packages}, plans=${plans}, instances=${instances}`)
-  console.log(`${SEED_MARK} portMappings=${ports}, snapshots=${snapshots}, backups=${backups}, proxySites=${sites}, tickets=${tickets}`)
+  console.log(`${SEED_MARK} portMappings=${ports}, snapshots=${snapshots}, backups=${backups}, tickets=${tickets}`)
   console.log(`${SEED_MARK} shared password for generated users: ${SHARED_PASSWORD}`)
 }
 

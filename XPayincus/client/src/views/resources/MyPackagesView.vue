@@ -383,7 +383,6 @@ interface PackagePlan {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   trafficLimit: string
   trafficLimitSpeed: string
@@ -416,7 +415,6 @@ const planForm = ref({
   portLimit: 3,
   snapshotLimit: 3,
   swapSize: 0,
-  siteLimit: 1,
   trafficLimit: 1,
   trafficLimitSpeed: 10, // Mbps
   price: 0,
@@ -567,7 +565,6 @@ function openCreatePlanModal(): void {
     portLimit: 3,
     snapshotLimit: 3,
     swapSize: 0,
-    siteLimit: 1,
     trafficLimit: 1,
     trafficLimitSpeed: 10, // Mbps
     price: 0,
@@ -591,7 +588,6 @@ function openEditPlanModal(plan: PackagePlan): void {
     portLimit: plan.portLimit,
     snapshotLimit: plan.snapshotLimit,
     swapSize: plan.swapSize,
-    siteLimit: plan.siteLimit,
     trafficLimit: bytesToGB(plan.trafficLimit),
     trafficLimitSpeed: bytesToMbps(plan.trafficLimitSpeed),
     price: plan.price / 100,
@@ -660,7 +656,6 @@ async function savePlan(): Promise<void> {
       portLimit: planForm.value.portLimit,
       snapshotLimit: planForm.value.snapshotLimit,
       backupLimit: 0,
-      siteLimit: planForm.value.siteLimit,
       swapSize: planForm.value.swapSize,
       trafficLimit: gbToBytes(planForm.value.trafficLimit) || '0',
       trafficLimitSpeed: mbpsToBytes(planForm.value.trafficLimitSpeed) || '0',
@@ -1203,10 +1198,6 @@ function getBillingCycleLabel(months: number): string {
                           <span class="text-themed-muted">{{ t('resources.plans.swapSize') }}:</span>
                           <span class="ml-1 font-mono tabular-nums text-themed-secondary">{{ plan.swapSize > 0 ? `${plan.swapSize} MB` : '-' }}</span>
                         </div>
-                        <div>
-                          <span class="text-themed-muted">{{ t('resources.plans.siteLimit') }}:</span>
-                          <span class="ml-1 font-mono tabular-nums text-themed-secondary">{{ plan.siteLimit }}</span>
-                        </div>
                       </div>
                       <div v-if="plan.slaGuarantee !== null" class="mt-2 text-xs">
                         <span class="text-themed-muted">SLA保证:</span>
@@ -1318,10 +1309,6 @@ function getBillingCycleLabel(months: number): string {
                   <div v-if="plansPackage?.instance_type !== 'vm'">
                     <label class="block text-xs font-medium text-themed-muted mb-1.5">{{ t('resources.plans.swapSize') }} (MB)</label>
                     <input v-model.number="planForm.swapSize" type="number" min="0" max="1048576" step="128" class="input" />
-                  </div>
-                  <div>
-                    <label class="block text-xs font-medium text-themed-muted mb-1.5">{{ t('resources.plans.siteLimit') }}</label>
-                    <input v-model.number="planForm.siteLimit" type="number" min="0" class="input" />
                   </div>
                   <div>
                     <label class="block text-xs font-medium text-themed-muted mb-1.5">{{ t('resources.plans.trafficLimit') }} (GB) *</label>

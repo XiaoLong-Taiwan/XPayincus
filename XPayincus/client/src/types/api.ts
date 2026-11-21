@@ -799,24 +799,20 @@ export interface Instance {
   port_limit: number | null
   snapshot_limit: number | null
   backup_limit: number | null
-  site_limit: number | null
   remaining_quota?: {
     port: number
     snapshot: number
     backup: number
-    site: number
   }
   quota_usage?: {
     port: number
     snapshot: number
     backup: number
-    site: number
   }
   effective_quota_limit?: {
     port: number
     snapshot: number
     backup: number
-    site: number
   }
   swapEnabled?: boolean
   swapSize?: number | null
@@ -938,7 +934,6 @@ export interface UpdateInstanceRequest {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number | null  // 0 = 不限制, null = 继承套餐
 }
 
 export interface InstanceStats {
@@ -1416,7 +1411,6 @@ export interface Package {
   port_limit?: number | null
   snapshot_limit?: number | null
   backup_limit?: number | null
-  site_limit?: number | null
   node_selectors?: string | null
   monthly_traffic_limit?: string | null  // BigInt as string (Bytes)
   traffic_reset_price?: number | null  // 元
@@ -1497,7 +1491,6 @@ export interface CreatePackageRequest {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   nodeSelectors?: string[]
   monthlyTrafficLimit?: string  // BigInt as string (Bytes)
   trafficResetPrice?: number    // 元
@@ -1545,7 +1538,6 @@ export interface UpdatePackageRequest {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   nodeSelectors?: string[]
   monthlyTrafficLimit?: string | null  // BigInt as string (Bytes), null to clear
   trafficResetPrice?: number    // 元
@@ -2232,8 +2224,6 @@ export interface PackagePlan {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
-  monthlyTrafficLimit: string | null
   isActive: boolean
   isSoldOut: boolean
   sortOrder: number

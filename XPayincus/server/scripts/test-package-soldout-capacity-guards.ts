@@ -29,7 +29,7 @@ function functionSection(source: string, start: string, end: string): string {
 const singleSoldOutSection = functionSection(
   packagesSource,
   'export async function checkPackageSoldOut(packageId: number): Promise<boolean> {',
-  '/**\n * 批量检查多个套餐的售罄状态'
+  'type AvailabilityPackage = Prisma.PackageGetPayload'
 )
 
 const batchSoldOutSection = functionSection(

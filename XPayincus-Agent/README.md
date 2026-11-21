@@ -8,9 +8,9 @@
 ( f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -q -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/XiaoLong-Taiwan/XPayincus/main/scripts/agent-menu.sh -o "$f" && bash -n "$f" && bash "$f" --action install )
 ```
 
-此互動入口會從輸入的面板下載安裝器，也可使用面板產生的主機專用安裝指令。TOKEN 僅在互動提示輸入，不要放入 URL、命令列或公開日誌。需先完成 Dashboard 部署；新裝 Agent 會準備 Incus／ZFS，並依 bootstrap 安裝 Caddy。`main` 入口可能領先正式 Release。詳見[面板部署](../XPayincus/README.md#最簡部署指令)及[宿主安裝指南](../XPayincus/docs-site/docs/agent/install.md)。
+此互動入口會從輸入的面板下載安裝器，也可使用面板產生的主機專用安裝指令。TOKEN 僅在互動提示輸入，不要放入 URL、命令列或公開日誌。需先完成 Dashboard 部署；新裝 Agent 會準備 Incus／ZFS。`main` 入口可能領先正式 Release。詳見[面板部署](../XPayincus/README.md#最簡部署指令)及[宿主安裝指南](../XPayincus/docs-site/docs/agent/install.md)。
 
-Go Agent 部署在 Incus 宿主機，負責資源、實例狀態、流量與監控歷史回報，透過 HMAC-SHA256 認證連線面板，並建立出站 WSS 管理隧道。Agent、Incus、Caddy、RFW 與 ZFS 均在宿主執行，不放進面板 Compose。
+Go Agent 部署在 Incus 宿主機，負責資源、實例狀態、流量與監控歷史回報，透過 HMAC-SHA256 認證連線面板，並建立出站 WSS 管理隧道。Agent、Incus、RFW 與 ZFS 均在宿主執行，不放進面板 Compose。
 
 本文依目前來源樹實作整理；根 [VERSION](../VERSION) 的 `v1.0.26` 是發行目標，正式可下載版本與功能以實際 GitHub Release、面板提供的安裝器及已部署的 Server／Agent 為準。`main` 腳本可能領先穩定版，不能據此推定功能已發布。新的隧道 frame 要求 Server／Agent 協調更新，沒有舊版能力協商或直連降級。操作指南另見 [Agent 安裝](../XPayincus/docs-site/docs/agent/install.md)。
 
@@ -18,10 +18,9 @@ Go Agent 部署在 Incus 宿主機，負責資源、實例狀態、流量與監�
 
 | 元件 | 責任與邊界 |
 | --- | --- |
-| Go Agent | 心跳、採樣、歷史 spool、經授權的自身 binary 升級；轉送管理請求到固定本機 Incus socket／Caddy admin API。 |
+| Go Agent | 心跳、採樣、歷史 spool、經授權的自身 binary 升級；轉送管理請求到固定本機 Incus socket。 |
 | Incus | 容器／虛擬機生命週期、映像、網路、儲存池及實例 API。Agent 需有本機 socket 權限，安裝 unit 以 root 執行。 |
 | ZFS | 宿主核心模組、pool／dataset 與快照儲存；新裝預設使用 ZFS，既有池沿用、不自動轉換 driver。 |
-| Caddy | 宿主網站反向代理及憑證服務；Agent 只連本機原生 admin API `127.0.0.1:2019`。新裝依 bootstrap 提供的同源 URL 安裝 Caddy。 |
 | RFW | 獨立 Rust/eBPF/XDP 防火牆工具；Go Agent 不自動啟停 RFW、不下載或載入 eBPF，也不執行 DKMS／`modprobe`。 |
 
 [RFW／ZFS 宿主元件](components/README.md) 位於 `components/rfw`、`components/zfs`，保留獨立工具鏈與資產名稱。bundle 是統一 Release 的邏輯元件集合，不代表 Agent 自升級會安裝全部元件。
@@ -35,11 +34,11 @@ Go Agent 部署在 Incus 宿主機，負責資源、實例狀態、流量與監�
 
 正式部署使用可驗證憑證的 HTTPS 面板 origin，例如 `https://panel.example.org:8443`，不能帶帳密、路徑或 query。Agent 對該 origin 呼叫 `POST /api/agent/heartbeat`，並主動連線 **`wss://panel.example.org:8443/api/agent/tunnel`**，子協定 `xpayincus-tunnel-v1`。隧道要求 HTTPS；安裝輸入接受 HTTP 不代表 WSS 管理可用。
 
-宿主需能解析面板 DNS、連出面板 HTTPS／WSS，安裝時還需連到套件來源；面板端需能取得 Release，或有完整可信本地資產。反向代理／WAF 必須允許 WebSocket Upgrade、長連線及 Agent 的 HMAC headers，避免把 API 改寫成登入頁。正常管理不要求面板直連宿主 Incus 8443 或 Caddy 2019；實例 SSH、NAT 映射與網站對外埠依服務需求另行開放。
+宿主需能解析面板 DNS、連出面板 HTTPS／WSS，安裝時還需連到套件來源；面板端需能取得 Release，或有完整可信本地資產。反向代理／WAF 必須允許 WebSocket Upgrade、長連線及 Agent 的 HMAC headers，避免把 API 改寫成登入頁。正常管理不要求面板直連宿主 Incus 8443；實例 SSH、NAT 映射與網站對外埠依服務需求另行開放。
 
 隧道握手以 GET、固定路徑及空 body SHA256 簽名，使用 `x-incudal-agent-id`、`x-incudal-timestamp`、`x-incudal-nonce`、`x-incudal-body-sha256`、`x-incudal-signature`；timestamp／nonce 會驗證，需同步宿主與面板時間。拒絕 Origin header，每個 host 一條隧道；停用或輪換憑證會使連線失效。後端連線 registry 為程序內狀態，只支援單一 Node 程序。
 
-固定轉送目的地為 `/var/lib/incus/unix.socket` 的 `/1.0` API 與 `127.0.0.1:2019` 的 `/config/...`、`/id/...`。不接受任意代理 URL、宿主 shell frame 或 redirect；原遠端 Caddy TLS／Basic Auth 不會轉送至本機 API。Incus 本身仍具實例 exec 等管理能力。一般 body 上限 512 KiB，串流每塊 64 KiB、每 host 最多 8 個工作；有界 HTTP 串流、終端 ACK、重連與未知結果語意見 [TUNNEL.md](TUNNEL.md)。斷線不重播寫入，timeout 後應查 operation／資源狀態再決定下一步。
+固定轉送目的地為 `/var/lib/incus/unix.socket` 的 `/1.0` API。不接受任意代理 URL、宿主 shell frame 或 redirect。Incus 本身仍具實例 exec 等管理能力。一般 body 上限 512 KiB，串流每塊 64 KiB、每 host 最多 8 個工作；有界 HTTP 串流、終端 ACK、重連與未知結果語意見 [TUNNEL.md](TUNNEL.md)。斷線不重播寫入，timeout 後應查 operation／資源狀態再決定下一步。
 
 IPv4 NAT 與 IPv6 routed 是不同配置。IPv6 需供應商真正路由到宿主的可用前綴、正確轉送與防火牆；只有一個宿主 IPv6 地址不等於有可分配的 `/64`。Agent 只有回報明確 routed 能力及合法前綴，面板才會據此啟用 routed 模式；舊 IPv6 NAT 值僅留作歷史相容。純 IPv6 宿主仍須能到達面板、套件來源與下載來源；宿主腳本的 WARP 準備可能失敗，不能保證補足 IPv4 出站。
 
@@ -66,9 +65,9 @@ IPv4 NAT 與 IPv6 routed 是不同配置。IPv6 需供應商真正路由到宿�
 
 目前 `ait_` 新裝先預檢、依 manifest 下載並驗證 binary，再呼叫宿主 `--prepare-agent-host` 準備 Incus／ZFS，之後兌換 TOKEN。預設新池為 ZFS loop、10 GiB；這不是生產容量建議，可事先設定 `INCUS_STORAGE_SIZE=40GiB` 等適當容量。可用 `INCUS_STORAGE_POOL` 選既有池、`INCUS_STORAGE_DRIVER=zfs|dir|auto` 控制新池；已有 default profile root 時沿用其 pool，不更換 root，也不接受任意磁碟／source 參數。
 
-TOKEN 以 `/api/agent/install-config/:token?bootstrap=1` 兌換，目前嚴格解析五行：Agent ID、secret、base64 面板憑證、宿主安裝狀態、同源 Caddy installer URL；不執行回應程式碼。憑證配對檢查失敗會回 503 且不消耗 TOKEN；舊兩／四行回應須更新面板。兌換 URL 不跟隨轉址，代理存取日誌應遮蔽 TOKEN 路徑。
+TOKEN 以 `/api/agent/install-config/:token?bootstrap=1` 兌換，目前嚴格解析四行：Agent ID、secret、base64 面板憑證、宿主安裝狀態；不執行回應程式碼。憑證配對檢查失敗會回 503 且不消耗 TOKEN；舊兩／四行回應須更新面板。兌換 URL 不跟隨轉址，代理存取日誌應遮蔽 TOKEN 路徑。
 
-後續安裝 Caddy 與宿主捷徑、必要時匯入首次 Incus trust，使用暫存設定跑 `-once` 冒煙後才原子替換 binary、設定與 unit。服務啟動後再檢查；失敗會嘗試回復原 Agent 檔案及服務狀態，**不會回復先前的宿主初始化、Caddy 安裝或面板憑證輪換**。首次顯示「待驗證」時，回面板確認 Agent 在線及管理功能；目前新建頁驗證看 Agent 心跳，不直連宿主 API。依畫面完成驗證後，必要時執行 `incudal --refresh-agent-trust`，不要提前移除舊 trust。
+後續安裝宿主捷徑、必要時匯入首次 Incus trust，使用暫存設定跑 `-once` 冒煙後才原子替換 binary、設定與 unit。服務啟動後再檢查；失敗會嘗試回復原 Agent 檔案及服務狀態，**不會回復先前的宿主初始化或面板憑證輪換**。首次顯示「待驗證」時，回面板確認 Agent 在線及管理功能；目前新建頁驗證看 Agent 心跳，不直連宿主 API。依畫面完成驗證後，必要時執行 `incudal --refresh-agent-trust`，不要提前移除舊 trust。
 
 ## 管理選單、更新與同版修復
 
@@ -142,7 +141,7 @@ spool_retention_hours: 72
 
 面板在 Agent 在線、啟用、版本可辨識且有較新相容版本時，允許擁有者／管理員明確確認升級。`POST /api/agent/hosts/:hostId/upgrade` 使用 `{ "confirm": true, "targetVersion": "v1.0.26" }`（版本為範例）；Server 重新驗證版本、平台及最低 updater，固定 manifest 版本／雜湊／同源 URL。未授權心跳不自動推新版，同版自升級不替換檔案；同版修復請用 installer 重裝。
 
-Agent 最多隨機等待 5 分鐘，執行逾時 10 分鐘；只接受 `panel_url` 同源 URL 與轉址，下載／解壓上限各 64 MiB，先檢查 SHA256／大小再解壓、備份、原子替換並安排服務重啟。此流程只更換 Agent binary，不更新 unit、Incus、Caddy、RFW 或 ZFS。不要把 `.bak` 的存在視為健康失敗後一定自動回復的保證。
+Agent 最多隨機等待 5 分鐘，執行逾時 10 分鐘；只接受 `panel_url` 同源 URL 與轉址，下載／解壓上限各 64 MiB，先檢查 SHA256／大小再解壓、備份、原子替換並安排服務重啟。此流程只更換 Agent binary，不更新 unit、Incus、RFW 或 ZFS。不要把 `.bak` 的存在視為健康失敗後一定自動回復的保證。
 
 目前支援 `upgrade-status-v1` 的實作以 operation ID 去重，記錄 downloading、verifying、replacing、awaiting-health 等階段，重啟後成功資源心跳確認 healthy；舊 Agent 維持一次下發相容行為。Server 狀態含 pending、delivered、succeeded、failed、unconfirmed，等待視窗為兩次心跳加 20 分鐘；HTTP 成功／已下發不代表升級成功。已部署版本是否提供細分狀態，需核對 Release。
 
@@ -155,7 +154,7 @@ API 的授權 journal 需使用倉庫外私人可寫絕對目錄 `INCUDAL_AGENT_
 在宿主先做唯讀檢查：
 
 ```bash
-systemctl --no-pager status incudal-agent incus caddy
+systemctl --no-pager status incudal-agent incus
 journalctl --no-pager -u incudal-agent -n 100
 /usr/local/bin/incudal-agent -version
 getent ahosts panel.example.org
@@ -164,7 +163,6 @@ incus query /1.0
 incus storage list
 zpool status
 zfs list
-curl -q -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:2019/config/ -o /dev/null
 ```
 
 - **403／認證失敗**：分辨是面板 HMAC、TOKEN 兌換、WAF，還是面板連 GitHub 被拒絕。核對節點啟用狀態、endpoint、是否重新簽發 TOKEN 導致舊 secret 失效、代理是否保留 headers，以及宿主／面板 UTC 時間。不要關閉驗證或盲目反覆兌換。

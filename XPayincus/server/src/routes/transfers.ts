@@ -15,8 +15,6 @@ import { removeDevice } from '../lib/incus/incus-instances.js'
 import { deleteSnapshot as deleteIncusSnapshot } from '../lib/incus/incus-snapshots.js'
 import { deleteBackup as deleteIncusBackup } from '../lib/incus/incus-backups.js'
 import { renameInstance as renameIncusInstance } from '../lib/incus/incus-restore.js'
-import { getProxySitesByInstanceId, deleteProxySite } from '../db/proxy-sites.js'
-import { createCaddyClient } from '../lib/caddy-client.js'
 import { prisma } from '../db/prisma.js'
 import {
     claimOperationVerificationRequirement
@@ -600,29 +598,7 @@ export default async function transferRoutes(fastify: FastifyInstance) {
 
         // ===== 3. 数据库更新成功后，删除附属资源（失败仅记录日志，不影响转移结果）=====
         
-        // 3.1 删除反代站点（Caddy 远程 + 数据库）
-        const proxySites = await getProxySitesByInstanceId(transfer.instanceId)
-        if (proxySites.length > 0) {
-            if (host?.caddy_enabled) {
-                const caddyClient = createCaddyClient({ hostId: host.id, host: '127.0.0.1', port: 2019 })
-                for (const site of proxySites) {
-                    try {
-                        await caddyClient.deleteSite(site.domain)
-                    } catch (err) {
-                        console.error(`[Transfer] Failed to delete Caddy site (${site.domain}):`, err)
-                    }
-                }
-            }
-            for (const site of proxySites) {
-                try {
-                    await deleteProxySite(site.id)
-                } catch (err) {
-                    console.error(`[Transfer] Failed to delete proxy site DB record (${site.domain}):`, err)
-                }
-            }
-        }
-
-        // 3.2 删除端口映射（Incus 设备 + 数据库）
+        // 3.1 删除端口映射（Incus 设备 + 数据库）
         // 注意：实例已重命名，设备随实例迁移，所以使用新的 incus_id
         const portMappings = await db.getPortMappings(transfer.instanceId)
         if (portMappings.length > 0) {
@@ -1050,29 +1026,7 @@ export default async function transferRoutes(fastify: FastifyInstance) {
 
         // ===== 3. 数据库更新成功后，删除附属资源 =====
         
-        // 3.1 删除反代站点
-        const proxySites = await getProxySitesByInstanceId(transfer.instanceId)
-        if (proxySites.length > 0) {
-            if (host?.caddy_enabled) {
-                const caddyClient = createCaddyClient({ hostId: host.id, host: '127.0.0.1', port: 2019 })
-                for (const site of proxySites) {
-                    try {
-                        await caddyClient.deleteSite(site.domain)
-                    } catch (err) {
-                        console.error(`[Transfer] Failed to delete Caddy site (${site.domain}):`, err)
-                    }
-                }
-            }
-            for (const site of proxySites) {
-                try {
-                    await deleteProxySite(site.id)
-                } catch (err) {
-                    console.error(`[Transfer] Failed to delete proxy site DB record (${site.domain}):`, err)
-                }
-            }
-        }
-
-        // 3.2 删除端口映射
+        // 3.1 删除端口映射
         const portMappings = await db.getPortMappings(transfer.instanceId)
         if (portMappings.length > 0) {
             for (const mapping of portMappings) {

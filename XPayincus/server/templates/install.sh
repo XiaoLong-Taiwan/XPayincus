@@ -31,7 +31,6 @@ INJECT_AGENT_INSTALL_TOKEN=""
 INJECT_AGENT_BINARY_URL=""
 INJECT_AGENT_BINARY_SHA256=""
 INJECT_AGENT_ENABLED="true"
-INJECT_CADDY_INSTALL_URL="${INJECT_CADDY_INSTALL_URL:-}"
 # ==============================
 
 # ========================== 全局常量 ==========================
@@ -1959,20 +1958,6 @@ SRC
     log "Incus 安装完成"
 }
 
-install_caddy() {
-    step "附加步骤  安装 Caddy 反向代理..."
-    if [[ -z "$INJECT_CADDY_INSTALL_URL" ]]; then
-        warn "未取得限时 Caddy 安装授权，跳过自动安装；可稍后在面板重新下发安装命令"
-        return 1
-    fi
-    if printf 'url = "%s"\n' "$INJECT_CADDY_INSTALL_URL" | curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 120 --config - | bash; then
-        log "Caddy 安装完成；管理 API 仅监听本机 127.0.0.1:2019"
-        return 0
-    fi
-    warn "Caddy 安装失败；Incus 与 Agent 初始化已完成，可稍后在面板重新下发安装命令"
-    return 1
-}
-
 zfs_storage_available() {
     command -v zpool >/dev/null 2>&1 && command -v zfs >/dev/null 2>&1 &&
         modprobe zfs && [[ -c /dev/zfs ]] && zpool list -H >/dev/null 2>&1
@@ -2477,7 +2462,6 @@ install_incudal_agent() {
         INCUDAL_AGENT_SECRET="$AGENT_SECRET" \
         INCUDAL_AGENT_BINARY_URL="$AGENT_BINARY_URL" \
         INCUDAL_AGENT_BINARY_SHA256="$AGENT_BINARY_SHA256" \
-        INCUDAL_CADDY_INSTALL_URL="$INJECT_CADDY_INSTALL_URL" \
         INCUDAL_HEARTBEAT_INTERVAL_SECONDS="$AGENT_HEARTBEAT_INTERVAL_SECONDS" \
         bash -s -- --host-ready --yes; then
         AGENT_INSTALL_STATUS="已安装"
@@ -4143,7 +4127,6 @@ main() {
             install_incus || return 1
         fi
         init_incus || return 1
-        install_caddy || true
         install_shortcuts || return 1
         return 0
     fi

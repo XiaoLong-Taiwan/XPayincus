@@ -294,7 +294,6 @@ export async function getAllPackages(
     port_limit: pkg.portLimit,
     snapshot_limit: pkg.snapshotLimit,
     backup_limit: pkg.backupLimit,
-    site_limit: pkg.siteLimit,
     monthly_traffic_limit: pkg.monthlyTrafficLimit?.toString() ?? null,
     traffic_reset_price: Number(pkg.trafficResetPrice),
     // 存储 I/O 限制
@@ -375,7 +374,6 @@ export async function getPackageById(id: number): Promise<(Package & { host_ids?
     port_limit: pkg.portLimit,
     snapshot_limit: pkg.snapshotLimit,
     backup_limit: pkg.backupLimit,
-    site_limit: pkg.siteLimit,
     monthly_traffic_limit: pkg.monthlyTrafficLimit?.toString() ?? null,
     traffic_reset_price: Number(pkg.trafficResetPrice),
     // 存储 I/O 限制
@@ -436,7 +434,6 @@ export async function getPackageByName(name: string): Promise<Package | null> {
     port_limit: pkg.portLimit,
     snapshot_limit: pkg.snapshotLimit,
     backup_limit: pkg.backupLimit,
-    site_limit: pkg.siteLimit,
     monthly_traffic_limit: pkg.monthlyTrafficLimit?.toString() ?? null,
     // 存储 I/O 限制
     io_limit_mode: pkg.ioLimitMode,
@@ -488,7 +485,6 @@ export async function getPackageByUserAndName(userId: number, name: string): Pro
     port_limit: pkg.portLimit,
     snapshot_limit: pkg.snapshotLimit,
     backup_limit: pkg.backupLimit,
-    site_limit: pkg.siteLimit,
     monthly_traffic_limit: pkg.monthlyTrafficLimit?.toString() ?? null,
     // 存储 I/O 限制
     io_limit_mode: pkg.ioLimitMode,
@@ -537,7 +533,6 @@ export async function createPackage(data: {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   monthlyTrafficLimit?: bigint | null
   trafficResetPrice?: number
   // 存储 I/O 限制
@@ -607,7 +602,6 @@ async function createPackageUnchecked(data: {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   monthlyTrafficLimit?: bigint | null
   trafficResetPrice?: number
   ioLimitMode?: 'throughput' | 'iops'
@@ -672,7 +666,6 @@ async function createPackageUnchecked(data: {
       portLimit: data.portLimit ?? 20,
       snapshotLimit: data.snapshotLimit ?? 5,
       backupLimit: data.backupLimit ?? 3,
-      siteLimit: data.siteLimit ?? 10,
       monthlyTrafficLimit: data.monthlyTrafficLimit ?? null,
       trafficResetPrice: data.trafficResetPrice ?? 0,
       // 存储 I/O 限制 (使用默认值如果未提供)
@@ -736,7 +729,6 @@ export async function updatePackage(id: number, data: {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   monthlyTrafficLimit?: bigint | null
   trafficResetPrice?: number
   // 存储 I/O 限制
@@ -814,7 +806,6 @@ async function updatePackageUnchecked(id: number, data: {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   monthlyTrafficLimit?: bigint | null
   trafficResetPrice?: number
   ioLimitMode?: 'throughput' | 'iops'
@@ -851,7 +842,6 @@ async function updatePackageUnchecked(id: number, data: {
     portLimit?: number
     snapshotLimit?: number
     backupLimit?: number
-    siteLimit?: number
     monthlyTrafficLimit?: bigint | null
     trafficResetPrice?: number
     // 存储 I/O 限制
@@ -895,7 +885,6 @@ async function updatePackageUnchecked(id: number, data: {
   if (data.portLimit !== undefined) updateData.portLimit = data.portLimit
   if (data.snapshotLimit !== undefined) updateData.snapshotLimit = data.snapshotLimit
   if (data.backupLimit !== undefined) updateData.backupLimit = data.backupLimit
-  if (data.siteLimit !== undefined) updateData.siteLimit = data.siteLimit
   if (data.monthlyTrafficLimit !== undefined) updateData.monthlyTrafficLimit = data.monthlyTrafficLimit
   if (data.trafficResetPrice !== undefined) updateData.trafficResetPrice = data.trafficResetPrice
   // 存储 I/O 限制

@@ -202,7 +202,6 @@ const publicServiceSelect = {
   portLimit: true,
   snapshotLimit: true,
   backupLimit: true,
-  siteLimit: true,
   monthlyTrafficLimit: true,
   monthlyTrafficUsed: true,
   trafficStatus: true,
@@ -805,7 +804,6 @@ function serializePublicService(instance: PublicServiceRecord) {
       ports: instance.portLimit,
       snapshots: instance.snapshotLimit,
       backups: instance.backupLimit,
-      sites: instance.siteLimit,
       monthlyTrafficLimit: serializeBigInt(instance.monthlyTrafficLimit),
       monthlyTrafficUsed: serializeBigInt(instance.monthlyTrafficUsed),
       trafficStatus: instance.trafficStatus
@@ -1251,7 +1249,6 @@ export default async function publicApiRoutes(fastify: FastifyInstance) {
           portLimit: pkg.portLimit,
           snapshotLimit: pkg.snapshotLimit,
           backupLimit: pkg.backupLimit,
-          siteLimit: pkg.siteLimit,
           monthlyTrafficLimit: serializeBigInt(pkg.monthlyTrafficLimit)
         },
         plans: pkg.plans.map(plan => ({
@@ -1306,7 +1303,6 @@ export default async function publicApiRoutes(fastify: FastifyInstance) {
           portLimit: pkg.portLimit,
           snapshotLimit: pkg.snapshotLimit,
           backupLimit: pkg.backupLimit,
-          siteLimit: pkg.siteLimit,
           monthlyTrafficLimit: serializeBigInt(pkg.monthlyTrafficLimit)
         },
         plans: pkg.plans.map(plan => ({

@@ -39,7 +39,6 @@ export interface SharedPackageInfo {
     portLimit: number
     snapshotLimit: number
     backupLimit: number
-    siteLimit: number
     monthlyTrafficLimit: string | null
     hostIds: number[]
     nested: number  // 是否支持嵌套虚拟化
@@ -411,7 +410,6 @@ export async function getSharedToUser(userId: number): Promise<SharedPackageInfo
             portLimit: s.package.portLimit,
             snapshotLimit: s.package.snapshotLimit,
             backupLimit: s.package.backupLimit,
-            siteLimit: s.package.siteLimit,
             monthlyTrafficLimit: s.package.monthlyTrafficLimit?.toString() ?? null,
             nested: s.package.nested ? 1 : 0,
             privileged: s.package.privileged ? 1 : 0,
@@ -562,7 +560,6 @@ export async function getHostedMarketPackages(
         portLimit: pkg.portLimit,
         snapshotLimit: pkg.snapshotLimit,
         backupLimit: pkg.backupLimit,
-        siteLimit: pkg.siteLimit,
         monthlyTrafficLimit: pkg.monthlyTrafficLimit?.toString() ?? null,
         nested: pkg.nested ? 1 : 0,
         privileged: pkg.privileged ? 1 : 0,
@@ -624,7 +621,6 @@ export async function getGlobalSharedPackages(): Promise<SharedPackageInfo[]> {
         portLimit: pkg.portLimit,
         snapshotLimit: pkg.snapshotLimit,
         backupLimit: pkg.backupLimit,
-        siteLimit: pkg.siteLimit,
         monthlyTrafficLimit: pkg.monthlyTrafficLimit?.toString() ?? null,
         nested: pkg.nested ? 1 : 0,  // 嵌套虚拟化支持
         privileged: pkg.privileged ? 1 : 0,  // 特权容器

@@ -53,7 +53,7 @@ rows[0]!.description = 'original'
 
 const routeSource = readFileSync(new URL('../src/routes/hosts.ts', import.meta.url), 'utf8')
 const start = routeSource.indexOf('  fastify.patch<{', routeSource.indexOf('// 修改存储池配置'))
-const end = routeSource.indexOf('// ==================== Caddy', start)
+const end = routeSource.indexOf('\n}', start)
 assert.ok(start > 0 && end > start)
 let incusClients = 0
 const incusUpdates: unknown[][] = []

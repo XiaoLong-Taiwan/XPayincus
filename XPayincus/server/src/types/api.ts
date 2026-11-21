@@ -174,7 +174,6 @@ export interface CreatePackageRequest {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   monthlyTrafficLimit?: string | null
   trafficResetPrice?: number
   // å­˜å‚¨ I/O é™åˆ¶
@@ -220,7 +219,6 @@ export interface UpdatePackageRequest {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   monthlyTrafficLimit?: string | null
   trafficResetPrice?: number
   // å­˜å‚¨ I/O é™åˆ¶

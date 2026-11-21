@@ -14,7 +14,6 @@ export interface PublicPackagePlan {
   portLimit: number
   snapshotLimit: number
   backupLimit: number
-  siteLimit: number
   swapSize: number
   trafficLimit: string
   trafficLimitSpeed: string

@@ -312,8 +312,7 @@ function isAllowedPublicOrTokenRoute(route: RouteInfo): boolean {
     return [
       '/install.sh',
       '/install.sh/:token',
-      '/cert/:token',
-      '/caddy-script/:token'
+      '/cert/:token'
     ].includes(path)
   }
 

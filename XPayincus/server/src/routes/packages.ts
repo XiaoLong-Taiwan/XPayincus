@@ -41,7 +41,6 @@ type NormalizedPackagePlanInput = {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   swapSize?: number
   trafficLimit?: unknown
   trafficLimitSpeed?: unknown
@@ -74,7 +73,6 @@ type NormalizedPackageInput = {
   portLimit?: number
   snapshotLimit?: number
   backupLimit?: number
-  siteLimit?: number
   ioLimitMode?: CreatePackageRequest['ioLimitMode']
   limitsRead?: string
   limitsWrite?: string
@@ -340,7 +338,7 @@ function normalizePackagePlanInput(input: unknown, options: {
   const normalized: NormalizedPackagePlanInput = {}
 
   if (options.requireAll) {
-    for (const field of ['name', 'cpu', 'memory', 'disk', 'portLimit', 'snapshotLimit', 'backupLimit', 'siteLimit', 'trafficLimit', 'price'] as const) {
+    for (const field of ['name', 'cpu', 'memory', 'disk', 'portLimit', 'snapshotLimit', 'backupLimit', 'trafficLimit', 'price'] as const) {
       if (input[field] === undefined) {
         throw apiError(ErrorCode.VALIDATION_ERROR, '请填写所有必填字段')
       }
@@ -365,7 +363,6 @@ function normalizePackagePlanInput(input: unknown, options: {
   normalized.portLimit = optionalPlanInteger(input, 'portLimit', '端口映射数', 0, POSTGRES_INT_MAX)
   normalized.snapshotLimit = optionalPlanInteger(input, 'snapshotLimit', '快照数', 0, POSTGRES_INT_MAX)
   normalized.backupLimit = optionalPlanInteger(input, 'backupLimit', '备份数', 0, POSTGRES_INT_MAX)
-  normalized.siteLimit = optionalPlanInteger(input, 'siteLimit', '反代站点数', 0, POSTGRES_INT_MAX)
   normalized.swapSize = options.isVm
     ? 0
     : optionalPlanInteger(input, 'swapSize', 'SWAP', 0, 1048576)
@@ -608,7 +605,6 @@ function normalizePackageInput(input: unknown, options: { requireAll: boolean })
   normalized.portLimit = optionalPackageInteger(input, 'portLimit', '端口映射数', 1, POSTGRES_INT_MAX)
   normalized.snapshotLimit = optionalPackageInteger(input, 'snapshotLimit', '快照数', 0, POSTGRES_INT_MAX)
   normalized.backupLimit = optionalPackageInteger(input, 'backupLimit', '备份数', 0, POSTGRES_INT_MAX)
-  normalized.siteLimit = optionalPackageInteger(input, 'siteLimit', '反代站点数', 0, POSTGRES_INT_MAX)
   normalized.ioLimitMode = optionalPackageEnum(input, 'ioLimitMode', 'I/O限制模式', ['throughput', 'iops'])
   normalized.limitsRead = optionalPackageText(input, 'limitsRead', '读取限制', MAX_PACKAGE_LIMIT_STRING_LENGTH)
   normalized.limitsWrite = optionalPackageText(input, 'limitsWrite', '写入限制', MAX_PACKAGE_LIMIT_STRING_LENGTH)
@@ -898,7 +894,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
           portLimit: true,
           snapshotLimit: true,
           backupLimit: true,
-          siteLimit: true,
           swapSize: true,
           trafficLimit: true,
           trafficLimitSpeed: true,
@@ -950,7 +945,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
           portLimit: p.portLimit,
           snapshotLimit: p.snapshotLimit,
           backupLimit: p.backupLimit,
-          siteLimit: p.siteLimit,
           swapSize: pkg.instanceType === 'vm' ? 0 : p.swapSize,
           trafficLimit: p.trafficLimit?.toString() || null,
           trafficLimitSpeed: p.trafficLimitSpeed,
@@ -1170,7 +1164,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
             port_limit: p.port_limit,
             snapshot_limit: p.snapshot_limit,
             backup_limit: p.backup_limit,
-            site_limit: p.site_limit,
             global_shared: p.global_shared,
             allow_instance_deletion: p.allow_instance_deletion,
             required_package_id: (p as any).required_package_id ?? null,
@@ -1212,7 +1205,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       port_limit: p.portLimit,
       snapshot_limit: p.snapshotLimit,
       backup_limit: p.backupLimit,
-      site_limit: p.siteLimit,
       // 存储 I/O 限制
       io_limit_mode: p.ioLimitMode || p.io_limit_mode || 'throughput',
       limits_read: p.limitsRead || p.limits_read || '100MB',
@@ -1382,7 +1374,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         port_limit: p.port_limit,
         snapshot_limit: p.snapshot_limit,
         backup_limit: p.backup_limit,
-        site_limit: p.site_limit,
         global_shared: p.global_shared,
         // 存储 I/O 限制
         io_limit_mode: (p as any).io_limit_mode ?? 'throughput',
@@ -1615,7 +1606,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         port_limit: pkg.port_limit,
         snapshot_limit: pkg.snapshot_limit,
         backup_limit: pkg.backup_limit,
-        site_limit: pkg.site_limit,
         // 存储 I/O 限制
         io_limit_mode: (pkg as any).io_limit_mode ?? 'throughput',
         limits_read: pkg.limits_read,
@@ -1686,7 +1676,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
           portLimit: { type: 'integer', minimum: 1 },
           snapshotLimit: { type: 'integer', minimum: 0 },
           backupLimit: { type: 'integer', minimum: 0 },
-          siteLimit: { type: 'integer', minimum: 0 },
           // 存储 I/O 限制
           ioLimitMode: { type: 'string', enum: ['throughput', 'iops'] },
           limitsRead: { type: 'string' },
@@ -1727,7 +1716,7 @@ export default async function packageRoutes(fastify: FastifyInstance) {
     }
     const {
       name, description, cpuMax, memoryMax, diskMax, bandwidthMax, networkMode, instanceType, hostIds, privileged, nested, active,
-      monthlyTrafficLimit, portLimit, snapshotLimit, backupLimit, siteLimit,
+      monthlyTrafficLimit, portLimit, snapshotLimit, backupLimit,
       trafficResetPrice,
       ioLimitMode, limitsRead, limitsWrite, limitsReadIops, limitsWriteIops,
       limitsIngress, limitsEgress, limitsProcesses, limitsCpuPriority,
@@ -1799,7 +1788,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         portLimit,
         snapshotLimit,
         backupLimit,
-        siteLimit,
         monthlyTrafficLimit: trafficLimit,
         trafficResetPrice,
         // 存储 I/O 限制
@@ -1882,7 +1870,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
           portLimit: { type: 'integer', minimum: 1 },
           snapshotLimit: { type: 'integer', minimum: 0 },
           backupLimit: { type: 'integer', minimum: 0 },
-          siteLimit: { type: 'integer', minimum: 0 },
           // 存储 I/O 限制
           ioLimitMode: { type: 'string', enum: ['throughput', 'iops'] },
           limitsRead: { type: 'string' },
@@ -1948,7 +1935,7 @@ export default async function packageRoutes(fastify: FastifyInstance) {
 
     // 处理流量限额和套餐资源限制
     const {
-      monthlyTrafficLimit, trafficResetPrice, portLimit, snapshotLimit, backupLimit, siteLimit, hostIds, hostStoragePools, hostTrafficMultipliers,
+      monthlyTrafficLimit, trafficResetPrice, portLimit, snapshotLimit, backupLimit, hostIds, hostStoragePools, hostTrafficMultipliers,
       ioLimitMode, limitsRead, limitsWrite, limitsReadIops, limitsWriteIops,
       limitsIngress, limitsEgress, limitsProcesses, limitsCpuPriority,
       bootAutostart, bootAutostartPriority, bootAutostartDelay, bootHostShutdownTimeout,
@@ -2013,7 +2000,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
     if (portLimit !== undefined) updateData.portLimit = portLimit
     if (snapshotLimit !== undefined) updateData.snapshotLimit = snapshotLimit
     if (backupLimit !== undefined) updateData.backupLimit = backupLimit
-    if (siteLimit !== undefined) updateData.siteLimit = siteLimit
 
     // 存储 I/O 限制
     if (ioLimitMode !== undefined) updateData.ioLimitMode = ioLimitMode
@@ -2633,7 +2619,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         portLimit: plan.portLimit,
         snapshotLimit: plan.snapshotLimit,
         backupLimit: plan.backupLimit,
-        siteLimit: plan.siteLimit,
         swapSize: pkg.instance_type === 'vm' ? 0 : plan.swapSize,
         trafficLimit: plan.trafficLimit.toString(),
         trafficLimitSpeed: plan.trafficLimitSpeed,
@@ -2662,7 +2647,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       portLimit: number
       snapshotLimit: number
       backupLimit: number
-      siteLimit: number
       swapSize: number
       trafficLimit: string // BigInt 作为字符串传输
       trafficLimitSpeed?: string
@@ -2748,7 +2732,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         portLimit: planInput.portLimit!,
         snapshotLimit: planInput.snapshotLimit!,
         backupLimit: planInput.backupLimit!,
-        siteLimit: planInput.siteLimit!,
         swapSize: planInput.swapSize!,
         trafficLimit: parsedTrafficLimit,
         trafficLimitSpeed: normalizedTrafficLimitSpeed,
@@ -2792,7 +2775,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       portLimit?: number
       snapshotLimit?: number
       backupLimit?: number
-      siteLimit?: number
       swapSize?: number
       trafficLimit?: string
       trafficLimitSpeed?: string
@@ -2870,7 +2852,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       if (planInput.portLimit !== undefined) updateData.portLimit = planInput.portLimit
       if (planInput.snapshotLimit !== undefined) updateData.snapshotLimit = planInput.snapshotLimit
       if (planInput.backupLimit !== undefined) updateData.backupLimit = planInput.backupLimit
-      if (planInput.siteLimit !== undefined) updateData.siteLimit = planInput.siteLimit
       if (pkg.instance_type === 'vm') {
         updateData.swapSize = 0
       } else if (planInput.swapSize !== undefined) {
@@ -2902,7 +2883,7 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       const updatedPlan = await db.updatePlan(planIdNum, updateData)
 
       // 如果修改了配额相关字段，同步到所有关联实例
-      const quotaFields = ['portLimit', 'snapshotLimit', 'backupLimit', 'siteLimit', 'swapSize', 'trafficLimit']
+      const quotaFields = ['portLimit', 'snapshotLimit', 'backupLimit', 'swapSize', 'trafficLimit']
       const hasQuotaChange = quotaFields.some(f => updateData[f] !== undefined)
       if (hasQuotaChange) {
         const syncResult = await db.syncPlanQuotaToInstances(planIdNum, updatedPlan, existingPlan.swapSize)

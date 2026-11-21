@@ -28,7 +28,7 @@ const apiTypesSource = readRepoFile('client/src/types/api.ts')
 const reserveSection = section(
   quotaSource,
   'export async function reserveResources(',
-  '/**\n * 资源回滚'
+  'export async function rollbackResources('
 )
 assert.ok(
   reserveSection.includes('const reserveWhere: Prisma.HostWhereInput = {') &&
@@ -58,7 +58,7 @@ assert.ok(
 const resourcePoolApplySection = section(
   resourcePoolSource,
   'export async function applyResourcePoolToInstance(',
-  '/**\n * 获取资源池变动记录'
+  'export async function getResourcePoolLogs('
 )
 assert.ok(
   resourcePoolApplySection.includes('cpuAllowanceMax: true') &&
@@ -103,7 +103,7 @@ assert.ok(
 const rollbackSection = section(
   quotaSource,
   'export async function rollbackResources(',
-  '/**\n * 计算用户配额使用量'
+  'export async function calculateUserQuotaUsed('
 )
 assert.ok(
   rollbackSection.includes('UPDATE hosts') &&
@@ -130,13 +130,13 @@ const createHostRequestSection = section(
 )
 const updateHostRouteSection = section(
   hostsRouteSource,
-  "fastify.patch<{\n    Params: { id: string }",
-  "fastify.delete<{\n    Params: { id: string }"
+  '// 更新宿主机配置（管理员或节点所有者）',
+  '// 批量删除宿主机上的实例'
 )
 const recalculateResourcesSection = section(
   hostsRouteSource,
-  "fastify.post<{\n    Params: { id: string }\n  }>('/:id/recalculate-resources'",
-  "// ===================="
+  '// POST /hosts/:id/recalculate-resources - 重新计算宿主机资源使用量',
+  '// ===================='
 )
 
 assert.ok(

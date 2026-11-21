@@ -50,10 +50,8 @@ import {
   isValidSystemImage
 } from '../db/images.js'
 import { generateRandomIPv6 } from '../lib/ip-calculator.js'
-import { getProxySitesByInstanceId, deleteProxySite } from '../db/proxy-sites.js'
 import { calculateVipLevel, getVipBadgeStyleForLevel, getVipRules } from '../services/vip-levels.js'
 import { ProxyStrategyFactory } from '../lib/proxy/index.js'
-import { createCaddyClient } from '../lib/caddy-client.js'
 import { sendHostManagedInstanceNotification, sendNotification } from '../lib/notifier.js'
 import {
   createInstanceTask,
@@ -797,7 +795,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           port_limit: number | null
           snapshot_limit: number | null
           backup_limit: number | null
-          site_limit: number | null
           package_instance_type: 'container' | 'vm' | 'both'
         }
         const response: {
@@ -840,7 +837,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           portLimit?: number | null
           snapshotLimit?: number | null
           backupLimit?: number | null
-          siteLimit?: number | null
           instanceType?: 'container' | 'vm'
           iconBadgeId?: string | null
           userAvatarBadgeId?: string | null
@@ -887,7 +883,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           portLimit: instance.port_limit,
           snapshotLimit: instance.snapshot_limit,
           backupLimit: instance.backup_limit,
-          siteLimit: instance.site_limit,
           // 实例类型：从套餐获取，默认为 container
           instanceType: instance.package_instance_type === 'vm' ? 'vm' : 'container'
         }
@@ -1074,11 +1069,24 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       packageOwnerId = pkg.user_id!
     }
 
+    let requestedCpu = parseInt(cpu, 10)
+    let requestedMemory = parseInt(memory, 10)
+    let requestedDisk = parseInt(disk, 10)
+    if (planIdNum !== null) {
+      const selectedPlan = await getPlanById(planIdNum)
+      if (!selectedPlan || selectedPlan.packageId !== packageIdNum || !selectedPlan.isActive || selectedPlan.isSoldOut) {
+        return reply.code(409).send(apiError(ErrorCode.PLAN_SOLD_OUT))
+      }
+      requestedCpu = selectedPlan.cpu
+      requestedMemory = selectedPlan.memory
+      requestedDisk = selectedPlan.disk
+    }
+
     const hosts = await db.getAvailableHosts(
       packageHostIds.length > 0 ? packageHostIds : null,
-      parseInt(cpu, 10),
-      parseInt(memory, 10),
-      parseInt(disk, 10),
+      requestedCpu,
+      requestedMemory,
+      requestedDisk,
       {
         userId: user.id,
         packageOwnerId
@@ -1626,7 +1634,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const packageTrafficLimit = pkg.monthly_traffic_limit ? BigInt(pkg.monthly_traffic_limit) : null
 
     // 从套餐继承配额值
-    const pkgQuota = pkg as typeof pkg & { port_limit?: number; snapshot_limit?: number; backup_limit?: number; site_limit?: number }
+    const pkgQuota = pkg as typeof pkg & { port_limit?: number; snapshot_limit?: number; backup_limit?: number }
 
     // ==================== 使用带行锁的事务确保并发安全 ====================
     const { Prisma } = await import('@prisma/client')
@@ -1725,7 +1733,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           portLimit: selectedPlan.portLimit,
           snapshotLimit: selectedPlan.snapshotLimit,
           backupLimit: selectedPlan.backupLimit,
-          siteLimit: selectedPlan.siteLimit,
           swapSize: effectiveInstanceType === 'container' ? selectedPlan.swapSize : null,
           monthlyTrafficLimit: effectiveMonthlyTrafficLimit,
           limitsIngress: planBandwidthLimit,
@@ -1734,7 +1741,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           portLimit: pkgQuota.port_limit ?? null,
           snapshotLimit: pkgQuota.snapshot_limit ?? null,
           backupLimit: pkgQuota.backup_limit ?? null,
-          siteLimit: pkgQuota.site_limit ?? null,
           swapSize: null as number | null,
           monthlyTrafficLimit: effectiveMonthlyTrafficLimit,
           limitsIngress: null as string | null,
@@ -1763,7 +1769,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
             portLimit: instanceQuota.portLimit,
             snapshotLimit: instanceQuota.snapshotLimit,
             backupLimit: instanceQuota.backupLimit,
-            siteLimit: instanceQuota.siteLimit,
             swapEnabled: false,
             swapSize: instanceQuota.swapSize,
             limitsIngress: instanceQuota.limitsIngress,
@@ -2416,11 +2421,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const currentPortCount = portMappings.filter(mapping => !mapping.system_managed).length
     const currentSnapshotCount = await prisma.snapshot.count({ where: { instanceId } })
     const currentBackupCount = await prisma.backup.count({ where: { instanceId, status: { not: 'deleted' } } })
-    const currentSiteCount = await prisma.proxySite.count({ where: { instanceId } })
-
-    // 获取站点限制（实例优先，否则从套餐继承）
     const pkg = instance.package_id ? await db.getPackageById(instance.package_id) : null
-    const effectiveSiteLimit = instance.site_limit ?? pkg?.site_limit ?? 10
 
     // 获取方案信息（付费实例）
     let planName: string | null = null
@@ -2461,21 +2462,17 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const quotaUsage = {
       port: currentPortCount,
       snapshot: currentSnapshotCount,
-      backup: currentBackupCount,
-      site: currentSiteCount
+      backup: currentBackupCount
     }
     const effectiveQuotaLimit = {
       port: effectivePortLimit,
       snapshot: effectiveSnapshotLimit,
-      backup: effectiveBackupLimit,
-      site: effectiveSiteLimit
+      backup: effectiveBackupLimit
     }
     const remainingQuota = {
       port: effectivePortLimit === 0 ? 0 : Math.max(0, effectivePortLimit - currentPortCount),
       snapshot: effectiveSnapshotLimit === 0 ? 0 : Math.max(0, effectiveSnapshotLimit - currentSnapshotCount),
-      backup: effectiveBackupLimit === 0 ? 0 : Math.max(0, effectiveBackupLimit - currentBackupCount),
-      // site limit = 0 表示不限制，这里返回 0 作为 sentinel
-      site: effectiveSiteLimit === 0 ? 0 : Math.max(0, effectiveSiteLimit - currentSiteCount)
+      backup: effectiveBackupLimit === 0 ? 0 : Math.max(0, effectiveBackupLimit - currentBackupCount)
     }
 
     // Build response based on user role
@@ -2509,9 +2506,9 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       snapshot_limit: number | null
       backup_limit: number | null
       monthlyTrafficLimit?: string | null
-      remaining_quota: { port: number; snapshot: number; backup: number; site: number } | null
-      quota_usage?: { port: number; snapshot: number; backup: number; site: number }
-      effective_quota_limit?: { port: number; snapshot: number; backup: number; site: number }
+      remaining_quota: { port: number; snapshot: number; backup: number } | null
+      quota_usage?: { port: number; snapshot: number; backup: number }
+      effective_quota_limit?: { port: number; snapshot: number; backup: number }
       port_mappings: Array<{ id: number; protocol: string; public_port: number; private_port: number; remark: string | null }>
       created_at: string
       package_id: number | null
@@ -3292,7 +3289,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       let newIpv4: string | null = null
       let oldIpv6: string | null = null
       let newIpv6: string | null = null
-      let proxySitesUpdated = 0
 
       // 更新数据库状态
       if (currentStatus !== 'suspended' && currentStatus !== incusStatus) {
@@ -3335,27 +3331,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       oldIpv6 = persistedNetwork.oldIpv6
       newIpv6 = persistedNetwork.newIpv6
 
-      if (ipv4Changed && newIpv4) {
-        console.log(`[SyncStatus] Instance ${instanceId} IPv4 changed: ${oldIpv4} -> ${newIpv4}`)
-
-        const proxySites = await getProxySitesByInstanceId(instanceId)
-        if (proxySites.length > 0 && host.caddy_enabled) {
-          const caddyClient = createCaddyClient({ hostId: host.id, host: '127.0.0.1', port: 2019 })
-
-            for (const site of proxySites) {
-              if (site.status === 'active' && site.enabled) {
-                try {
-                  await caddyClient.deleteSite(site.domain)
-                  await caddyClient.addSite(site.domain, newIpv4, site.targetPort, site.httpsEnabled)
-                  proxySitesUpdated++
-                  console.log(`[SyncStatus] Updated proxy site "${site.domain}" to new IP ${newIpv4}`)
-                } catch (caddyErr) {
-                  console.error(`[SyncStatus] Failed to update proxy site "${site.domain}":`, caddyErr)
-                }
-              }
-            }
-        }
-      }
       return reply.code(200).send({
         success: true,
         statusChanged,
@@ -3368,7 +3343,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         ipv6Changed,
         oldIpv6: ipv6Changed ? oldIpv6 : undefined,
         newIpv6: ipv6Changed ? newIpv6 : undefined,
-        proxySitesUpdated: ipv4Changed ? proxySitesUpdated : undefined
       })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -3994,24 +3968,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         throw new Error(`获取 Incus 客户端失败: ${errorMessage}`)
       }
 
-      // ===== 1. 删除反代站点（Caddy 远程 + 数据库）=====
-      const proxySites = await getProxySitesByInstanceId(instanceId)
-      if (proxySites.length > 0) {
-        // 尝试删除 Caddy 远程配置
-        if (host.caddy_enabled) {
-          const caddyClient = createCaddyClient({ hostId: host.id, host: '127.0.0.1', port: 2019 })
-
-            for (const site of proxySites) {
-              try {
-                await caddyClient.deleteSite(site.domain)
-              } catch (caddyError) {
-                const errorMessage = caddyError instanceof Error ? caddyError.message : String(caddyError)
-                console.error(`删除 Caddy 反代站点失败 (${site.domain}):`, errorMessage)
-              }
-            }
-        }
-      }
-
       // ===== 2. 删除端口映射（Incus 设备 + 数据库）=====
       const portMappings = await db.getPortMappings(instanceId)
       if (portMappings && portMappings.length > 0) {
@@ -4135,9 +4091,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       }
 
       // ===== 7.1 删除数据库附属记录 =====
-      for (const site of proxySites) {
-        await deleteProxySite(site.id)
-      }
       for (const mapping of portMappings || []) {
         await db.deletePortMapping((mapping as { id: number }).id)
       }
@@ -4846,7 +4799,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       portLimit?: number | null
       snapshotLimit?: number | null
       backupLimit?: number | null
-      siteLimit?: number | null
     }
   }>('/:id/quota', {
     onRequest: [fastify.authenticate],
@@ -4857,7 +4809,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
           portLimit: { type: ['integer', 'null'], minimum: 1, maximum: 1000 },
           snapshotLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 },
           backupLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 },
-          siteLimit: { type: ['integer', 'null'], minimum: 0, maximum: 1000 }
         }
       }
     }
@@ -4867,7 +4818,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       portLimit?: number | null
       snapshotLimit?: number | null
       backupLimit?: number | null
-      siteLimit?: number | null
     }
   }>, reply: FastifyReply) => {
     const { id } = request.params
@@ -4877,7 +4827,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
     }
 
-    const { portLimit, snapshotLimit, backupLimit, siteLimit } = request.body
+    const { portLimit, snapshotLimit, backupLimit } = request.body
     const { user } = request
 
     const instance = await db.getInstanceById(instanceId)
@@ -4901,7 +4851,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const newPortLimit = portLimit !== undefined ? portLimit : instance.port_limit
     const newSnapshotLimit = snapshotLimit !== undefined ? snapshotLimit : instance.snapshot_limit
     const newBackupLimit = backupLimit !== undefined ? backupLimit : instance.backup_limit
-    const newSiteLimit = siteLimit !== undefined ? siteLimit : instance.site_limit
 
     const portMappings = await db.getPortMappings(instanceId)
     const currentPortUsed = portMappings.length
@@ -4931,7 +4880,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(400).send(apiError(ErrorCode.QUOTA_BACKUP_BELOW_USED, `used: ${currentBackupUsed}, set: ${newBackupLimit}`))
     }
 
-    // 验证：端口必须在 1-1000 范围内；快照/备份/站点允许 0 表示无配额。
+    // 验证：端口必须在 1-1000 范围内；快照/备份允许 0 表示无配额。
     if (newPortLimit !== null && (newPortLimit < 1 || newPortLimit > 1000)) {
       return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, 'Port limit must be between 1 and 1000'))
     }
@@ -4944,24 +4893,17 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, 'Backup limit must be between 0 and 1000 (0 = no quota)'))
     }
 
-    // 验证站点限制：0 表示无配额，null 表示继承套餐
-    if (newSiteLimit !== null && (newSiteLimit < 0 || newSiteLimit > 1000)) {
-      return reply.code(400).send(apiError(ErrorCode.CONFIG_INVALID_VALUE, 'Site limit must be between 0 and 1000 (0 = no quota)'))
-    }
-
     // 更新实例配额
     await db.updateInstanceQuota(instanceId, {
       portLimit: portLimit !== undefined ? (portLimit ?? undefined) : undefined,
       snapshotLimit: snapshotLimit !== undefined ? (snapshotLimit ?? undefined) : undefined,
-      backupLimit: backupLimit !== undefined ? (backupLimit ?? undefined) : undefined,
-      siteLimit: siteLimit !== undefined ? (siteLimit ?? undefined) : undefined
+      backupLimit: backupLimit !== undefined ? (backupLimit ?? undefined) : undefined
     })
 
     const quotaChanges: string[] = []
     if (portLimit !== undefined) quotaChanges.push(`port: ${portLimit}`)
     if (snapshotLimit !== undefined) quotaChanges.push(`snapshot: ${snapshotLimit === 0 ? 'no quota' : snapshotLimit}`)
     if (backupLimit !== undefined) quotaChanges.push(`backup: ${backupLimit === 0 ? 'no quota' : backupLimit}`)
-    if (siteLimit !== undefined) quotaChanges.push(`site: ${siteLimit === 0 ? 'no quota' : (siteLimit || 'inherit')}`)
 
     await createLog(
       user.id,

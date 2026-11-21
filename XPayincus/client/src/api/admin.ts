@@ -1091,72 +1091,6 @@ const api = {
       http.post(`/instances/${id}/subnet`, { prefix }, { timeout: TIMEOUT.MEDIUM }),
     deleteIpv6Subnet: (id: number, subnetId: number): Promise<{ success: boolean }> =>
       http.delete(`/instances/${id}/subnet/${subnetId}`, { timeout: TIMEOUT.MEDIUM }),
-    // 站点管理
-    getSites: (id: number): Promise<{
-      sites: Array<{
-        id: number
-        domain: string
-        targetPort: number
-        httpsEnabled: boolean
-        remark: string | null
-        status: 'pending' | 'active' | 'error'
-        enabled: boolean
-        error: string | null
-        createdAt: string
-      }>
-      caddyEnabled: boolean
-      dnsRecordType: 'A' | 'AAAA' | 'CNAME' | null
-      dnsRecordValue: string | null
-      siteQuota: {
-        used: number
-        limit: number  // 0 = 不限制
-      }
-      canManageSites?: boolean
-    }> => http.get(`/instances/${id}/sites`),
-    addSite: (id: number, data: { domain: string; targetPort: number; httpsEnabled?: boolean; remark?: string }): Promise<{
-      success: boolean
-      site: { id: number; domain: string; targetPort: number; httpsEnabled: boolean; status: string }
-      dnsHint: {
-        type: 'A' | 'AAAA' | 'CNAME'
-        host: string
-        value: string
-      }
-    }> => http.post(`/instances/${id}/sites`, data),
-    deleteSite: (id: number, siteId: number): Promise<{ success: boolean }> =>
-      http.delete(`/instances/${id}/sites/${siteId}`),
-    updateSite: (id: number, siteId: number, data: { targetPort?: number; httpsEnabled?: boolean; remark?: string }): Promise<{
-      message: string
-      site: { id: number; domain: string; targetPort: number; httpsEnabled: boolean; remark: string | null; status: string }
-    }> => http.patch(`/instances/${id}/sites/${siteId}`, data),
-    refreshSite: (id: number, siteId: number): Promise<{ success: boolean; status: string }> =>
-      http.post(`/instances/${id}/sites/${siteId}/refresh`),
-    checkDns: (id: number, siteId: number): Promise<{
-      dnsResolved: boolean
-      ipMatches?: boolean
-      expectedIp: string
-      resolvedIps: string[]
-      activated?: boolean
-      status: string
-      error?: string
-      message?: string
-    }> => http.post(`/instances/${id}/sites/${siteId}/check-dns`),
-    toggleSite: (id: number, siteId: number): Promise<{ message: string; enabled: boolean; status: string }> =>
-      http.post(`/instances/${id}/sites/${siteId}/toggle`),
-    getCertificateStatus: (id: number, siteId: number): Promise<{
-      httpsEnabled: boolean
-      status: 'disabled' | 'valid' | 'pending' | 'dns_error' | 'connection_refused' | 'timeout' | 'cert_pending' | 'error'
-      message?: string
-      error?: string
-      hint?: string
-      certificate?: {
-        valid: boolean
-        issuer: string
-        subject: string
-        validFrom: string
-        validTo: string
-        daysRemaining: number
-      }
-    }> => http.get(`/instances/${id}/sites/${siteId}/certificate`),
     // Cloud-init 状态检查
     checkCloudInitStatus: (id: number): Promise<import('@/types/api').CloudInitStatusResponse> =>
       http.get(`/instances/${id}/cloud-init-status`),
@@ -1177,7 +1111,6 @@ const api = {
       ipv4Changed?: boolean
       oldIpv4?: string
       newIpv4?: string
-      proxySitesUpdated?: number
     }> => http.post(`/instances/${id}/sync-status`, {}),
     // 重新分配 IPv6 地址（仅 nat_ipv6 模式）
     reassignIpv6: (id: number): Promise<{ message: string; oldIpv6: string | null; newIpv6: string }> =>
@@ -1396,58 +1329,6 @@ const api = {
       http.patch(`/hosts/${id}/public-ipv4/addresses/${addressId}`, { status }),
     deletePublicIpv4Address: (id: number, addressId: number): Promise<{ message: string }> =>
       http.delete(`/hosts/${id}/public-ipv4/addresses/${addressId}`),
-    // Caddy 管理
-    getCaddy: (id: number): Promise<{
-      enabled: boolean
-      username: string | null
-      port: number
-      hasPassword: boolean
-      natPublicIp: string | null
-      sitesCount: number
-    }> => http.get(`/hosts/${id}/caddy`),
-    generateCaddyCommand: (id: number): Promise<{
-      installCommand: string
-      username: string
-      password: string
-      port: number
-      isNewCredentials: boolean
-    }> => http.post(`/hosts/${id}/caddy/generate`),
-    resetCaddyCredentials: (id: number): Promise<{
-      installCommand: string
-      username: string
-      password: string
-      port: number
-    }> => http.post(`/hosts/${id}/caddy/reset`),
-    confirmCaddyInstalled: (id: number): Promise<{ message: string }> =>
-      http.post(`/hosts/${id}/caddy/confirm`),
-    testCaddyConnection: (id: number): Promise<{
-      connected: boolean
-      sitesCount: number
-      dnsRecordType: 'A' | 'AAAA' | 'CNAME'
-      dnsRecordValue: string
-    }> => http.post(`/hosts/${id}/caddy/test`, {}, { timeout: TIMEOUT.MEDIUM }),
-    getCaddySites: (id: number, params: { page?: number; pageSize?: number } = {}): Promise<{
-      sites: Array<{
-        id: number
-        domain: string
-        targetPort: number
-        httpsEnabled: boolean
-        status: 'pending' | 'active' | 'error'
-        enabled: boolean
-        error: string | null
-        createdAt: string
-        instance: {
-          id: number
-          name: string
-          ipv4: string | null
-          status: string
-        } | null
-      }>
-      total: number
-      page: number
-      pageSize: number
-      totalPages: number
-    }> => http.get(`/hosts/${id}/caddy/sites`, { params }),
     // 批量删除实例预览（计算退款信息）
     batchDeleteInstancesPreview: (hostId: number, instanceIds: number[]): Promise<{
       instances: Array<{
@@ -1516,7 +1397,7 @@ const api = {
     // 批量同步实例状态
     batchSyncInstanceStatus: (hostId: number, instanceIds: number[]): Promise<{
       message: string
-      results: Array<{ id: number; name: string; success: boolean; from?: string; to?: string; ipv4Changed?: boolean; oldIpv4?: string; newIpv4?: string; proxySitesUpdated?: number; error?: string }>
+      results: Array<{ id: number; name: string; success: boolean; from?: string; to?: string; ipv4Changed?: boolean; oldIpv4?: string; newIpv4?: string; error?: string }>
       syncedCount: number
       changedCount: number
       ipv4ChangedCount: number
@@ -1944,7 +1825,6 @@ const api = {
         portLimit: number
         snapshotLimit: number
         backupLimit: number
-        siteLimit: number
         swapSize: number
         trafficLimit: string
         trafficLimitSpeed: string
@@ -1969,7 +1849,6 @@ const api = {
       portLimit: number
       snapshotLimit: number
       backupLimit: number
-      siteLimit: number
       swapSize: number
       trafficLimit: string
       trafficLimitSpeed?: string
@@ -1993,7 +1872,6 @@ const api = {
       portLimit?: number
       snapshotLimit?: number
       backupLimit?: number
-      siteLimit?: number
       swapSize?: number
       trafficLimit?: string
       trafficLimitSpeed?: string
@@ -3232,7 +3110,6 @@ const api = {
         portLimit: number
         snapshotLimit: number
         backupLimit: number
-        siteLimit: number
         swapSize: number
         trafficLimit: string
         isSoldOut: boolean

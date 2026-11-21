@@ -8,7 +8,6 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 const hostInstallScript = readFileSync(resolve(__dirname, '../templates/install.sh'), 'utf8').replace(/\r\n/g, '\n')
-const caddyInstallScript = readFileSync(resolve(__dirname, '../templates/caddy.sh'), 'utf8')
 const hostRoutes = readFileSync(resolve(__dirname, '../src/routes/hosts.ts'), 'utf8')
 const zhCnLocale = readFileSync(resolve(__dirname, '../../client/src/locales/zh-CN.ts'), 'utf8')
 const zhTwLocale = readFileSync(resolve(__dirname, '../../client/src/locales/zh-TW.ts'), 'utf8')
@@ -277,16 +276,6 @@ const runShell = (script: string, expected = 0) => {
   assert.equal(result.status, expected, `isolated shell check failed: ${result.error ?? ''}\n${result.stdout}\n${result.stderr}`)
   return result.stdout
 }
-assert.ok(
-  caddyInstallScript.includes('readonly CADDY_ADMIN_ADDRESS="127.0.0.1:2019"') &&
-    caddyInstallScript.includes('admin ${CADDY_ADMIN_ADDRESS}') &&
-    caddyInstallScript.includes('if [[ "$HAD_EXISTING_CADDYFILE" == "true" ]]') &&
-    caddyInstallScript.includes('CADDYFILE_NEW=""') &&
-    caddyInstallScript.includes('OVERRIDE_NEW=""') &&
-    !caddyInstallScript.includes('INJECT_CADDY_PASSWORD_B64') &&
-    !caddyInstallScript.includes('CADDY_PORT'),
-  'Caddy install script must keep loopback 2019, preserve existing configuration, and reject legacy public credentials'
-)
 assert.equal(runShell(`set -euo pipefail
 ${shellFunction('import_cert')}
 step() { :; }
@@ -537,7 +526,6 @@ assert.ok(hostInstallScript.indexOf('\n    confirm_install\n') < hostInstallScri
 assert.ok(hostInstallScript.includes('bash -s -- --host-ready --yes; then'), 'host initialization must install Agent without recursively initializing the host')
 const hostCommandBuilder = hostRoutes.slice(hostRoutes.indexOf('function buildHostInstallCommand('), hostRoutes.indexOf('export default async function hostRoutes'))
 assert.ok(hostCommandBuilder.includes('/api/agent/install.sh') && !hostCommandBuilder.includes('installToken'), 'host commands must use the generic TOKEN-free installer')
-await import('./test-host-caddy-behavior.js')
 const prepareHost = hostInstallScript.slice(hostInstallScript.indexOf('    if [[ "$ACTION" == prepare_agent_host ]]'), hostInstallScript.indexOf('    # 如果通过命令行指定了卸载'))
 assert.ok(prepareHost.indexOf('confirm_install') < prepareHost.indexOf('install_deps'), 'standalone host preparation must confirm before installing packages')
 assert.ok(prepareHost.includes('setup_kernel || return 1') && prepareHost.indexOf('confirm_install') < prepareHost.indexOf('setup_kernel') && prepareHost.indexOf('setup_kernel') < prepareHost.indexOf('init_incus'), 'standalone host preparation must apply forwarding and RA settings after confirmation and stop on failure before Incus initialization')

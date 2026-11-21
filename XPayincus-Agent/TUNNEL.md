@@ -1,21 +1,20 @@
 # Agent 出站管理隧道 v1
 
-Agent 主動連線 `wss://<Panel origin>/api/agent/tunnel`，子協定為 `xpayincus-tunnel-v1`。Panel 必須使用有效 HTTPS 憑證，反向代理必須允許 WebSocket Upgrade 與長連線。Panel 不連線宿主 Incus/Caddy 管理埠。
+Agent 主動連線 `wss://<Panel origin>/api/agent/tunnel`，子協定為 `xpayincus-tunnel-v1`。Panel 必須使用有效 HTTPS 憑證，反向代理必須允許 WebSocket Upgrade 與長連線。Panel 不連線宿主 Incus 管理埠。
 
 ## 認證與路由
 
 Handshake 重用 heartbeat 的 `x-incudal-*` HMAC headers；簽名方法為 GET、路徑為 `/api/agent/tunnel`、body hash 為空 body 的 SHA256。timestamp 必須有效，nonce 只能使用一次，Agent 必須啟用。拒絕 Origin header。每個 host 僅一條連線；輪替憑證立即關閉，停用最多等待 15 秒重新驗證。Server 為單一 Node 程序，連線 registry 不跨程序共享。
 
-Server 使用 `getAgentTunnel(hostId).request(target, method, path, body?, headers?, timeout?, signal?)`；既有 Undici 呼叫使用 `AgentTunnelDispatcher`。CaddyClient 呼叫必須提供 `hostId`。IncusClient 建議提供 `hostId`，舊呼叫只在 URL 能唯一對應 DB host 時相容，URL 不作為網路目的地。
+Server 使用 `getAgentTunnel(hostId).request(target, method, path, body?, headers?, timeout?, signal?)`；既有 Undici 呼叫使用 `AgentTunnelDispatcher`。IncusClient 建議提供 `hostId`，舊呼叫只在 URL 能唯一對應 DB host 時相容，URL 不作為網路目的地。
 
 ## 固定本機目的地
 
 | target | 目的地 | 路徑 |
 | --- | --- | --- |
 | incus | Unix socket `/var/lib/incus/unix.socket` | `/1.0`、`/1.0/...` |
-| caddy | HTTP `127.0.0.1:2019` | `/config/...`、`/id/...` |
 
-不接受任意 URL、代理目的地、宿主 shell frame 或 redirect。這是受信任 Panel 的管理 transport，Incus API 仍可執行既有實例 exec 操作；它不是限制實例管理能力的 sandbox。Agent 必須具備 socket 權限，Caddy 必須在固定 loopback 位址提供原生 admin API。原有遠端 Caddy TLS/Basic Auth 設定不會轉送到本機 API。
+不接受任意 URL、代理目的地、宿主 shell frame 或 redirect。這是受信任 Panel 的管理 transport，Incus API 仍可執行既有實例 exec 操作；它不是限制實例管理能力的 sandbox。Agent 必須具備 socket 權限。
 
 ## Frame 與限制
 
