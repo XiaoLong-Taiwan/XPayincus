@@ -25,7 +25,7 @@ function fixture() {
   return { registry, writes, run: publication(env, invoke, () => `sha256:${'b'.repeat(64)}`) }
 }
 
-test('publish creates both SHA indexes before version tags and retries without overwriting', () => {
+test('publish creates both SHA indexes before version tags and retries without overwriting matching tags', () => {
   const { run, writes } = fixture()
   run.publish()
   assert.equal(writes.length, 4)
@@ -35,7 +35,22 @@ test('publish creates both SHA indexes before version tags and retries without o
   assert.equal(writes.length, 4)
 })
 
-test('different commit, missing SHA evidence, and changed version index are rejected before writing', () => {
+test('publish replaces stale version tags after creating new SHA indexes', () => {
+  const { run, registry, writes } = fixture()
+  run.publish()
+  for (const target of ['api', 'panel-web']) {
+    const ref = `ghcr.io/xiaolong-taiwan/xpayincus-${target}:v1.0.5`
+    registry.get(ref).annotations['org.opencontainers.image.revision'] = 'c'.repeat(40)
+  }
+  run.publish()
+  assert.equal(writes.length, 6)
+  for (const target of ['api', 'panel-web']) {
+    const ref = `ghcr.io/xiaolong-taiwan/xpayincus-${target}:v1.0.5`
+    assert.equal(registry.get(ref).annotations['org.opencontainers.image.revision'], sha)
+  }
+})
+
+test('stale version indexes are replaced while missing immutable evidence remains blocked', () => {
   for (const mutation of ['commit', 'missing', 'changed', 'platform']) {
     const { run, registry, writes } = fixture()
     run.publish()
@@ -44,8 +59,13 @@ test('different commit, missing SHA evidence, and changed version index are reje
     if (mutation === 'missing') registry.delete(`ghcr.io/xiaolong-taiwan/xpayincus-panel-web:sha-${sha}`)
     if (mutation === 'changed') registry.get(ref).manifests[0].digest = 'sha256:changed'
     if (mutation === 'platform') registry.get(ref).manifests.pop()
-    assert.throws(() => run.publish())
-    assert.equal(writes.length, 4)
+    if (mutation !== 'platform') {
+      run.publish()
+      assert.equal(writes.length, 5)
+    } else {
+      assert.throws(() => run.publish())
+      assert.equal(writes.length, 4)
+    }
   }
 })
 

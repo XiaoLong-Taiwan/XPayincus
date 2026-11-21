@@ -27,9 +27,10 @@ export function publication(env = process.env, invoke = docker, read = file => f
     const raw = invoke(['inspect', ref, '--raw'])
     return raw === null ? null : JSON.parse(raw)
   }
-  const verify = manifest => {
+  const verify = (manifest, allowRevisionMismatch = false) => {
     if (!manifest || !Array.isArray(manifest.manifests)) throw new Error('Expected multi-platform index')
     for (const [key, value] of Object.entries(annotations)) {
+      if (allowRevisionMismatch && key === 'org.opencontainers.image.revision') continue
       if (manifest.annotations?.[key] !== value) throw new Error(`Image source mismatch: ${key}`)
     }
     const platforms = manifest.manifests.map(item => `${item.platform?.os}/${item.platform?.architecture}`)
@@ -42,8 +43,8 @@ export function publication(env = process.env, invoke = docker, read = file => f
     const existing = inspect(`${image}:${tag}`)
     if (immutable) verify(immutable)
     if (existing) {
-      verify(existing)
-      if (!immutable || JSON.stringify(existing) !== JSON.stringify(immutable)) throw new Error('Version tag differs from SHA tag or has no SHA evidence')
+      verify(existing, true)
+      if (immutable && JSON.stringify(existing) === JSON.stringify(immutable)) verify(existing)
     }
     return { target, image, immutable, existing }
   })
@@ -69,7 +70,7 @@ export function publication(env = process.env, invoke = docker, read = file => f
         create(`${entry.image}:sha-${sha}`, sources)
       }
       for (const entry of check()) {
-        if (entry.existing) continue
+        if (entry.existing && entry.immutable && JSON.stringify(entry.existing) === JSON.stringify(entry.immutable)) continue
         const immutable = entry.immutable
         invoke(['create', '--tag', `${entry.image}:${tag}`, `${entry.image}:sha-${sha}`])
         const existing = inspect(`${entry.image}:${tag}`)
