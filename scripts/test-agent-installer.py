@@ -38,9 +38,8 @@ class AgentInstallerTests(unittest.TestCase):
         self.shim('sleep', ':')
         self.shim('systemctl', 'printf "%s\\n" "$*" >> "$TEST_BASE/events"\nif [ "$1" = restart ] && [ "${FAIL_RESTART:-0}" = 1 ] && [ ! -e "$TEST_BASE/failed" ]; then touch "$TEST_BASE/failed"; exit 1; fi')
         self.shim('install', 'args=(); while (($#)); do case "$1" in -o|-g) shift 2;; *) args+=("$1"); shift;; esac; done\n/usr/bin/install "${args[@]}"')
-        self.shim('curl', 'input=""; out=""; url=""; while (($#)); do case "$1" in --config) input="$(cat)"; shift 2;; -o) out="$2"; shift 2;; *) url="$1"; shift;; esac; done\nif [[ "$input" == *api/hosts/caddy-script/* ]]; then cp "$TEST_BASE/caddy-installer" "$out"; exit 0; fi\nif [[ "$url" == */api/hosts/install.sh ]]; then cp "$TEST_BASE/host-installer" "$out"; exit 0; fi\nprintf "curl\\n" >> "$TEST_BASE/events"\nif [ -n "$input" ]; then printf "%s\\n" "$input" > "$TEST_BASE/request"; cat "$TEST_BASE/response" > "$out"; exit "${EXCHANGE_EXIT:-0}"; fi\nexit 22')
+        self.shim('curl', 'input=""; out=""; url=""; while (($#)); do case "$1" in --config) input="$(cat)"; shift 2;; -o) out="$2"; shift 2;; *) url="$1"; shift;; esac; done\nif [[ "$url" == */api/hosts/install.sh ]]; then cp "$TEST_BASE/host-installer" "$out"; exit 0; fi\nprintf "curl\\n" >> "$TEST_BASE/events"\nif [ -n "$input" ]; then printf "%s\\n" "$input" > "$TEST_BASE/request"; cat "$TEST_BASE/response" > "$out"; exit "${EXCHANGE_EXIT:-0}"; fi\nexit 22')
         (self.base / 'host-installer').write_text(':\n', newline='\n')
-        (self.base / 'caddy-installer').write_text('printf "caddy-install\\n" >> "$TEST_BASE/events"\nexit "${CADDY_EXIT:-0}"\n', newline='\n')
         (self.base / 'response').write_text(f"INCUDAL_AGENT_ID='agt_{'a' * 32}'\nINCUDAL_AGENT_SECRET='{SECRET}'\nINCUDAL_PANEL_CERTIFICATE='Y2VydA=='\nINCUDAL_HOST_INSTALLED='true'\n", newline='\n')
 
     def path(self, path):
@@ -128,27 +127,24 @@ class AgentInstallerTests(unittest.TestCase):
 
     def host_fixture(self):
         (self.base / 'host-installer').write_text('if [[ "$1" == --prepare-agent-host ]] && IFS= read -r unexpected; then exit 91; fi\nprintf "host %s driver=%s\\n" "$*" "${INCUS_STORAGE_DRIVER:-zfs}" >> "$TEST_BASE/events"\nif [[ "$1" == --refresh-agent-trust ]]; then exit "${TRUST_EXIT:-0}"; fi\nif [[ "$1" == --bootstrap-agent-trust ]]; then [[ "${INCUDAL_BOOTSTRAP_CERTIFICATE:-}" == Y2VydA== ]] || exit 92; exit "${BOOTSTRAP_EXIT:-0}"; fi\nexit "${HOST_EXIT:-0}"\n', newline='\n')
-        self.shim('curl', 'input=""; out=""; url=""; while (($#)); do case "$1" in --config) input="$(cat)"; shift 2;; -o) out="$2"; shift 2;; *) url="$1"; shift;; esac; done\nif [[ "$input" == *api/hosts/caddy-script/* ]]; then cp "$TEST_BASE/caddy-installer" "$out"; elif [[ "$url" == */api/hosts/install.sh || "$input" == *api/hosts/install.sh/* ]]; then cp "$TEST_BASE/host-installer" "$out"; else printf "exchange\\n" >> "$TEST_BASE/events"; cp "$TEST_BASE/response" "$out"; fi')
+        self.shim('curl', 'input=""; out=""; url=""; while (($#)); do case "$1" in --config) input="$(cat)"; shift 2;; -o) out="$2"; shift 2;; *) url="$1"; shift;; esac; done\nif [[ "$url" == */api/hosts/install.sh || "$input" == *api/hosts/install.sh/* ]]; then cp "$TEST_BASE/host-installer" "$out"; else printf "exchange\\n" >> "$TEST_BASE/events"; cp "$TEST_BASE/response" "$out"; fi')
 
     def test_ait_initializes_host_before_exchange_and_refreshes_trust(self):
         self.credentials()
         self.host_fixture()
         _, events = self.run_installer(*self.local_args(), host_ready=False, input='unexpected input\n')
         self.assertLess(events.index('host --prepare-agent-host --yes driver=zfs'), events.index('exchange'))
-        self.assertIn('host --refresh-agent-trust', events)
         self.assertEqual(events.count('exchange'), 1)
-        self.assertLess(events.index('exchange'), events.index('caddy-install'))
-        self.assertLess(events.index('caddy-install'), events.index('restart incudal-agent'))
+        self.assertLess(events.index('exchange'), events.index('host --install-shortcuts'))
+        self.assertLess(events.index('host --install-shortcuts'), events.index('restart incudal-agent'))
+        self.assertLess(events.index('restart incudal-agent'), events.index('host --refresh-agent-trust'))
 
-    def test_host_ready_also_installs_caddy_and_failure_stops_agent(self):
+    def test_host_ready_installs_shortcuts_without_host_preparation(self):
         self.credentials()
+        self.host_fixture()
         _, events = self.run_installer(*self.local_args())
-        self.assertIn('caddy-install', events)
+        self.assertLess(events.index('host --install-shortcuts'), events.index('restart incudal-agent'))
         self.assertNotIn('host --prepare-agent-host', events)
-        (self.base / 'events').write_text('')
-        self.env['CADDY_EXIT'] = '1'
-        _, events = self.run_installer(*self.local_args(), success=False)
-        self.assertNotIn('restart incudal-agent', events)
 
     def test_first_install_imports_authorized_trust_and_waits_without_hmac(self):
         for host_ready in (False, True):
