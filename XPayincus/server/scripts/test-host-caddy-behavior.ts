@@ -120,7 +120,7 @@ for (const path of ['/:id/caddy/confirm', '/:id/caddy/test']) {
             verified = true
             return {}
           },
-          getSites: async () => []
+          getSitesFromConfig: () => []
         }
       }, AgentTunnelError, async () => {}, () => 'A')
     const result = await handler!({

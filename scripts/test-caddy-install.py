@@ -13,14 +13,58 @@ BASH = os.environ.get('AGENT_TEST_BASH', 'bash')
 
 
 class CaddyInstallTests(unittest.TestCase):
+    def test_existing_zabbly_keyring_permissions_are_repaired_before_apt(self):
+        stage = SOURCE[SOURCE.index('repair_apt_keyring_permissions() {'):SOURCE.index('log "Installing Caddy Web Server')]
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            keyrings = base / 'keyrings'
+            keyrings.mkdir(mode=0o755)
+            keyrings.chmod(0o700)
+            key = keyrings / 'zabbly.gpg'
+            key.write_text('key')
+            key.chmod(0o600)
+            path = str(base).replace('\\', '/')
+            stage = stage.replace('chmod 0755 /etc/apt/keyrings', f'chmod 0755 {path}/keyrings')
+            stage = stage.replace('/etc/apt/keyrings', f'{path}/keyrings')
+            harness = f'''set -euo pipefail
+log() {{ :; }}
+error() {{ printf '%s\\n' "$*" >&2; }}
+ZABBLY_KEYRING='{path}/keyrings/zabbly.gpg'
+chown() {{ :; }}
+chmod() {{ printf '%s\\n' "$*" >> '{path}/chmod.log'; }}
+{stage}
+repair_apt_keyring_permissions
+stat -c '%a %a' "$ZABBLY_KEYRING" /dev/null
+'''
+            result = subprocess.run([BASH, '-s'], input=harness, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            chmod_calls = (base / 'chmod.log').read_text().splitlines()
+            self.assertIn(f'0755 {keyrings.as_posix()}', chmod_calls)
+            self.assertIn(f'0644 {key.as_posix()}', chmod_calls)
+
+    def test_missing_zabbly_keyring_is_left_for_apt_to_report(self):
+        stage = SOURCE[SOURCE.index('repair_apt_keyring_permissions() {'):SOURCE.index('log "Installing Caddy Web Server')]
+        harness = f'''set -euo pipefail
+log() {{ :; }}
+error() {{ printf '%s\\n' "$*" >&2; }}
+ZABBLY_KEYRING=/tmp/xpayincus-test-missing-zabbly.gpg
+rm -f "$ZABBLY_KEYRING"
+{stage}
+repair_apt_keyring_permissions
+'''
+        result = subprocess.run([BASH, '-s'], input=harness, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_initial_apt_failure_does_not_run_service_rollback(self):
         stage = SOURCE[SOURCE.index('OLD_SERVICE_ACTIVE=false'):SOURCE.index('install -d -o root -g caddy')]
         harness = f'''set -euo pipefail
 CADDYFILE=/dev/null
+ZABBLY_KEYRING=/tmp/xpayincus-test-missing-zabbly.gpg
 systemctl() {{ printf 'systemctl:%s\\n' "$*"; return 1; }}
 apt-get() {{ printf 'apt:%s\\n' "$*"; return 1; }}
 log() {{ :; }}
 error() {{ printf '%s\\n' "$*"; }}
+repair_apt_keyring_permissions() {{ :; }}
 {stage}
 '''
         result = subprocess.run([BASH, '-s'], input=harness, capture_output=True, text=True)

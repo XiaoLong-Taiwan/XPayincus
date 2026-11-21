@@ -1051,7 +1051,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     }
 
     const agentOnlyOnboarding = !url && !certPath && !keyPath
-    const normalizedHostUrl = url || 'https://agent-managed.invalid'
+    const normalizedHostUrl = url || `agent://${randomUUID()}`
     if (url) {
       const urlValidation = validateUrl(url, 'Host URL')
       if (!urlValidation.valid) return reply.code(400).send({ error: urlValidation.message })
@@ -1374,7 +1374,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       host: {
         id: hostId,
         name,
-        url: agentOnlyOnboarding ? null : normalizedHostUrl,
+        url: normalizedHostUrl,
         architecture: detectedArchitecture,
         status: autoConnected ? 'online' : 'offline',
         location,
@@ -4235,7 +4235,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     try {
       await client.getConfig()
     } catch (err) {
-      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED'].includes(err.code)
+      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED', 'TUNNEL_TIMEOUT'].includes(err.code)
       request.log.warn({ hostId, offline }, '[Caddy Confirm] Verification failed')
       return reply.code(offline ? 503 : 502).send({
         error: offline
@@ -4344,26 +4344,21 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     })
 
     try {
-      await client.getConfig()
+        const config = await client.getConfig()
+        const sites = client.getSitesFromConfig(config)
+        return {
+          connected: true,
+          sitesCount: sites.length,
+          dnsRecordType: getDnsRecordType(host.nat_public_ip || host.ip_address || ''),
+          dnsRecordValue: host.nat_public_ip || host.ip_address || ''
+        }
     } catch (err) {
-      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED'].includes(err.code)
+      const offline = err instanceof AgentTunnelError && ['TUNNEL_OFFLINE', 'TUNNEL_DISCONNECTED', 'TUNNEL_TIMEOUT'].includes(err.code)
       return reply.code(offline ? 503 : 502).send({
         error: offline
           ? 'Agent WSS 隧道離線，請確認 Agent 已連線後重試，無需重新安裝 Caddy'
           : '無法經 Agent 驗證本機 Caddy，請檢查 caddy systemd 服務與 127.0.0.1:2019 管理 API'
       })
-    }
-    const connected = true
-
-    // 获取已配置的站点数量
-    const sites = connected ? await client.getSites() : []
-
-    return {
-      connected,
-      sitesCount: sites.length,
-      // 返回 DNS 解析类型提示
-      dnsRecordType: getDnsRecordType(host.nat_public_ip || host.ip_address || ''),
-      dnsRecordValue: host.nat_public_ip || host.ip_address || ''
     }
   })
 

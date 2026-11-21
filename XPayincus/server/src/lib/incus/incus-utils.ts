@@ -2,7 +2,6 @@
  * Incus 客户端工具函数
  */
 
-import { request } from 'undici'
 import type { IncusClient } from './incus-client.js'
 import type { IncusApiResponse, IncusOperation } from '../../types/incus.js'
 
@@ -49,23 +48,7 @@ export async function waitForOperationLong(
 
     try {
       // Use /wait endpoint for long polling
-      const waitUrl = `${client.baseUrl}${operationUrl}/wait?timeout=${waitTimeout}`
-
-      const response = await request(waitUrl, {
-        method: 'GET',
-        dispatcher: client.agent!,
-        headers: { 'Content-Type': 'application/json' }
-      })
-
-      const text = await response.body.text()
-
-      let data: IncusApiResponse
-      try {
-        data = JSON.parse(text) as IncusApiResponse
-      } catch {
-        console.error(`[Incus] 解析响应失败: ${text.substring(0, 200)}`)
-        throw new Error(`无效的响应: ${text.substring(0, 100)}`)
-      }
+      const data = await client.request<IncusApiResponse>('GET', `${operationUrl}/wait?timeout=${waitTimeout}`)
 
       // Check operation status in metadata
       const opStatus = (data.metadata as IncusOperation)?.status || (data as unknown as { status?: string }).status
@@ -80,7 +63,6 @@ export async function waitForOperationLong(
           (data as unknown as { error?: string }).error ||
           (data.metadata as IncusOperation)?.error ||
           '操作失败'
-        console.error(`[Incus] 操作失败: ${errMsg}`)
         throw new Error(errMsg)
       }
 

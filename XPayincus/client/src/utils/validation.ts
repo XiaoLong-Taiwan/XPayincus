@@ -404,6 +404,7 @@ export function buildHostApiUrl(address: string, port: number): string {
  */
 export function extractHostAddressFromUrl(url: string): string {
     try {
+    if (!/^https?:\/\//i.test(url)) return ''
         return normalizeHostAddress(new URL(url).hostname)
     } catch {
         return ''

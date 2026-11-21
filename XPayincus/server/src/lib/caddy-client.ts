@@ -269,8 +269,11 @@ export class CaddyClient {
    * 获取所有反代站点
    */
   async getSites(): Promise<string[]> {
-    try {
-      const config = await this.getConfig() as {
+    return this.getSitesFromConfig(await this.getConfig())
+  }
+
+  getSitesFromConfig(value: unknown): string[] {
+      const config = value as {
         apps?: {
           http?: {
             servers?: Record<string, {
@@ -294,9 +297,6 @@ export class CaddyClient {
       }
 
       return domains
-    } catch {
-      return []
-    }
   }
 
   /**

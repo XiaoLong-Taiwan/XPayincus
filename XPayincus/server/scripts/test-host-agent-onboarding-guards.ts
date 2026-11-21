@@ -16,7 +16,8 @@ function assert(condition: unknown, message: string): asserts condition {
 
 assert(hostsRoute.includes("required: ['name']"), 'Host creation must require only a name')
 assert(hostsRoute.includes('issueHostAgentInstallToken(hostId)'), 'Agent onboarding must issue a one-time Agent token')
-assert(hostsRoute.includes('agentOnlyOnboarding ? null : normalizedHostUrl'), 'Agent onboarding must not return a public host URL')
+assert(hostsRoute.includes('const normalizedHostUrl = url || `agent://${randomUUID()}`'), 'Agent-only hosts must receive a stable agent URI')
+assert(hostsRoute.includes('url: normalizedHostUrl'), 'Agent onboarding must return the agent URI')
 assert(hostsRoute.includes('prepareHostAddressSnapshotForWrite(normalizedHostUrl) : null'), 'Agent onboarding must not resolve/register a public URL')
 assert(agentRoute.includes('hostReport.routedIpv6 === true') && agentRoute.includes('hostReport.ipv6Prefixes.find'), 'Routed IPv6 must require an explicit capability and prefix')
 assert(agentRoute.includes('currentHost?.ipv6Mode === 3 && !currentHost.ipv6Subnet && typeof routedIpv6 === \'string\'') && agentRoute.includes('ipv6Mode: 1, ipv6Subnet: routedIpv6.trim()'), 'IPv6 must only enable routed mode when an explicit prefix is reported')

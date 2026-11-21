@@ -64,7 +64,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const saving = ref(false)
-const agentManagedHost = computed(() => (props.host.url || '').includes('agent-managed.invalid'))
+const agentManagedHost = computed(() => (props.host.url || '').startsWith('agent://'))
 
 const form = ref({
   name: '',
@@ -93,8 +93,8 @@ const form = ref({
     publicIpv6: '',
     bindIp: '',
     bindIpv6: '',
-    portRangeStart: null as number | null,
-    portRangeEnd: null as number | null
+    portRangeStart: 10000 as number | null,
+    portRangeEnd: 65535 as number | null
   }
 })
 
@@ -153,6 +153,7 @@ const requiresIpv6ParentInterface = computed(() => {
 // 从 URL 提取端口
 function extractPortFromUrl(url: string): number {
   try {
+    if (!/^https?:\/\//i.test(url)) return 8443
     const port = new URL(url).port
     return port ? parseInt(port, 10) : 8443
   } catch {
@@ -172,8 +173,8 @@ watch(() => props.host, async (newHost) => {
     form.value = {
       name: hostName,
       nameSuffix: nameSuffix,
-      hostAddress: extractHostAddressFromUrl(newHost.url || ''),
-      apiPort: extractPortFromUrl(newHost.url || ''),
+      hostAddress: agentManagedHost.value ? '' : extractHostAddressFromUrl(newHost.url || ''),
+      apiPort: agentManagedHost.value ? 8443 : extractPortFromUrl(newHost.url || ''),
       location: newHost.location || '',
       countryCode: newHost.countryCode || 'us',
       cpuAllowanceMax: newHost.cpuAllowanceMax || 0,
@@ -196,13 +197,26 @@ watch(() => props.host, async (newHost) => {
         publicIpv6: newHost.natConfig?.publicIpv6 || '',
         bindIp: newHost.natConfig?.bindIp || '',
         bindIpv6: newHost.natConfig?.bindIpv6 || '',
-        portRangeStart: newHost.natConfig?.portRangeStart || null,
-        portRangeEnd: newHost.natConfig?.portRangeEnd || null
+        portRangeStart: newHost.natConfig?.portRangeStart ?? 10000,
+        portRangeEnd: newHost.natConfig?.portRangeEnd ?? 65535
       }
     }
     try {
       const agentStatus = await api.hosts.getAgentStatus(newHost.id)
       const hostReport = agentStatus.agent?.lastReport?.host
+      const addresses = (hostReport?.network?.interfaces || []).flatMap((networkInterface: any) =>
+        (networkInterface.addresses || []).map((item: any) => item.address).filter((address: unknown): address is string => typeof address === 'string')
+      )
+      const ipv4 = addresses.find((address: string) => !address.includes(':') && address !== '127.0.0.1')
+      const ipv6 = addresses.find((address: string) => address.includes(':') && address !== '::1')
+      if (ipv4) {
+        form.value.natConfig.publicIp ||= ipv4
+        form.value.natConfig.bindIp ||= ipv4
+      }
+      if (ipv6) {
+        form.value.natConfig.publicIpv6 ||= ipv6
+        form.value.natConfig.bindIpv6 ||= ipv6
+      }
       form.value.ipv6CapabilityAvailable = Boolean(
         hostReport?.routedIpv6 &&
         hostReport.ipv6Prefixes?.some(prefix => {
@@ -542,7 +556,7 @@ async function saveConfig() {
           </div>
           <div>
             <label class="block text-xs text-themed-muted mb-1.5">{{ t('admin.hosts.portRangeEnd') }}</label>
-            <input v-model.number="form.natConfig.portRangeEnd" type="number" class="input" placeholder="60000" />
+            <input v-model.number="form.natConfig.portRangeEnd" type="number" class="input" placeholder="65535" />
           </div>
         </div>
       </div>
@@ -691,7 +705,7 @@ async function saveConfig() {
 
       <!-- 按钮 -->
       <div class="flex items-center justify-end gap-3 pt-4 border-t border-themed">
-        <button type="submit" class="btn-primary" :disabled="saving || !form.name || !form.hostAddress">
+        <button type="submit" class="btn-primary" :disabled="saving || !form.name || (!agentManagedHost && !form.hostAddress)">
           <svg v-if="saving" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
           {{ t('common.save') }}
         </button>

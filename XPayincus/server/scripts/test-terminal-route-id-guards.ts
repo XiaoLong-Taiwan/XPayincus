@@ -148,6 +148,16 @@ assert.ok(
   'terminal proxy must close newly opened Incus sockets and abort when the client disconnected early'
 )
 
+const createIncusConsoleStart = proxySource.indexOf('export async function createIncusConsoleConnection(')
+const agentOnlyBaseUrl = proxySource.indexOf(
+  "const baseUrl = host.url.startsWith('agent://') ? 'https://127.0.0.1:8443' : host.url",
+  createIncusConsoleStart
+)
+assert.ok(
+  createIncusConsoleStart !== -1 && agentOnlyBaseUrl > createIncusConsoleStart,
+  'Agent-only terminal connections must use a valid loopback HTTPS URL with the tunnel dispatcher'
+)
+
 assert.ok(
   proxySource.includes('reconnectGeneration: number') &&
     proxySource.includes('const reconnectGeneration = ++session.reconnectGeneration') &&

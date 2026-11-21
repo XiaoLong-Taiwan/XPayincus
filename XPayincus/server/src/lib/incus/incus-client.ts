@@ -19,11 +19,15 @@ export class IncusClient {
   keyPath: string | null
   agent: Dispatcher | null = null
   private hostId?: number
+  private readonly tunnelUrl: string
   connected: boolean = false
 
   constructor(options: IncusClientOptions) {
     this.hostId = options.hostId
-    this.baseUrl = IncusClient.normalizeUrl(options.url)
+    this.tunnelUrl = options.url
+    this.baseUrl = options.url.startsWith('agent://')
+      ? 'https://127.0.0.1:8443'
+      : IncusClient.normalizeUrl(options.url)
     const certificatePair = resolveCertificatePair(options.certPath, options.keyPath)
     this.certPath = certificatePair.certPath
     this.keyPath = certificatePair.keyPath
@@ -68,7 +72,7 @@ export class IncusClient {
    */
   async connect(): Promise<unknown> {
     try {
-      this.agent = new AgentTunnelDispatcher(() => resolveTunnelHostId(this.hostId, this.baseUrl), 'incus')
+      this.agent = new AgentTunnelDispatcher(() => resolveTunnelHostId(this.hostId, this.tunnelUrl), 'incus')
 
       // 测试连接
       const info = await this.getServerInfo()
@@ -164,7 +168,7 @@ export class IncusClient {
    */
   async stream(method: string, path: string, source?: AsyncIterable<Uint8Array>, headers: Record<string, string> = {}) {
     if (!this.agent) throw new Error('Incus 客户端未连接')
-    const hostId = await resolveTunnelHostId(this.hostId, this.baseUrl)
+    const hostId = await resolveTunnelHostId(this.hostId, this.tunnelUrl)
     return getAgentTunnel(hostId).requestStream('incus', method, path, source, headers)
   }
 

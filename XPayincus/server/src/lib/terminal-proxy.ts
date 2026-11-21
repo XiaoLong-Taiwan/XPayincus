@@ -363,7 +363,7 @@ export async function createIncusConsoleConnection(
     instanceType: 'container' | 'vm' = 'container'
 ): Promise<{ controlWs: TunnelSocket | null; dataWs: TunnelSocket; operationId: string; mode: 'exec' | 'console' }> {
     // 构建 Incus API URL
-    const baseUrl = host.url
+    const baseUrl = host.url.startsWith('agent://') ? 'https://127.0.0.1:8443' : host.url
 
     const connection = getAgentTunnel(host.id)
     const agent = new AgentTunnelDispatcher(async () => host.id, 'incus')

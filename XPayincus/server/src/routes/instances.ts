@@ -2358,7 +2358,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const host = await db.getHostById(instance.host_id)
     const natPublicIp = host?.nat_public_ip || null
     let hostIpAddress = host?.ip_address || null
-    if (!hostIpAddress && host?.url) {
+    if (!hostIpAddress && host?.url && /^https?:\/\//i.test(host.url)) {
       try {
         const u = new URL(host.url)
         hostIpAddress = u.hostname.replace(/^\[|\]$/g, '')
@@ -2396,7 +2396,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         }
       }
       // 4) 尝试从 host.url 解析（如果 URL 使用 IPv6）
-      if (!hostIpv6Address && host?.url) {
+      if (!hostIpv6Address && host?.url && /^https?:\/\//i.test(host.url)) {
         try {
           const u = new URL(host.url)
           const hostname = u.hostname.replace(/^\[|\]$/g, '')

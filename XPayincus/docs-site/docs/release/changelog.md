@@ -5,7 +5,12 @@
 - 本页：人工维护的发布策略、OTA 能力和生产验证说明。
 - [系统版本更新日志](/release/version-log)：从 Git tag 和 commit 自动生成的版本记录。
 
-統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.25**。正式發布狀態以 GitHub Release 為準。
+統一發行以根 `VERSION` 與根 `RELEASE.md` 為準，目前發行目標為 **v1.0.26**。正式發布狀態以 GitHub Release 為準。
+
+## v1.0.26 統一版本同步
+
+- Dashboard／API、Agent、RFW／ZFS 產品版本來源、Compose image tags 與 OCI labels 同步至 v1.0.26；最低 updater 維持 v1.0.3。
+- 詳見 `docs-site/release-notes/v1.0.26.md`。
 
 ## v1.0.25 Caddy 與 Incus 宿主安裝修正
 

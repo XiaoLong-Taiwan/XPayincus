@@ -554,7 +554,7 @@ export async function getInstancesPaginated(options: PaginationOptions = {}): Pr
       host_ipv6_gateway: i.host.ipv6Gateway,
       host_ip_address: (() => {
         if (i.host.ipAddress) return i.host.ipAddress
-        if (i.host.url) {
+        if (i.host.url && /^https?:\/\//i.test(i.host.url)) {
           try {
             const u = new URL(i.host.url)
             return u.hostname.replace(/^\[|\]$/g, '')

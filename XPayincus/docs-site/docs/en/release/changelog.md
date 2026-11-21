@@ -5,7 +5,12 @@ Release documentation has two layers:
 - This page: manually maintained release strategy, OTA capability and production verification notes.
 - [System Version Log](/en/release/version-log): automatically generated from Git tags and commits.
 
-Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.25**. GitHub Releases record publication status.
+Root `VERSION` and `RELEASE.md` define the unified release. The current target is **v1.0.26**. GitHub Releases record publication status.
+
+## v1.0.26 Unified Version Alignment
+
+- Align Dashboard/API, Agent, RFW/ZFS product version sources, Compose image tags, and OCI labels to v1.0.26; the minimum updater remains v1.0.3.
+- See `docs-site/release-notes/v1.0.26.md` for details.
 
 ## v1.0.25 Caddy and Incus Host Installation Fixes
 

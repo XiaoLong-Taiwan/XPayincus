@@ -406,7 +406,7 @@ export async function syncExistingHostAddressState(
 }
 
 export async function runHostAddressBackfillJob(): Promise<void> {
-  const hosts = await getHostsForAddressBackfill()
+  const hosts = (await getHostsForAddressBackfill()).filter(host => !host.url.startsWith('agent://'))
   let successCount = 0
   let failedCount = 0
 
@@ -430,7 +430,7 @@ export async function runHostAddressBackfillJob(): Promise<void> {
 }
 
 export async function runHostAddressPollJob(): Promise<void> {
-  const hosts = await getHostsWithDomainInputAlias()
+  const hosts = (await getHostsWithDomainInputAlias()).filter(host => !host.url.startsWith('agent://'))
   let successCount = 0
   let failedCount = 0
 

@@ -11,6 +11,7 @@ readonly CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
 readonly CADDY_OVERRIDE_FILE="/etc/systemd/system/caddy.service.d/override.conf"
 readonly CADDY_ADMIN_ADDRESS="127.0.0.1:2019"
 readonly CADDY_AUTOSAVE="/var/lib/caddy/.config/caddy/autosave.json"
+readonly ZABBLY_KEYRING="/etc/apt/keyrings/zabbly.gpg"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -96,9 +97,23 @@ cleanup_caddy_install() {
         fi
     fi
 }
+
+repair_apt_keyring_permissions() {
+    [[ ! -L /etc/apt/keyrings ]] || { error "APT keyring directory is a symlink"; return 1; }
+    [[ -f "$ZABBLY_KEYRING" && ! -L "$ZABBLY_KEYRING" ]] || return 0
+    chown root:root /etc/apt/keyrings "$ZABBLY_KEYRING"
+    chmod 0755 /etc/apt/keyrings
+    chmod 0644 "$ZABBLY_KEYRING"
+}
+
 log "Installing Caddy Web Server & Dependencies..."
 
 export DEBIAN_FRONTEND=noninteractive
+
+if ! repair_apt_keyring_permissions; then
+    error "Unable to repair the Zabbly APT keyring permissions"
+    exit 1
+fi
 
 if ! apt-get update --error-on=any -qq; then
     error "APT update failed before Caddy package or service changes; fix the repository error above and retry"

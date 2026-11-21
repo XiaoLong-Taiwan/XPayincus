@@ -12,7 +12,7 @@
 
 Go Agent 部署在 Incus 宿主機，負責資源、實例狀態、流量與監控歷史回報，透過 HMAC-SHA256 認證連線面板，並建立出站 WSS 管理隧道。Agent、Incus、Caddy、RFW 與 ZFS 均在宿主執行，不放進面板 Compose。
 
-本文依目前來源樹實作整理；根 [VERSION](../VERSION) 的 `v1.0.25` 是發行目標，正式可下載版本與功能以實際 GitHub Release、面板提供的安裝器及已部署的 Server／Agent 為準。`main` 腳本可能領先穩定版，不能據此推定功能已發布。新的隧道 frame 要求 Server／Agent 協調更新，沒有舊版能力協商或直連降級。操作指南另見 [Agent 安裝](../XPayincus/docs-site/docs/agent/install.md)。
+本文依目前來源樹實作整理；根 [VERSION](../VERSION) 的 `v1.0.26` 是發行目標，正式可下載版本與功能以實際 GitHub Release、面板提供的安裝器及已部署的 Server／Agent 為準。`main` 腳本可能領先穩定版，不能據此推定功能已發布。新的隧道 frame 要求 Server／Agent 協調更新，沒有舊版能力協商或直連降級。操作指南另見 [Agent 安裝](../XPayincus/docs-site/docs/agent/install.md)。
 
 ## 元件分工與需求
 
@@ -92,7 +92,7 @@ TOKEN 以 `/api/agent/install-config/:token?bootstrap=1` 兌換，目前嚴格�
 bash /root/agent-menu.sh --action status
 bash /root/agent-menu.sh --action logs
 bash /root/agent-menu.sh --action update --version latest
-bash /root/agent-menu.sh --action reinstall --version v1.0.25
+bash /root/agent-menu.sh --action reinstall --version v1.0.26
 bash /root/agent-menu.sh --action local --binary /root/build/incudal-agent \
   --sha256 '<可信的64位SHA256>'
 bash /root/agent-install.sh --reinstall --binary /root/build/incudal-agent --sha256 '<可信的64位SHA256>'
@@ -140,7 +140,7 @@ spool_retention_hours: 72
 
 ## 面板授權自升級
 
-面板在 Agent 在線、啟用、版本可辨識且有較新相容版本時，允許擁有者／管理員明確確認升級。`POST /api/agent/hosts/:hostId/upgrade` 使用 `{ "confirm": true, "targetVersion": "v1.0.25" }`（版本為範例）；Server 重新驗證版本、平台及最低 updater，固定 manifest 版本／雜湊／同源 URL。未授權心跳不自動推新版，同版自升級不替換檔案；同版修復請用 installer 重裝。
+面板在 Agent 在線、啟用、版本可辨識且有較新相容版本時，允許擁有者／管理員明確確認升級。`POST /api/agent/hosts/:hostId/upgrade` 使用 `{ "confirm": true, "targetVersion": "v1.0.26" }`（版本為範例）；Server 重新驗證版本、平台及最低 updater，固定 manifest 版本／雜湊／同源 URL。未授權心跳不自動推新版，同版自升級不替換檔案；同版修復請用 installer 重裝。
 
 Agent 最多隨機等待 5 分鐘，執行逾時 10 分鐘；只接受 `panel_url` 同源 URL 與轉址，下載／解壓上限各 64 MiB，先檢查 SHA256／大小再解壓、備份、原子替換並安排服務重啟。此流程只更換 Agent binary，不更新 unit、Incus、Caddy、RFW 或 ZFS。不要把 `.bak` 的存在視為健康失敗後一定自動回復的保證。
 
