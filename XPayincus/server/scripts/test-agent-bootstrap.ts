@@ -20,7 +20,7 @@ async function invoke(bootstrap: boolean, installed = false, failure = '') {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
   }).outputText
   new Function('fastify', 'consumeHostAgentInstallToken', 'prisma', 'readPanelCertificatePair',
-    'existsSync', 'join', 'dirname', '__dirname', 'shellEscape', 'createLog', 'LogModule', 'LogResult', 'derivePanelUrl', 'createHmac', 'getJwtSigningSecret', 'Buffer', compiled)(
+    'existsSync', 'join', 'dirname', '__dirname', 'createLog', 'LogModule', 'LogResult', 'Buffer', compiled)(
     { get(_path: string, _options: unknown, callback: typeof handler) { handler = callback } },
     async () => {
       consumed++
@@ -30,8 +30,7 @@ async function invoke(bootstrap: boolean, installed = false, failure = '') {
     { host: { findUnique: async () => ({ isInstalled: installed }) } },
     () => { if (failure === 'certificate') throw new Error('private-key-marker'); return { cert: Buffer.from('fixture-certificate') } },
     () => false, (...parts: string[]) => parts.join('/'), () => '', '/fixture',
-    (value: string) => `'${value}'`, async () => {}, { HOST: 'host' }, { SUCCESS: 'success' },
-    () => 'https://panel.example.org', createHmac, () => 'fixture-signing-secret', Buffer
+    async () => {}, { HOST: 'host' }, { SUCCESS: 'success' }, Buffer
   )
   await handler!({ params: { token: 'fixture' }, query: bootstrap ? { bootstrap: '1' } : {}, log: { info() {} } }, reply)
   return { consumed, status, payload }
