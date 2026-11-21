@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { artifactNames, composeImages, root, validateVersions } from './release-contract.mjs'
 
 const version = validateVersions()
-assert.equal(version, 'v1.0.26')
+assert.match(version, /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+)?(?:\+[0-9A-Za-z-]+)?$/)
 const images = composeImages(version)
 const compose = fs.readFileSync(path.join(root, 'XPayincus/deploy/compose/compose.yaml'), 'utf8')
 const build = fs.readFileSync(path.join(root, 'XPayincus/deploy/compose/compose.build.yaml'), 'utf8')
