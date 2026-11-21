@@ -634,7 +634,7 @@ const selectedHostingZone = computed<HostingZoneTab | null>(() => {
 const turnstileAction = computed(() => 'create_instance')
 
 onMounted(async (): Promise<void> => {
-  await configStore.loadPublicConfig(true)
+  await configStore.loadPublicConfig()
 
   // 检查 URL 参数（分享链接）
   const savedDraft = authStore.user ? readPurchaseDraft(authStore.user.id) : null
@@ -1289,7 +1289,7 @@ async function handleSubmit(): Promise<void> {
       {{ $t('common.loading') }}
     </div>
 
-    <form v-else class="lg:flex-1 lg:min-h-0 lg:flex lg:flex-col" @submit.prevent="handleSubmit">
+    <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto lg:flex-1" @submit.prevent="handleSubmit">
       <div class="mx-auto w-full max-w-5xl space-y-4 pb-4">
         <div class="nimbus-pane space-y-4">
           <section class="create-step-heading">
@@ -1324,7 +1324,7 @@ async function handleSubmit(): Promise<void> {
             @select="selectPackage"
             @show-owner-info="(packageId) => loadHostOwnerInfo(packageId)"
           />
-          <div ref="rightPanelScrollRef" class="nimbus-pane min-h-0 space-y-4 overflow-y-auto">
+          <div class="nimbus-pane min-h-0 space-y-4">
             <section class="create-step-heading">
               <span class="create-step-number">{{ regions.length > 0 ? 3 : 2 }}</span>
               <div><h2>{{ getCreatePageText('configurationTitle') }}</h2><p>{{ getCreatePageText('configurationHint') }}</p></div>
