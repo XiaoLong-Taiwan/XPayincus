@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:http'
 import WebSocket, { WebSocketServer } from 'ws'
 import { request } from 'undici'
-import { AgentTunnelError, attachAgentTunnel, getAgentTunnel, closeAllAgentTunnels, validateTunnelPath, TUNNEL_MAX_BODY } from '../src/lib/agent-tunnel.js'
+import { AgentTunnelError, attachAgentTunnel, getAgentTunnel, closeAllAgentTunnels, validateTunnelPath, TUNNEL_MAX_BODY, TUNNEL_MAX_CONCURRENT } from '../src/lib/agent-tunnel.js'
 import { AgentTunnelDispatcher } from '../src/lib/agent-tunnel-dispatcher.js'
 import { IncusClient } from '../src/lib/incus/incus-client.js'
 import './test-agent-tunnel-lifecycle.js'
@@ -70,7 +70,7 @@ try {
   while (!received.some(frame => frame.type === 'cancel')) await once(agent, 'message')
   const canceledId = received.find(frame => frame.type === 'cancel')!.id
   assert.equal(received.filter(frame => frame.type === 'request' && frame.id === canceledId).length, 1)
-  const pending = Array.from({ length: 7 }, () => connection.request('incus', 'POST', '/1.0/instances'))
+  const pending = Array.from({ length: TUNNEL_MAX_CONCURRENT }, () => connection.request('incus', 'POST', '/1.0/instances'))
   const settled = Promise.allSettled(pending)
   await assert.rejects(connection.request('incus', 'GET', '/1.0'), /CAPACITY/)
   agent.terminate()
