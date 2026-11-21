@@ -72,9 +72,9 @@ bash "$work/agent-install.sh" --panel-url https://panel.example.org \
 
 新池預設 ZFS loop、10 GiB，這是腳本預設，不是生產容量建議。執行前可依容量設定 `INCUS_STORAGE_SIZE=40GiB`、`INCUS_STORAGE_POOL`、`INCUS_STORAGE_DRIVER=zfs|dir|auto`。既有 default profile root 優先沿用其 pool；已有池不改 driver、不清空容器，不接受任意磁碟／source。ZFS 不可用時明確要求 zfs 的安裝會失敗，不應當成已自動改用 dir。
 
-TOKEN 交換端點 `/api/agent/install-config/:token?bootstrap=1` 目前提供固定五行：Agent ID、secret、base64 面板憑證、宿主安裝狀態及同源 Caddy installer URL。安裝器嚴格解析，不執行回傳 shell 程式碼；舊兩／四行回應須先更新面板。面板憑證配對檢查失敗會回 503 且不消耗 TOKEN。交換不跟隨轉址，反向代理存取日誌需遮蔽含 TOKEN 的路徑。
+TOKEN 交換端點 `/api/agent/install-config/:token?bootstrap=1` 目前提供固定四行：Agent ID、secret、base64 面板憑證及宿主安裝狀態。安裝器嚴格解析，不執行回傳 shell 程式碼；舊兩行回應須先更新面板。面板憑證配對檢查失敗會回 503 且不消耗 TOKEN。交換不跟隨轉址，反向代理存取日誌需遮蔽含 TOKEN 的路徑。
 
-兌換後安裝 Caddy、宿主捷徑並按狀態匯入首次 Incus trust。暫存 binary 與設定先跑一次心跳冒煙，再原子替換正式檔案、重啟及檢查服務。Agent 安裝失敗可嘗試回復 binary／設定／unit／服務狀態，但不回復宿主初始化、Caddy 或面板已輪換的認證。
+兌換後安裝宿主捷徑並按狀態匯入首次 Incus trust。暫存 binary 與設定先跑一次心跳冒煙，再原子替換正式檔案、重啟及檢查服務。Agent 安裝失敗可嘗試回復 binary／設定／unit／服務狀態，但不回復宿主初始化或面板已輪換的認證。
 
 首次顯示「待驗證」時不立即移除舊 trust。依面板完成驗證後，必要時在宿主執行 `incudal --refresh-agent-trust`。此命令透過既有 HMAC 取得、驗證面板憑證，新連線確認後才移除舊指紋。`AGENT_AUTH_REQUIRED`／`AGENT_SIGNATURE_INVALID` 應重新配對，不可略過認證或盲目信任下載憑證。舊腳本若提示面板需直連宿主 8443，先核對版本，勿為此公開管理埠。
 

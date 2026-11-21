@@ -41,7 +41,7 @@ class AgentInstallerTests(unittest.TestCase):
         self.shim('curl', 'input=""; out=""; url=""; while (($#)); do case "$1" in --config) input="$(cat)"; shift 2;; -o) out="$2"; shift 2;; *) url="$1"; shift;; esac; done\nif [[ "$input" == *api/hosts/caddy-script/* ]]; then cp "$TEST_BASE/caddy-installer" "$out"; exit 0; fi\nif [[ "$url" == */api/hosts/install.sh ]]; then cp "$TEST_BASE/host-installer" "$out"; exit 0; fi\nprintf "curl\\n" >> "$TEST_BASE/events"\nif [ -n "$input" ]; then printf "%s\\n" "$input" > "$TEST_BASE/request"; cat "$TEST_BASE/response" > "$out"; exit "${EXCHANGE_EXIT:-0}"; fi\nexit 22')
         (self.base / 'host-installer').write_text(':\n', newline='\n')
         (self.base / 'caddy-installer').write_text('printf "caddy-install\\n" >> "$TEST_BASE/events"\nexit "${CADDY_EXIT:-0}"\n', newline='\n')
-        (self.base / 'response').write_text(f"INCUDAL_AGENT_ID='agt_{'a' * 32}'\nINCUDAL_AGENT_SECRET='{SECRET}'\nINCUDAL_PANEL_CERTIFICATE='Y2VydA=='\nINCUDAL_HOST_INSTALLED='true'\nINCUDAL_CADDY_INSTALL_URL='https://panel.example.org/api/hosts/caddy-script/fixture'\n", newline='\n')
+        (self.base / 'response').write_text(f"INCUDAL_AGENT_ID='agt_{'a' * 32}'\nINCUDAL_AGENT_SECRET='{SECRET}'\nINCUDAL_PANEL_CERTIFICATE='Y2VydA=='\nINCUDAL_HOST_INSTALLED='true'\n", newline='\n')
 
     def path(self, path):
         value = str(path).replace('\\', '/')
