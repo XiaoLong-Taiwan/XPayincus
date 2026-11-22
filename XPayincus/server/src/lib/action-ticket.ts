@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid'
 
-export type ActionTicketType = 'oauth-bind' | 'terminal'
+export type ActionTicketType = 'oauth-bind' | 'terminal' | 'monitoring-stream'
 
 interface BaseActionTicket {
   type: ActionTicketType
@@ -22,13 +22,19 @@ interface TerminalTicket extends BaseActionTicket {
   instanceId: number
 }
 
-type ActionTicket = OAuthBindTicket | TerminalTicket
+interface MonitoringStreamTicket extends BaseActionTicket {
+  type: 'monitoring-stream'
+  instanceId: number
+}
+
+type ActionTicket = OAuthBindTicket | TerminalTicket | MonitoringStreamTicket
 
 const actionTickets = new Map<string, ActionTicket>()
 
 const ACTION_TICKET_TTL_MS = {
   'oauth-bind': 60 * 1000,
-  terminal: 60 * 1000
+  terminal: 60 * 1000,
+  'monitoring-stream': 30 * 1000
 } as const
 
 setInterval(() => {
@@ -84,6 +90,26 @@ export function generateTerminalAccessTicket(
   })
 }
 
+export function generateMonitoringStreamAccessTicket(
+  userId: number,
+  instanceId: number,
+  issuedAt: number,
+  sessionId?: string
+): string {
+  const now = Date.now()
+  return createTicket({
+    type: 'monitoring-stream',
+    userId,
+    instanceId,
+    issuedAt,
+    sessionId,
+    expiresAt: now + ACTION_TICKET_TTL_MS['monitoring-stream'],
+    createdAt: now,
+    usageCount: 0,
+    maxUsage: 1
+  })
+}
+
 export interface OAuthBindTicketConsumeResult {
   valid: boolean
   userId?: number
@@ -99,6 +125,39 @@ export interface TerminalTicketConsumeResult {
   issuedAt?: number
   sessionId?: string
   error?: string
+}
+
+export interface MonitoringStreamTicketConsumeResult {
+  valid: boolean
+  userId?: number
+  instanceId?: number
+  issuedAt?: number
+  sessionId?: string
+  error?: string
+}
+
+export function inspectMonitoringStreamAccessTicket(
+  token: string,
+  expectedInstanceId?: number
+): MonitoringStreamTicketConsumeResult {
+  const ticket = actionTickets.get(token)
+  if (!ticket || ticket.type !== 'monitoring-stream') {
+    return { valid: false, error: 'Ticket not found or already used' }
+  }
+  if (Date.now() > ticket.expiresAt) {
+    actionTickets.delete(token)
+    return { valid: false, error: 'Ticket expired' }
+  }
+  if (expectedInstanceId !== undefined && ticket.instanceId !== expectedInstanceId) {
+    return { valid: false, error: 'Instance mismatch' }
+  }
+  return {
+    valid: true,
+    userId: ticket.userId,
+    instanceId: ticket.instanceId,
+    issuedAt: ticket.issuedAt,
+    sessionId: ticket.sessionId
+  }
 }
 
 export function consumeOAuthBindTicket(token: string): OAuthBindTicketConsumeResult {
@@ -160,6 +219,16 @@ export function consumeTerminalAccessTicket(
     issuedAt: ticket.issuedAt,
     sessionId: ticket.sessionId
   }
+}
+
+export function consumeMonitoringStreamAccessTicket(
+  token: string,
+  expectedInstanceId?: number
+): MonitoringStreamTicketConsumeResult {
+  const inspected = inspectMonitoringStreamAccessTicket(token, expectedInstanceId)
+  if (!inspected.valid) return inspected
+  actionTickets.delete(token)
+  return inspected
 }
 
 export function revokeActionTicketsForSession(sessionId: string): number {

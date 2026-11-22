@@ -1,12 +1,10 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { agentMonitoringApi, instanceMonitoringStreamUrl, type InstanceHistory, type InstanceMonitoringSample } from '@/api/agent-monitoring'
-import { useAuthStore } from '@/stores/auth'
+import { agentMonitoringApi, createInstanceMonitoringStreamTicket, instanceMonitoringStreamUrl, type InstanceHistory, type InstanceMonitoringSample } from '@/api/agent-monitoring'
 
 const MAX_TREND_POINTS = 100
 const MAX_RECONNECT_ATTEMPTS = 5
 
 export function useInstanceMonitoring() {
-  const auth = useAuthStore()
   const sample = ref<InstanceMonitoringSample | null>(null)
   const trend = ref<InstanceHistory | null>(null)
   const status = ref<'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error'>('connecting')
@@ -18,6 +16,7 @@ export function useInstanceMonitoring() {
   let staleTimer: ReturnType<typeof setTimeout> | null = null
   let activeInstanceId = 0
   let generation = 0
+  let connectionAttempt = 0
   let points: InstanceMonitoringSample[] = []
 
   const isOffline = computed(() => status.value === 'offline')
@@ -53,59 +52,69 @@ export function useInstanceMonitoring() {
 
     const open = () => {
       if (generation !== currentGeneration || activeInstanceId !== instanceId) return
-      const token = auth.token || localStorage.getItem('token')
-      if (!token) {
-        status.value = 'error'
-        return
-      }
-      source = new EventSource(instanceMonitoringStreamUrl(instanceId, token), { withCredentials: true })
-      source.onopen = () => {
-        reconnectAttempt.value = 0
-        status.value = 'connected'
-        if (staleTimer) clearTimeout(staleTimer)
-        staleTimer = setTimeout(() => {
-          status.value = 'offline'
-        }, 45000)
-      }
-      source.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as InstanceMonitoringSample | { type: string; sample?: InstanceMonitoringSample; online?: boolean }
-          if ('type' in payload && payload.type === 'offline') {
+      const attempt = ++connectionAttempt
+      void createInstanceMonitoringStreamTicket(instanceId).then(({ ticket }) => {
+        if (generation !== currentGeneration || activeInstanceId !== instanceId || attempt !== connectionAttempt) return
+        const eventSource = new EventSource(instanceMonitoringStreamUrl(instanceId, ticket), { withCredentials: true })
+        source?.close()
+        source = eventSource
+        eventSource.onopen = () => {
+          if (generation !== currentGeneration || attempt !== connectionAttempt) return
+          reconnectAttempt.value = 0
+          status.value = 'connected'
+          if (staleTimer) clearTimeout(staleTimer)
+          staleTimer = setTimeout(() => {
+            status.value = 'offline'
+          }, 45000)
+        }
+        eventSource.onmessage = (event) => {
+          if (generation !== currentGeneration || attempt !== connectionAttempt) return
+          try {
+            const payload = JSON.parse(event.data) as InstanceMonitoringSample | { type: string; sample?: InstanceMonitoringSample; online?: boolean }
+            if ('type' in payload && payload.type === 'offline') {
+              status.value = 'offline'
+              return
+            }
+            const next: InstanceMonitoringSample | undefined = 'sampledAt' in payload
+              ? payload
+              : payload.sample
+            if (!next?.sampledAt || !next.metrics) return
+            sample.value = next
+            onSample?.(next)
+            status.value = 'connected'
+            points.push(next)
+            if (points.length > MAX_TREND_POINTS) points = points.slice(-MAX_TREND_POINTS)
+            if (staleTimer) clearTimeout(staleTimer)
+            staleTimer = setTimeout(() => { status.value = 'offline' }, 45000)
+          } catch {
+            status.value = 'error'
+          }
+        }
+        eventSource.onerror = () => {
+          if (generation !== currentGeneration || attempt !== connectionAttempt) {
+            eventSource.close()
+            return
+          }
+          eventSource.close()
+          source = null
+          reconnectAttempt.value += 1
+          if (reconnectAttempt.value > MAX_RECONNECT_ATTEMPTS) {
             status.value = 'offline'
             return
           }
-          const next: InstanceMonitoringSample | undefined = 'sampledAt' in payload
-            ? payload
-            : payload.sample
-          if (!next?.sampledAt || !next.metrics) return
-          sample.value = next
-          onSample?.(next)
-          status.value = 'connected'
-          points.push(next)
-          if (points.length > MAX_TREND_POINTS) points = points.slice(-MAX_TREND_POINTS)
-          if (staleTimer) clearTimeout(staleTimer)
-          staleTimer = setTimeout(() => { status.value = 'offline' }, 45000)
-        } catch {
-          status.value = 'error'
+          status.value = 'reconnecting'
+          reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
         }
-      }
-      source.onerror = () => {
-        source?.close()
-        source = null
-        reconnectAttempt.value += 1
-        if (reconnectAttempt.value > MAX_RECONNECT_ATTEMPTS) {
-          status.value = 'offline'
-          return
-        }
-        status.value = 'reconnecting'
-        reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
-      }
+      }).catch(() => {
+        if (generation === currentGeneration && activeInstanceId === instanceId) status.value = 'error'
+      })
     }
     open()
   }
 
   function disconnect() {
     generation += 1
+    connectionAttempt += 1
     activeInstanceId = 0
     source?.close()
     source = null

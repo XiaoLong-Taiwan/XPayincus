@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { prisma } from '../db/prisma.js'
 import { subscribeInstanceMonitoring, type InstanceMonitoringStreamEvent } from '../lib/agent-monitoring-stream.js'
 import { readAgentInstanceSnapshot } from '../services/agent-monitoring.js'
+import { consumeMonitoringStreamAccessTicket, generateMonitoringStreamAccessTicket, inspectMonitoringStreamAccessTicket } from '../lib/action-ticket.js'
+import { isAccessTokenInvalidated } from '../lib/security.js'
 
 const positiveIdPattern = /^[1-9]\d*$/
 const freshnessMs = 45 * 1000
@@ -11,24 +13,44 @@ function writeEvent(response: NodeJS.WritableStream, event: InstanceMonitoringSt
 }
 
 export default async function agentMonitoringStreamRoutes(fastify: FastifyInstance) {
-  fastify.get<{ Params: { instanceId: string }; Querystring: { token?: string } }>('/instances/:instanceId/monitoring/stream', async (request: FastifyRequest<{ Params: { instanceId: string }; Querystring: { token?: string } }>, reply) => {
-    const token = request.query.token
-    if (typeof token === 'string' && token.length > 0) {
-      request.headers.authorization = `Bearer ${token}`
-    }
-    await fastify.authenticate(request, reply)
-    if (reply.sent) return
-
+  fastify.post<{ Params: { instanceId: string } }>('/instances/:instanceId/monitoring/stream-ticket', { onRequest: [fastify.authenticate] }, async (request, reply) => {
     if (!positiveIdPattern.test(request.params.instanceId)) {
       return reply.code(400).send({ error: 'Invalid instance ID', code: 'INVALID_INSTANCE_ID' })
     }
     const instanceId = Number(request.params.instanceId)
     const instance = await prisma.instance.findUnique({
       where: { id: instanceId },
-      select: { id: true, userId: true, hostId: true, name: true, status: true }
+      select: { id: true, userId: true, status: true }
     })
     if (!instance || instance.status === 'deleted') return reply.code(404).send({ error: 'Instance not found', code: 'INSTANCE_NOT_FOUND' })
     if (instance.userId !== request.user.id && request.user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
+    if (!request.user.iat) return reply.code(401).send({ error: 'Unauthorized', code: 'UNAUTHORIZED' })
+    return {
+      ticket: generateMonitoringStreamAccessTicket(request.user.id, instanceId, request.user.iat, request.user.sid),
+      expiresIn: 30
+    }
+  })
+
+  fastify.get<{ Params: { instanceId: string }; Querystring: { ticket?: string } }>('/instances/:instanceId/monitoring/stream', async (request: FastifyRequest<{ Params: { instanceId: string }; Querystring: { ticket?: string } }>, reply) => {
+    if (!positiveIdPattern.test(request.params.instanceId)) {
+      return reply.code(400).send({ error: 'Invalid instance ID', code: 'INVALID_INSTANCE_ID' })
+    }
+    const instanceId = Number(request.params.instanceId)
+    const ticket = request.query.ticket
+    if (!ticket) return reply.code(401).send({ error: 'Authentication ticket is required', code: 'UNAUTHORIZED' })
+    const inspected = inspectMonitoringStreamAccessTicket(ticket, instanceId)
+    if (!inspected.valid || !inspected.userId || !inspected.issuedAt) return reply.code(401).send({ error: inspected.error || 'Authentication failed', code: 'UNAUTHORIZED' })
+    if (await isAccessTokenInvalidated(inspected.userId, inspected.issuedAt, inspected.sessionId)) return reply.code(401).send({ error: 'Session expired', code: 'SESSION_INVALIDATED' })
+    const user = await prisma.user.findUnique({ where: { id: inspected.userId }, select: { role: true, status: true } })
+    if (!user || user.status !== 'active') return reply.code(401).send({ error: 'Unauthorized', code: 'UNAUTHORIZED' })
+    const instance = await prisma.instance.findUnique({
+      where: { id: instanceId },
+      select: { id: true, userId: true, hostId: true, name: true, status: true }
+    })
+    if (!instance || instance.status === 'deleted') return reply.code(404).send({ error: 'Instance not found', code: 'INSTANCE_NOT_FOUND' })
+    if (instance.userId !== inspected.userId && user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
+    const authResult = consumeMonitoringStreamAccessTicket(ticket, instanceId)
+    if (!authResult.valid || !authResult.userId || !authResult.issuedAt) return reply.code(401).send({ error: authResult.error || 'Authentication failed', code: 'UNAUTHORIZED' })
 
     const agent = await prisma.hostAgent.findUnique({ where: { hostId: instance.hostId }, select: { agentId: true } })
     const snapshot = readAgentInstanceSnapshot(agent?.agentId ?? null, instance.name)

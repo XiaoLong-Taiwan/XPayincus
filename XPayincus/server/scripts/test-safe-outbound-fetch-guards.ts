@@ -14,7 +14,7 @@ const outboundSecuritySource = readSource('../src/lib/outbound-security.ts')
 const serverPackageSource = readSource('../package.json')
 const rootPackageSource = readSource('../../package.json')
 const safeFetchBody = outboundSecuritySource.match(
-  /export async function safeFetch\([\s\S]*?\n}\n\nexport async function assertSafeStorageTarget/
+  /export async function safeFetch\([\s\S]*?(?=export async function assertSafeStorageTarget)/
 )?.[0] ?? ''
 
 assert.ok(safeFetchBody, 'outbound security must export safeFetch')

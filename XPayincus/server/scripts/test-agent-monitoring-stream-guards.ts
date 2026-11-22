@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { subscribeInstanceMonitoring, getInstanceMonitoringSubscriberCount, publishInstanceMonitoring } from '../src/lib/agent-monitoring-stream.js'
+import { consumeMonitoringStreamAccessTicket, generateMonitoringStreamAccessTicket, inspectMonitoringStreamAccessTicket } from '../src/lib/action-ticket.js'
 import { ingestAgentMonitoring, readAgentInstanceSnapshot, monitoringRetentionMs } from '../src/services/agent-monitoring.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -15,8 +16,13 @@ process.env.INCUDAL_AGENT_STATE_DIR = directory
 
 try {
   assert.ok(routeSource.includes("'/instances/:instanceId/monitoring/stream'"))
+  assert.ok(routeSource.includes("'/instances/:instanceId/monitoring/stream-ticket'"))
   assert.ok(routeSource.includes("text/event-stream"))
   assert.ok(routeSource.includes('fastify.authenticate'))
+  assert.ok(routeSource.includes('consumeMonitoringStreamAccessTicket(ticket, instanceId)'))
+  assert.ok(routeSource.includes('inspectMonitoringStreamAccessTicket(ticket, instanceId)'))
+  assert.ok(routeSource.indexOf('consumeMonitoringStreamAccessTicket(ticket, instanceId)') > routeSource.indexOf('instance.userId !== inspected.userId'))
+  assert.ok(routeSource.includes('isAccessTokenInvalidated(inspected.userId, inspected.issuedAt, inspected.sessionId)'))
   assert.ok(routeSource.includes('instance.userId !== request.user.id'))
   assert.ok(routeSource.includes("type: 'offline'"))
   assert.ok(routeSource.includes("response.on('close'"))
@@ -55,6 +61,20 @@ try {
   assert.deepEqual(events[1], { type: 'offline', online: false })
   unsubscribe()
   assert.equal(getInstanceMonitoringSubscriberCount(42), 0)
+
+  const ticket = generateMonitoringStreamAccessTicket(7, 42, 123, 'session-1')
+  assert.deepEqual(consumeMonitoringStreamAccessTicket(ticket, 42), {
+    valid: true,
+    userId: 7,
+    instanceId: 42,
+    issuedAt: 123,
+    sessionId: 'session-1'
+  })
+  assert.equal(consumeMonitoringStreamAccessTicket(ticket, 42).valid, false)
+  const mismatchedTicket = generateMonitoringStreamAccessTicket(7, 42, 123)
+  assert.equal(consumeMonitoringStreamAccessTicket(mismatchedTicket, 43).valid, false)
+  assert.equal(inspectMonitoringStreamAccessTicket(mismatchedTicket, 42).valid, true)
+  assert.equal(consumeMonitoringStreamAccessTicket(mismatchedTicket, 42).valid, true)
 
   console.log('agent monitoring stream guard tests passed')
 } finally {

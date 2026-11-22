@@ -866,7 +866,7 @@ const allowedClientNetworkPrimitiveLines = new Map<string, string[]>([
   ['client/src/components/instance/TerminalModal.vue', ['new WebSocket(wsUrl)']],
   ['client/src/composables/useTerminal.ts', ['new WebSocket(wsUrl)']],
   ['client/src/views/TerminalView.vue', ['new WebSocket(wsUrl)']],
-  ['client/src/composables/useInstanceMonitoring.ts', ['new EventSource(instanceMonitoringStreamUrl(instanceId, token), { withCredentials: true })']]
+  ['client/src/composables/useInstanceMonitoring.ts', ['new EventSource(instanceMonitoringStreamUrl(instanceId, ticket), { withCredentials: true })']]
 ])
 
 for (const file of clientSourceFiles) {

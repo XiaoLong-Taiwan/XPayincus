@@ -250,9 +250,15 @@ function isAdminLikeRoute(route: RouteInfo): boolean {
 }
 
 function hasRouteProtection(route: RouteInfo): boolean {
-  if (route.file === 'agent-monitoring-stream.ts' && route.path === '/instances/:instanceId/monitoring/stream') {
-    return route.handler.includes('request.headers.authorization = `Bearer ${token}`')
-      && route.handler.includes('await fastify.authenticate(request, reply)')
+  if (route.file === 'agent-monitoring-stream.ts') {
+    if (route.path === '/instances/:instanceId/monitoring/stream-ticket') {
+      return route.options.includes('onRequest: [fastify.authenticate]')
+    }
+    if (route.path === '/instances/:instanceId/monitoring/stream') {
+      return route.handler.includes('consumeMonitoringStreamAccessTicket(ticket, instanceId)')
+        && route.handler.includes('inspectMonitoringStreamAccessTicket(ticket, instanceId)')
+        && route.handler.includes('isAccessTokenInvalidated(inspected.userId, inspected.issuedAt, inspected.sessionId)')
+    }
   }
 
   return /onRequest|preHandler|websocket/.test(route.options) || route.fileHasAuthenticateHook

@@ -87,8 +87,12 @@ export const agentMonitoringApi = {
   events: (hostId: number, query: MonitoringQuery, signal?: AbortSignal) => get<ComponentEvents>(hostId, 'events', query, signal)
 }
 
-export function instanceMonitoringStreamUrl(instanceId: number, token: string): string {
+export async function createInstanceMonitoringStreamTicket(instanceId: number): Promise<{ ticket: string; expiresIn: number }> {
+  return http.post(`/instances/${instanceId}/monitoring/stream-ticket`, {})
+}
+
+export function instanceMonitoringStreamUrl(instanceId: number, ticket: string): string {
   const url = new URL(buildApiUrl(`/instances/${instanceId}/monitoring/stream`), window.location.origin)
-  url.searchParams.set('token', token)
+  url.searchParams.set('ticket', ticket)
   return url.toString()
 }
