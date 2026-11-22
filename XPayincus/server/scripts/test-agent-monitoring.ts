@@ -71,7 +71,17 @@ try {
   const pressureHistory = readAgentMonitoring('pressure', range, now)
   assert.equal(pressureHistory.summary[counterKey], undefined)
   assert.equal(pressureHistory.summaryCounters[counterKey]?.delta, 90)
-  for (const name of readdirSync(directory)) assert.ok(!readFileSync(join(directory, name), 'utf8').includes('rxBytes'))
+  for (const name of readdirSync(directory)) {
+    const journal = JSON.parse(readFileSync(join(directory, name), 'utf8'))
+    for (const point of journal.samples ?? []) for (const instance of point.instances ?? []) {
+      assert.equal(instance.metrics.rxBytes, undefined)
+      assert.equal(instance.metrics.txBytes, undefined)
+      if (instance.name === 'vm1') {
+        assert.equal(typeof instance.metrics.rxBytesPerSecond, 'number')
+        assert.equal(typeof instance.metrics.txBytesPerSecond, 'number')
+      }
+    }
+  }
   const source = readFileSync(new URL('../src/routes/agent.ts', import.meta.url), 'utf8')
   const start = source.indexOf("  for (const view of ['history', 'instances/top', 'instances/history', 'events'] as const)")
   const end = source.indexOf('  fastify.post<', start)
