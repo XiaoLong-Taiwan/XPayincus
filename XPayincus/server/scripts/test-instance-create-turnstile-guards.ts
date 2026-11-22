@@ -45,7 +45,7 @@ assert(
 )
 
 assert(
-  instanceCreateViewSource.includes('v-if="isCreateTurnstileRequired"') &&
+  instanceCreateViewSource.includes('v-if="activeStep === 4 && isCreateTurnstileRequired"') &&
     instanceCreateViewSource.includes("instance.createPage.turnstileRequiredTitle") &&
     instanceCreateViewSource.includes("instance.createPage.turnstileRequiredDesc") &&
     instanceCreateViewSource.includes("instance.createPage.turnstileRequired") &&
