@@ -1063,7 +1063,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     const agent = await authenticateAgentRequest(request, reply)
     if (!agent) return
     const host = await prisma.host.findUnique({ where: { id: agent.hostId }, select: { url: true, isInstalled: true } })
-    if (!host?.isInstalled) return reply.code(403).send({ error: 'Installed host required' })
+    if (!host?.isInstalled) return reply.code(403).send({ error: 'Installed host required', code: 'AGENT_HOST_NOT_VERIFIED' })
     try {
       const appDir = process.env.INCUDAL_APP_DIR || process.cwd()
       const installDir = process.env.INSTALL_DIR || (appDir.endsWith('/current') ? dirname(appDir) : null)
@@ -1325,8 +1325,10 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       if (!host) return reply.code(404).send({ error: 'Host not found', code: 'HOST_NOT_FOUND' })
       if (host.userId !== request.user.id && request.user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
       const now = Date.now()
-      const from = request.query.from === undefined ? now - 86400000 : Date.parse(request.query.from)
-      const to = request.query.to === undefined ? now : Date.parse(request.query.to)
+      const requestedFrom = request.query.from === undefined ? now - 86400000 : Date.parse(request.query.from)
+      const requestedTo = request.query.to === undefined ? now : Date.parse(request.query.to)
+      const from = Math.max(requestedFrom, now - 7 * 86400000)
+      const to = Math.min(requestedTo, now)
       const limit = Number(request.query.limit ?? 1000)
       const resolutionSeconds = Number(request.query.resolutionSeconds ?? 60)
       const top = Number(request.query.top ?? 10)
@@ -1336,7 +1338,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       if (view === 'instances/history' && !isMonitoringInstanceName(name)) {
         return reply.code(400).send({ error: 'Valid instance name is required', code: 'AGENT_MONITORING_INVALID_NAME' })
       }
-      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to || from < now - 7 * 86400000 || to > now ||
+      if (!Number.isFinite(requestedFrom) || !Number.isFinite(requestedTo) || !Number.isFinite(from) || !Number.isFinite(to) || from >= to ||
         !Number.isInteger(limit) || limit < 1 || limit > 2000 || !Number.isInteger(resolutionSeconds) || resolutionSeconds < 30 || resolutionSeconds > 86400 ||
         !Number.isInteger(top) || top < 1 || top > 100 || !instanceMonitoringKeys.includes(metric as InstanceMonitoringMetric) || !['avg', 'max'].includes(orderBy)) {
         return reply.code(400).send({ error: 'Invalid monitoring query', code: 'AGENT_MONITORING_INVALID_QUERY' })

@@ -44,7 +44,7 @@ interface Props {
   monitoringTrend?: InstanceHistory | null
   monitoringStatus?: 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error'
   monitoringHistoryLoading?: boolean
-  monitoringHistoryError?: boolean
+  monitoringHistoryError?: { message: string; code?: string | null; status?: number | null } | null
 }
 
 interface Emits {
@@ -77,6 +77,16 @@ const mappedSshPort = computed(() => {
 })
 const monitoringMetrics = computed(() => props.monitoringSample?.metrics ?? {})
 const monitoringTrendRows = computed(() => props.monitoringTrend?.buckets.slice(-24) ?? [])
+const memoryUsageMb = computed(() => {
+  if (props.stats.memory.usage > 0) return props.stats.memory.usage
+  if (typeof monitoringMetrics.value.memoryUsedBytes !== 'number' || !Number.isFinite(monitoringMetrics.value.memoryUsedBytes)) return 0
+  return monitoringMetrics.value.memoryUsedBytes / 1024 / 1024
+})
+const memoryLimitMb = computed(() => props.stats.memory.limit > 0 ? props.stats.memory.limit : props.instance.memory)
+const memoryUsagePercent = computed(() => {
+  if (memoryLimitMb.value <= 0) return 0
+  return clampPercent(memoryUsageMb.value / memoryLimitMb.value * 100)
+})
 
 const isRunning = computed<boolean>(() => {
   const s = props.instance?.status?.toLowerCase()
@@ -457,21 +467,20 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               <span class="text-xs text-themed-secondary ml-1">({{ t('instance.detail.info.includesCache') }})</span>
             </span>
             <span class="text-themed font-medium">
-              <template v-if="stats.memory.usage > 0">
-                {{ typeof monitoringMetrics.memoryUsedBytes === 'number' ? formatMemory(monitoringMetrics.memoryUsedBytes) : formatMemory(stats.memory.usage) }} /
+              <template v-if="memoryUsageMb > 0">
+                {{ formatMemory(memoryUsageMb) }} /
               </template>
-              {{ formatMemory(stats.memory.limit > 0 ? stats.memory.limit : instance.memory) }}
-              <span v-if="stats.memory.usagePercent > 0" class="text-xs text-themed-muted ml-1">
-                ({{ stats.memory.usagePercent }}%)
+              {{ formatMemory(memoryLimitMb) }}
+              <span v-if="memoryUsagePercent > 0" class="text-xs text-themed-muted ml-1">
+                ({{ memoryUsagePercent.toFixed(1).replace(/\.0$/, '') }}%)
               </span>
             </span>
           </div>
           <div class="h-2 rounded-full overflow-hidden bg-themed/20">
             <div
               class="h-full rounded-full transition-all duration-500"
-              :class="stats.memory.usagePercent > 80 ? 'bg-red-500' : stats.memory.usagePercent > 60 ? 'bg-yellow-500' : 'bg-green-500'"
-              :style="{ width: clampPercent(stats.memory.usagePercent) + '%' }"
-            ></div>
+              :class="memoryUsagePercent > 80 ? 'bg-red-500' : memoryUsagePercent > 60 ? 'bg-yellow-500' : 'bg-green-500'"
+              :style="{ width: memoryUsagePercent + '%' }"></div>
           </div>
         </div>
         <!-- Disk -->
@@ -567,13 +576,15 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             {{ monitoringStatus === 'connected' ? '即時監控' : monitoringStatus === 'offline' ? 'Agent 離線' : monitoringStatus === 'error' ? '監控連線失敗' : monitoringStatus === 'reconnecting' ? '重新連線中' : '連線中' }}
           </p>
           <p v-if="monitoringHistoryLoading" class="mt-2 text-xs text-themed-muted" role="status">載入七日趨勢…</p>
-          <p v-else-if="monitoringHistoryError" class="mt-2 text-xs text-red-600" role="alert">七日趨勢載入失敗</p>
+          <p v-else-if="monitoringHistoryError" class="mt-2 text-xs text-red-600" role="alert">
+            {{ monitoringHistoryError.message }}<span v-if="monitoringHistoryError.code">（{{ monitoringHistoryError.code }}）</span>
+          </p>
           <details v-else-if="monitoringTrend" class="mt-2 text-xs">
             <summary class="cursor-pointer text-themed-muted">七日趨勢 · {{ monitoringTrend.resolutionSeconds }} 秒解析度</summary>
             <div class="mt-2 max-h-40 space-y-2 overflow-y-auto">
               <article v-for="bucket in monitoringTrendRows" :key="bucket.from" class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-themed py-2">
                 <time class="text-themed-muted">{{ new Date(bucket.from).toLocaleString() }}</time>
-                <span class="font-mono tabular-nums">CPU {{ bucket.metrics.cpuUsagePercent?.avg?.toFixed(1) ?? '—' }}% · RAM {{ bucket.metrics.memoryUsedBytes?.avg !== undefined ? formatMemory(bucket.metrics.memoryUsedBytes.avg) : '—' }}</span>
+                <span class="font-mono tabular-nums">CPU {{ bucket.metrics.cpuUsagePercent?.avg?.toFixed(1) ?? '—' }}% · RAM {{ bucket.metrics.memoryUsedBytes?.avg !== undefined ? formatMemory(bucket.metrics.memoryUsedBytes.avg / 1024 / 1024) : '—' }}</span>
               </article>
               <p v-if="!monitoringTrendRows.length" class="text-xs text-themed-muted">尚無趨勢資料</p>
             </div>

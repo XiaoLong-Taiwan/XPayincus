@@ -11,7 +11,7 @@ export function useInstanceMonitoring() {
   const status = ref<'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error'>('connecting')
   const reconnectAttempt = ref(0)
   const historyLoading = ref(false)
-  const historyError = ref(false)
+  const historyError = ref<{ message: string; code?: string | null; status?: number | null } | null>(null)
   let source: EventSource | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let staleTimer: ReturnType<typeof setTimeout> | null = null
@@ -38,15 +38,22 @@ export function useInstanceMonitoring() {
     trend.value = null
     status.value = 'connecting'
     historyLoading.value = true
-    historyError.value = false
+    historyError.value = null
+    const historyNow = Date.now()
     void agentMonitoringApi.instanceHistory(
       hostId,
-      { from: new Date(Date.now() - 7 * 86400000).toISOString(), to: new Date().toISOString(), resolutionSeconds: 3600, limit: 1000 },
+      { from: new Date(historyNow - 7 * 86400000).toISOString(), to: new Date(historyNow - 1000).toISOString(), resolutionSeconds: 3600, limit: 1000 },
       instanceName
     ).then((result) => {
       if (generation === currentGeneration) trend.value = result
-    }).catch(() => {
-      if (generation === currentGeneration) historyError.value = true
+    }).catch((cause: any) => {
+      if (generation === currentGeneration) {
+        historyError.value = {
+          message: cause?.message || '七日趨勢載入失敗',
+          code: cause?.code,
+          status: cause?.status
+        }
+      }
     }).finally(() => {
       if (generation === currentGeneration) historyLoading.value = false
     })

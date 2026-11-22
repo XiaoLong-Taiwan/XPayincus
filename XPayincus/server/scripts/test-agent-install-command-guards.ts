@@ -250,6 +250,10 @@ assert.ok(buildCommand({ panelUrl: 'https://panel.example.org', binaryUrl: 'http
 assert.equal((agentRouteSource.match(/\n      panelUrl,\n      agent:/g) ?? []).length, 2, 'both Agent install responses must include panelUrl')
 assert.ok(installScriptSource.indexOf('\nconfirm_plan\n') < installScriptSource.indexOf('\npreflight_environment\n'), 'summary confirmation must precede host mutations')
 assert.ok(installScriptSource.includes('--prepare-agent-host') && installScriptSource.includes('--refresh-agent-trust'), 'ait TOKEN flow must initialize the host and authenticate Incus trust')
+assert.ok(
+  installScriptSource.includes('if [ -n "${HOST_SCRIPT}" ] && [ "${BOOTSTRAP_HOST_INSTALLED}" = true ]; then'),
+  'Agent trust refresh must require an explicit successful host bootstrap result'
+)
 assert.ok(!installScriptSource.includes('INCUDAL_CADDY_INSTALL_URL') && !installScriptSource.includes('CADDY_SCRIPT'), 'Agent installation must not install or invoke Caddy')
 assert.ok(
   installScriptSource.includes('Agent 本体已安装并启动，但面板 Incus 信任刷新未完成') &&

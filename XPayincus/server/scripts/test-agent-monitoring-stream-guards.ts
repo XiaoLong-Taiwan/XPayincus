@@ -29,6 +29,12 @@ try {
   assert.ok(routeSource.includes('incusId: true'))
   assert.ok(routeSource.includes('const monitoringName = instance.incusId || instance.name'))
   assert.ok(appSource.indexOf("fastify.register(agentMonitoringStreamRoutes") < appSource.indexOf("fastify.register(agentRoutes"))
+  const agentRouteSource = readFileSync(join(root, 'src/routes/agent.ts'), 'utf8')
+  assert.ok(agentRouteSource.includes("code: 'AGENT_HOST_NOT_VERIFIED'"))
+  assert.ok(agentRouteSource.includes('const requestedFrom = request.query.from === undefined ? now - 86400000 : Date.parse(request.query.from)'))
+  assert.ok(agentRouteSource.includes('const requestedTo = request.query.to === undefined ? now : Date.parse(request.query.to)'))
+  assert.ok(agentRouteSource.includes('const from = Math.max(requestedFrom, now - 7 * 86400000)'))
+  assert.ok(agentRouteSource.includes('const to = Math.min(requestedTo, now)'))
   assert.equal(monitoringRetentionMs, 7 * 86400000)
 
   const now = Date.now()

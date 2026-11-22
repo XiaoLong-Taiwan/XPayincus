@@ -802,7 +802,7 @@ if [ "${COMMIT_OK}" != "1" ]; then
 fi
 
 rm -f "${BACKUP_BIN}" "${BACKUP_CONFIG}" "${BACKUP_SERVICE}"
-if [ -n "${HOST_SCRIPT}" ] && [ "${BOOTSTRAP_HOST_INSTALLED}" != false ]; then
+if [ -n "${HOST_SCRIPT}" ] && [ "${BOOTSTRAP_HOST_INSTALLED}" = true ]; then
   INCUDAL_AGENT_CONFIG_FILE="${CONFIG_FILE}" bash "${HOST_SCRIPT}" --refresh-agent-trust || {
     printf '  %s\n' 'Agent 本体已安装并启动，但面板 Incus 信任刷新未完成，面板暂时无法管理本机。' >&2
     printf '  %s\n' \

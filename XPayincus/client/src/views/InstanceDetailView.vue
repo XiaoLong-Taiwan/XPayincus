@@ -387,8 +387,15 @@ function connectInstanceMonitoring(): void {
   monitoringBinding = binding
   instanceMonitoring.connect(instance.value.id, hostId, monitoringName, (sample) => {
     const metrics = sample.metrics
+    const memoryUsageMb = typeof metrics.memoryUsedBytes === 'number' && Number.isFinite(metrics.memoryUsedBytes)
+      ? metrics.memoryUsedBytes / 1024 / 1024
+      : 0
     stats.value = {
-      memory: { usage: metrics.memoryUsedBytes ?? 0, limit: stats.value.memory.limit, usagePercent: stats.value.memory.limit ? (metrics.memoryUsedBytes ?? 0) / stats.value.memory.limit * 100 : 0 },
+      memory: {
+        usage: memoryUsageMb,
+        limit: stats.value.memory.limit,
+        usagePercent: stats.value.memory.limit ? memoryUsageMb / stats.value.memory.limit * 100 : 0
+      },
       disk: stats.value.disk,
       network: stats.value.network
     }

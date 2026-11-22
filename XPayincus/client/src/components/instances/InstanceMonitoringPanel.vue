@@ -7,7 +7,7 @@ const props = defineProps<{
   trend: InstanceHistory | null
   status: 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error'
   historyLoading: boolean
-  historyError: boolean
+  historyError: { message: string; code?: string | null; status?: number | null } | null
 }>()
 
 const statusLabel = computed(() => ({
@@ -41,7 +41,7 @@ function format(value: number | undefined, suffix: string): string {
       </div>
     </div>
     <p v-if="historyLoading" role="status" class="text-xs text-themed-muted">載入七日趨勢…</p>
-    <p v-else-if="historyError" role="alert" class="text-xs text-red-600">七日趨勢載入失敗</p>
+    <p v-else-if="historyError" role="alert" class="text-xs text-red-600">{{ historyError.message }}<span v-if="historyError.code">（{{ historyError.code }}）</span></p>
     <template v-else-if="trend">
       <h3 class="border-t border-themed pt-3 text-xs font-semibold">七日趨勢 · {{ trend.resolutionSeconds }} 秒解析度</h3>
       <div class="max-h-56 space-y-2 overflow-y-auto">
