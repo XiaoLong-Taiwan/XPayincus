@@ -54,7 +54,9 @@ function isIpv4Address(value: string | null | undefined): boolean {
 
 const publicIpv4Address = computed<string | null>(() => {
   const candidate = (props.instance as any).nat_public_ip ?? props.instance.natPublicIp ?? props.instance.host?.nat_public_ip ?? null
-  return isIpv4Address(candidate) ? candidate : null
+  if (isIpv4Address(candidate)) return candidate
+  const isNat = ['nat', 'nat_ipv6', 'nat_ipv6_nat', 'ipv6_nat', 'ipv6_only'].includes(props.instance.network_mode || '')
+  return !isNat && isIpv4Address(props.instance.ipv4) ? props.instance.ipv4 : null
 })
 
 // 宿主机公网 IPv6 地址（从 host_ip_address 中提取，仅在 IPv6 NAT 模式下使用）
@@ -87,7 +89,7 @@ const portLimit = computed<number | null>(() => {
 
 // 最终显示的公网 IPv6 地址（根据网络模式决定优先级）
 const displayIpv6 = computed<string | null>(() => {
-  const mode = props.instance.network_mode
+  const mode = networkMode.value
   // nat_ipv6_nat / ipv6_nat 模式：容器共享宿主机 IPv6，优先显示宿主机公网 IPv6
   if (mode === 'nat_ipv6_nat' || mode === 'ipv6_nat') {
     return hostPublicIpv6.value || props.instance.ipv6 || null
@@ -250,34 +252,8 @@ const canReassignIpv6 = computed(() => {
         {{ t('instance.detail.network.title') }}
       </h2>
       <dl class="space-y-3 text-sm">
-        <!-- NAT 模式: 显示内网 IPv4 和公网 IPv4（如果有） -->
-        <template v-if="['nat', 'nat_ipv6', 'nat_ipv6_nat', 'ipv6_nat', 'ipv6_only'].includes(instance.network_mode || '')">
-          <!-- 内网 IPv4 -->
-          <div class="flex justify-between items-center">
-            <dt class="text-gray-500">{{ t('instance.detail.network.privateIpv4') }}</dt>
-            <dd v-if="instance.ipv4" class="flex items-center gap-2">
-              <code
-                class="font-mono px-2 py-0.5 rounded"
-                :class="themeStore.isDark ? 'text-gray-300 bg-gray-800' : 'text-gray-700 bg-gray-100'"
-              >{{ instance.ipv4 }}</code>
-              <button
-                class="text-gray-500 hover:text-gray-400"
-                :title="t('common.copy')"
-                @click="emit('copy', instance.ipv4, 'ipv4')"
-              >
-                <svg v-if="copied !== 'ipv4'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                <svg v-else class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                </svg>
-              </button>
-            </dd>
-            <dd v-else class="text-gray-500">-</dd>
-          </div>
-          <!-- 只有真实公网 IPv4 时才显示 -->
-          <div v-if="publicIpv4Address" class="flex justify-between items-center mt-3">
-            <dt class="text-gray-500">{{ t('instance.detail.network.publicIpv4') }}</dt>
+        <div v-if="publicIpv4Address" class="flex justify-between items-center">
+            <dt class="text-gray-500">IPv4</dt>
             <dd class="flex items-center gap-2">
               <code
                 class="font-mono px-2 py-0.5 rounded"
@@ -296,14 +272,13 @@ const canReassignIpv6 = computed(() => {
                 </svg>
               </button>
             </dd>
-          </div>
-          <!-- 公网 IPv6 -->
-          <div v-if="['nat_ipv6', 'nat_ipv6_nat', 'ipv6_nat', 'ipv6_only'].includes(instance.network_mode || '')" class="flex justify-between items-center mt-3">
-            <dt class="text-gray-500">{{ t('instance.detail.network.publicIpv6') }}</dt>
+        </div>
+        <div v-if="displayIpv6" class="flex justify-between items-center mt-3">
+            <dt class="text-gray-500">IPv6</dt>
             <dd v-if="displayIpv6" class="flex items-center gap-2">
               <!-- 重新获取 IPv6 按钮（仅 nat_ipv6 模式有独立 IPv6 可重新分配） -->
               <button
-                v-if="props.isInstanceOwner !== false && instance.network_mode === 'nat_ipv6'"
+                v-if="props.isInstanceOwner !== false && networkMode === 'nat_ipv6'"
                 class="text-xs px-2 py-0.5 rounded transition-colors flex-shrink-0"
                 :class="[
                   canReassignIpv6
@@ -350,60 +325,13 @@ const canReassignIpv6 = computed(() => {
               </button>
             </dd>
             <dd v-else class="text-gray-500">-</dd>
-          </div>
-        </template>
-        <!-- 非 NAT 模式: 显示公网 IPv4 和公网 IPv6 -->
-        <template v-else>
-          <div class="flex justify-between items-center">
-            <dt class="text-gray-500">{{ t('instance.detail.network.publicIpv4') }}</dt>
-            <dd v-if="instance.ipv4" class="flex items-center gap-2">
-              <code
-                class="font-mono px-2 py-0.5 rounded"
-                :class="themeStore.isDark ? 'text-gray-300 bg-gray-800' : 'text-gray-700 bg-gray-100'"
-              >{{ instance.ipv4 }}</code>
-              <button
-                class="text-gray-500 hover:text-gray-400"
-                :title="t('common.copy')"
-                @click="emit('copy', instance.ipv4, 'ipv4')"
-              >
-                <svg v-if="copied !== 'ipv4'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                <svg v-else class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                </svg>
-              </button>
-            </dd>
-            <dd v-else class="text-gray-500">-</dd>
-          </div>
-          <div v-if="instance.ipv6" class="flex justify-between items-center mt-3">
-            <dt class="text-gray-500">{{ t('instance.detail.network.publicIpv6') }}</dt>
-            <dd class="flex items-center gap-2">
-              <code
-                class="font-mono text-xs px-2 py-0.5 rounded truncate max-w-[300px]"
-                :class="themeStore.isDark ? 'text-gray-400 bg-gray-800/50' : 'text-gray-600 bg-gray-100'"
-                :title="instance.ipv6"
-              >{{ instance.ipv6 }}</code>
-              <button
-                class="text-gray-500 hover:text-gray-400 flex-shrink-0"
-                :title="t('common.copy')"
-                @click="emit('copy', instance.ipv6, 'ipv6')"
-              >
-                <svg v-if="copied !== 'ipv6'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                <svg v-else class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                </svg>
-              </button>
-            </dd>
-          </div>
-        </template>
+        </div>
+        <p v-if="!publicIpv4Address && !displayIpv6" class="text-sm text-gray-500">-</p>
       </dl>
     </div>
 
     <!-- Port Mappings (NAT modes) -->
-    <div v-if="['nat', 'nat_ipv6', 'nat_ipv6_nat', 'ipv6_nat', 'ipv6_only'].includes(instance.network_mode || '')" class="card p-5">
+    <div v-if="['nat', 'nat_ipv6', 'nat_ipv6_nat', 'ipv6_nat', 'ipv6_only'].includes(networkMode)" class="card p-5">
       <div class="flex items-center justify-between gap-3 mb-4">
         <div>
           <div class="flex items-center gap-2">

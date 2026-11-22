@@ -21,8 +21,6 @@ import InstanceConfigTab from '@/components/instance/InstanceConfigTab.vue'
 import InstanceLogsTab from '@/components/instance/InstanceLogsTab.vue'
 import SnapshotManager from '@/components/SnapshotManager.vue'
 import TrafficStats from '@/components/instance/TrafficStats.vue'
-import InstanceMonitoringPanel from '@/components/instances/InstanceMonitoringPanel.vue'
-import InstanceNetworkInfo from '@/components/instances/InstanceNetworkInfo.vue'
 import AddPortModal from '@/components/instance/modals/AddPortModal.vue'
 import PortConflictModal from '@/components/instance/modals/PortConflictModal.vue'
 import { helpPath, hostDetailPath, instancesPath, isAdminEntry } from '@/utils/app-paths'
@@ -3024,18 +3022,15 @@ function formatShortDate(dateStr: string | null | undefined): string {
               :instance-password="instancePassword"
               :can-edit-config="instance.isHostOwner === true"
               :enable-resource-pool="!isAdminEntry && (instance as any).enableResourcePool === true"
+              :monitoring-sample="instanceMonitoring.sample.value"
+              :monitoring-trend="instanceMonitoring.trend.value"
+              :monitoring-status="instanceMonitoring.status.value"
+              :monitoring-history-loading="instanceMonitoring.historyLoading.value"
+              :monitoring-history-error="instanceMonitoring.historyError.value"
               @toggle-password="togglePasswordVisibility"
               @copy="copyToClipboard"
               @edit-config="openConfigEditModal"
               @redeem="openRedeemModal"
-            />
-            <InstanceNetworkInfo v-if="activeTab === 'info'" :instance="instance" />
-            <InstanceMonitoringPanel
-              :sample="instanceMonitoring.sample.value"
-              :trend="instanceMonitoring.trend.value"
-              :status="instanceMonitoring.status.value"
-              :history-loading="instanceMonitoring.historyLoading.value"
-              :history-error="instanceMonitoring.historyError.value"
             />
           </div>
 

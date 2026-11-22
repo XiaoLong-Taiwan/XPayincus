@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatMemory, formatDisk, formatDate } from '@/utils/formatters'
 import type { Instance } from '@/types/api'
+import type { InstanceHistory, InstanceMonitoringSample } from '@/api/agent-monitoring'
 import FlagIcon from '@/components/FlagIcon.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { getVipBadgeInlineStyle, normalizeVipBadgeStyle } from '@/utils/vipBadge'
@@ -39,6 +40,11 @@ interface Props {
   instancePassword?: Record<string, string | null>
   canEditConfig?: boolean
   enableResourcePool?: boolean
+  monitoringSample?: InstanceMonitoringSample | null
+  monitoringTrend?: InstanceHistory | null
+  monitoringStatus?: 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error'
+  monitoringHistoryLoading?: boolean
+  monitoringHistoryError?: boolean
 }
 
 interface Emits {
@@ -50,6 +56,27 @@ interface Emits {
 
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
+
+const ipv4Address = computed(() => {
+  const instance = props.instance as any
+  const publicAddress = instance.nat_public_ip ?? instance.natPublicIp ?? instance.host?.nat_public_ip
+  const isNat = ['nat', 'nat_ipv6', 'nat_ipv6_nat', 'ipv6_nat', 'ipv6_only'].includes(props.instance.network_mode || '')
+  if (typeof publicAddress === 'string' && publicAddress) return publicAddress
+  return isNat ? null : props.instance.ipv4 || null
+})
+const ipv6Address = computed(() => {
+  const instance = props.instance as any
+  const hostIpv6 = instance.host_ipv6_address ?? instance.hostIpv6Address ?? instance.host_ip_address ?? instance.hostIpAddress ?? instance.host?.ip_address
+  const isSharedIpv6 = ['nat_ipv6_nat', 'ipv6_nat'].includes(props.instance.network_mode || '')
+  const address = isSharedIpv6 && typeof hostIpv6 === 'string' && hostIpv6.includes(':') ? hostIpv6 : props.instance.ipv6
+  return typeof address === 'string' && address.includes(':') ? address : null
+})
+const mappedSshPort = computed(() => {
+  const mapping = (props.instance as any).port_mappings?.find((item: any) => item.protocol === 'tcp' && (item.privatePort ?? item.private_port) === 22)
+  return mapping?.publicPort ?? mapping?.public_port ?? props.instance.ssh_port ?? null
+})
+const monitoringMetrics = computed(() => props.monitoringSample?.metrics ?? {})
+const monitoringTrendRows = computed(() => props.monitoringTrend?.buckets.slice(-24) ?? [])
 
 const isRunning = computed<boolean>(() => {
   const s = props.instance?.status?.toLowerCase()
@@ -140,6 +167,24 @@ function getSuspendReasonText(reason: string | null | undefined): string {
   return reason
 }
 
+function formatMonitoringMetric(value: number | undefined, suffix = ''): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)}${suffix}`
+    : '—'
+}
+
+function formatBytesPerSecond(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let amount = value
+  let unit = 0
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024
+    unit++
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(amount)} ${units[unit]}`
+}
+
 // 格式化带宽值，统一换算成 Mbps
 function formatBandwidth(bandwidth: string | null | undefined): string {
   const value = String(bandwidth || '').trim()
@@ -226,10 +271,30 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             </span>
           </dd>
         </div>
-        <div v-if="instance.ssh_port" class="flex justify-between">
+        <div v-if="ipv4Address || ipv6Address || mappedSshPort" class="space-y-2 border-t border-themed pt-3">
+          <div v-if="ipv4Address" class="flex items-center justify-between gap-3">
+            <dt class="text-themed-muted">IPv4</dt>
+            <dd class="flex min-w-0 items-center gap-2 text-themed font-medium">
+              <span class="break-all text-right font-mono">{{ ipv4Address }}</span>
+              <button type="button" class="shrink-0 text-themed-muted hover:text-themed" :title="t('common.copy')" @click="emit('copy', ipv4Address)">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+              </button>
+            </dd>
+          </div>
+          <div v-if="ipv6Address" class="flex items-center justify-between gap-3">
+            <dt class="text-themed-muted">IPv6</dt>
+            <dd class="flex min-w-0 items-center gap-2 text-themed font-medium">
+              <span class="break-all text-right font-mono">{{ ipv6Address }}</span>
+              <button type="button" class="shrink-0 text-themed-muted hover:text-themed" :title="t('common.copy')" @click="emit('copy', ipv6Address)">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+              </button>
+            </dd>
+          </div>
+        </div>
+        <div v-if="mappedSshPort" class="flex justify-between">
           <dt class="text-themed-muted">{{ t('instance.detail.info.sshPort') }}</dt>
           <dd class="flex items-center gap-2 text-themed font-medium">
-            <span class="font-mono">{{ instance.ssh_port }}</span>
+            <span class="font-mono">{{ mappedSshPort }}</span>
             <button
               class="text-themed-muted hover:text-themed transition-colors"
               :title="t('instance.detail.info.sshHelpTitle')"
@@ -241,7 +306,7 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             </button>
             <button
               class="text-xs text-themed-muted hover:text-themed transition-colors"
-              @click="emit('copy', instance.ssh_port?.toString() || '')"
+              @click="emit('copy', String(mappedSshPort))"
             >
               {{ t('instance.detail.info.copy') }}
             </button>
@@ -354,6 +419,39 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             v-if="isRunning && statsLoading"
             class="w-3 h-3 border-2 border-sakura-400 border-t-transparent rounded-full animate-spin"
           ></div>
+        </div>
+      </div>
+      <div class="mb-4 grid grid-cols-2 gap-3 border-b border-themed pb-4 lg:grid-cols-4" aria-label="Live resource monitoring">
+        <div class="border-l-2 border-themed pl-3">
+          <p class="text-xs text-themed-muted">CPU 即時</p>
+          <p class="mt-1 font-mono text-sm tabular-nums">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent, '%') }}</p>
+        </div>
+        <div class="border-l-2 border-themed pl-3">
+          <p class="text-xs text-themed-muted">記憶體即時</p>
+          <p class="mt-1 font-mono text-sm tabular-nums">{{ typeof monitoringMetrics.memoryUsedBytes === 'number' ? formatMemory(monitoringMetrics.memoryUsedBytes) : '—' }}</p>
+        </div>
+        <div class="border-l-2 border-themed pl-3">
+          <p class="text-xs text-themed-muted">網路接收</p>
+          <p class="mt-1 font-mono text-sm tabular-nums">{{ formatBytesPerSecond(monitoringMetrics.rxBytesPerSecond) }}</p>
+        </div>
+        <div class="border-l-2 border-themed pl-3">
+          <p class="text-xs text-themed-muted">網路傳送</p>
+          <p class="mt-1 font-mono text-sm tabular-nums">{{ formatBytesPerSecond(monitoringMetrics.txBytesPerSecond) }}</p>
+        </div>
+        <p class="col-span-full text-xs" :class="monitoringStatus === 'connected' ? 'text-green-600' : monitoringStatus === 'offline' || monitoringStatus === 'error' ? 'text-red-600' : 'text-amber-600'" role="status" aria-live="polite">
+          {{ monitoringStatus === 'connected' ? '即時監控' : monitoringStatus === 'offline' ? 'Agent 離線' : monitoringStatus === 'error' ? '監控連線失敗' : monitoringStatus === 'reconnecting' ? '重新連線中' : '連線中' }}
+        </p>
+        <p v-if="monitoringHistoryLoading" class="col-span-full text-xs text-themed-muted" role="status">載入七日趨勢…</p>
+        <p v-else-if="monitoringHistoryError" class="col-span-full text-xs text-red-600" role="alert">七日趨勢載入失敗</p>
+        <div v-else-if="monitoringTrend" class="col-span-full space-y-2">
+          <h3 class="border-t border-themed pt-3 text-xs font-semibold">七日趨勢 · {{ monitoringTrend.resolutionSeconds }} 秒解析度</h3>
+          <div class="max-h-40 space-y-2 overflow-y-auto">
+            <article v-for="bucket in monitoringTrendRows" :key="bucket.from" class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-themed py-2 text-xs">
+              <time class="text-themed-muted">{{ new Date(bucket.from).toLocaleString() }}</time>
+              <span class="font-mono tabular-nums">CPU {{ bucket.metrics.cpuUsagePercent?.avg?.toFixed(1) ?? '—' }}% · RAM {{ bucket.metrics.memoryUsedBytes?.avg !== undefined ? formatMemory(bucket.metrics.memoryUsedBytes.avg) : '—' }}</span>
+            </article>
+            <p v-if="!monitoringTrendRows.length" class="text-xs text-themed-muted">尚無趨勢資料</p>
+          </div>
         </div>
       </div>
       <div class="space-y-4">
