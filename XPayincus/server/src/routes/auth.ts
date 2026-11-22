@@ -493,7 +493,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
             type: 'string',
             minLength: 3,
             maxLength: 32,
-            pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$'  // 必须以字母开头
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]*$'
           },
           password: { type: 'string', minLength: 8, maxLength: 128 },
           email: { type: 'string', format: 'email' },
@@ -514,7 +514,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     // Validate username (prevent dangerous character injection)
     const usernameValidation = validateIdentifier(username, 'Username', 3, 32)
     if (!usernameValidation.valid) {
-      return reply.code(400).send({ error: usernameValidation.message })
+      return reply.code(400).send(apiError(ErrorCode.VALIDATION_ERROR))
     }
 
     // 检查用户名是否包含危险字符

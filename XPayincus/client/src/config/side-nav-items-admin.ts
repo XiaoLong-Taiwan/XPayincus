@@ -25,7 +25,6 @@ export const navMenuItems: MenuItem[] = [
   { name: 'admin-my-packages', path: '/admin/resources/packages', icon: 'package', label: 'nav.packages' },
   { name: 'admin-images', path: '/admin/images', icon: 'image', label: 'nav.images' },
   { name: 'admin-instance-create', path: '/admin/instances/create', icon: 'gift', label: 'nav.create' },
-  { name: 'admin-mail', path: '/admin/mail', icon: 'mail', label: 'nav.mail' },
   { divider: true, label: 'nav.system' },
   { name: 'admin-help', path: '/admin/help', icon: 'book', label: 'nav.helpManage' },
   { name: 'admin-entertainment', path: '/admin/entertainment', icon: 'gift', label: 'nav.entertainment' },

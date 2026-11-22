@@ -34,7 +34,7 @@ const SAFE_NAME_REGEX = /^[\u4e00-\u9fa5a-zA-Z0-9\-_ ,()]+$/
 /**
  * 严格名称正则（只允许字母、数字、连字符、下划线，必须以字母开头）
  */
-const STRICT_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9\-_]*$/
+const STRICT_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9\-_]*$/
 
 /**
  * 验证结果接口

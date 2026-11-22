@@ -44,7 +44,6 @@ const passwordSectionSource = readRepoFile('client/src/components/profile/Passwo
 const adminUsersViewSource = readRepoFile('client/src/views/admin/UsersView.vue')
 const adminBillingViewSource = readRepoFile('client/src/views/admin/BillingView.vue')
 const adminHelpManageViewSource = readRepoFile('client/src/views/admin/HelpManageView.vue')
-const adminMailViewSource = readRepoFile('client/src/views/admin/AdminMailView.vue')
 const adminImagesViewSource = readRepoFile('client/src/views/admin/ImagesView.vue')
 const extensionsViewSource = readRepoFile('client/src/views/ExtensionsView.vue')
 const instancesViewSource = readRepoFile('client/src/views/InstancesView.vue')
@@ -97,8 +96,6 @@ const registerViewSource = readRepoFile('client/src/views/RegisterView.vue')
 const forgotPasswordViewSource = readRepoFile('client/src/views/ForgotPasswordView.vue')
 const helpViewSource = readRepoFile('client/src/views/HelpView.vue')
 const oauthAuthorizeViewSource = readRepoFile('client/src/views/OAuthAuthorizeView.vue')
-const mailViewSource = readRepoFile('client/src/views/MailView.vue')
-const mailDomainViewSource = readRepoFile('client/src/views/MailDomainView.vue')
 const walletViewSource = readRepoFile('client/src/views/WalletView.vue')
 const transfersViewSource = readRepoFile('client/src/views/TransfersView.vue')
 const logsViewSource = readRepoFile('client/src/views/LogsView.vue')
@@ -725,8 +722,6 @@ assert.ok(
     userAppPathsSource.includes("return '/wallet'") &&
     userAppPathsSource.includes("return '/help'") &&
     userAppPathsSource.includes("return '/inbox'") &&
-    userAppPathsSource.includes("return '/mail'") &&
-    userAppPathsSource.includes('return `/mail/domains/${encodeURIComponent(String(id))}`') &&
     userAppPathsSource.includes("return '/terminal'") &&
     userAppPathsSource.includes("return '/extensions'") &&
     userAppPathsSource.includes("return '/entertainment'") &&
@@ -738,8 +733,6 @@ assert.ok(
     adminAppPathsSource.includes("return '/admin/billing'") &&
     adminAppPathsSource.includes("return '/admin/help'") &&
     adminAppPathsSource.includes("return '/admin/inbox'") &&
-    adminAppPathsSource.includes("return '/admin/mail'") &&
-    adminAppPathsSource.includes('export function mailDomainPath(_id?: number | string): string') &&
     adminAppPathsSource.includes("return '/admin/entertainment'") &&
     adminAppPathsSource.includes("return '/admin/instances'") &&
     adminAppPathsSource.includes('return null') &&
@@ -1076,17 +1069,6 @@ assert.ok(
   'shared inbox notification routing must use app path helpers and avoid customer-only paths in the admin entry'
 )
 assert.ok(
-  mailViewSource.includes("import { mailDomainPath } from '@/utils/app-paths'") &&
-    mailViewSource.includes('router.push(mailDomainPath(id))') &&
-    !mailViewSource.includes('router.push(`/mail/domains/${id}`)') &&
-    mailDomainViewSource.includes("import { helpPath, mailPath } from '@/utils/app-paths'") &&
-    mailDomainViewSource.includes('router.push(mailPath())') &&
-    mailDomainViewSource.includes(':to="`${helpPath()}/mail`"') &&
-    !mailDomainViewSource.includes("router.push('/mail')") &&
-    !mailDomainViewSource.includes('to="/help/mail"'),
-  'mail views must route through app path helpers so customer mail links do not leak into the admin build'
-)
-assert.ok(
   marketViewSource.includes("import { instanceCreatePath, loginPath } from '@/utils/app-paths'") &&
     marketViewSource.includes('path: instanceCreatePath()') &&
     marketViewSource.includes('const redirect = `${instanceCreatePath()}?${new URLSearchParams(query).toString()}`') &&
@@ -1115,23 +1097,6 @@ assert.ok(
     !adminHelpManageViewSource.includes('class="card overflow-x-auto"') &&
     !adminHelpManageViewSource.includes('table class="w-full min-w-[800px]"'),
   'admin help article list must keep mobile cards, a fixed desktop table, and edit/publish/delete actions'
-)
-assert.ok(
-  countOccurrences(adminMailViewSource, 'class="space-y-3 lg:hidden"') >= 4 &&
-    countOccurrences(adminMailViewSource, 'class="card hidden overflow-hidden lg:block"') >= 4 &&
-    adminMailViewSource.includes('table class="w-full table-fixed"') &&
-    adminMailViewSource.includes('table class="w-full table-fixed"') &&
-    adminMailViewSource.includes('table class="w-full table-fixed"') &&
-    adminMailViewSource.includes('table class="w-full table-fixed"') &&
-    adminMailViewSource.includes('@click="openEditSourceModal(source)"') &&
-    adminMailViewSource.includes('@click="deleteSource(source)"') &&
-    adminMailViewSource.includes('@click="openEditPlanModal(plan)"') &&
-    adminMailViewSource.includes('@click="deletePlan(plan)"') &&
-    adminMailViewSource.includes('@click="openUnsubModal(sub)"') &&
-    !adminMailViewSource.includes('class="card overflow-x-auto"') &&
-    !adminMailViewSource.includes('table-auto w-full min-w-[640px]') &&
-    !adminMailViewSource.includes('table-auto w-full min-w-[800px]'),
-  'admin mail lists must render mobile cards and fixed desktop tables while preserving edit/delete/unsubscribe actions'
 )
 assert.ok(
   adminImagesViewSource.includes('class="space-y-3 lg:hidden"') &&

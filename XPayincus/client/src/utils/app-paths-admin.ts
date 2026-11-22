@@ -44,14 +44,6 @@ export function inboxPath(): string {
   return '/admin/inbox'
 }
 
-export function mailPath(): string {
-  return '/admin/mail'
-}
-
-export function mailDomainPath(_id?: number | string): string {
-  return '/admin/mail'
-}
-
 export function transfersPath(): string {
   return '/admin/inbox'
 }

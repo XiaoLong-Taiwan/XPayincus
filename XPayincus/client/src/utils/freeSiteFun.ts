@@ -91,12 +91,6 @@ const freeSiteCopyKeys = [
   'createCommissionEstimate',
   'createPlanFee',
   'createMonthlyEquivalent',
-  'mailPrice',
-  'mailCheckoutTitle',
-  'mailBillingCycle',
-  'mailCheckoutAmount',
-  'mailCheckoutConfirm',
-  'mailBalanceRequired',
 ] as const
 
 type FreeSiteCopyKey = typeof freeSiteCopyKeys[number]

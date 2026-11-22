@@ -85,10 +85,10 @@ import adminHostingRoutes from './routes/admin-hosting.js'
 import affRoutes from './routes/aff.js'
 import entertainmentRoutes from './routes/entertainment.js'
 import adminEntertainmentRoutes from './routes/admin-entertainment.js'
-import mailRoutes from './routes/mail.js'
 import adminNotificationChannelsRoutes from './routes/admin-notification-channels.js'
 import telegramRoutes from './routes/telegram.js'
 import agentRoutes from './routes/agent.js'
+import agentMonitoringStreamRoutes from './routes/agent-monitoring-stream.js'
 import agentTunnelRoutes from './routes/agent-tunnel.js'
 import userInviteRoutes from './routes/user-invites.js'
 import vipLevelRoutes from './routes/vip-levels.js'
@@ -178,7 +178,7 @@ fastify.setErrorHandler((error: FastifyError, _request, reply) => {
         messages.push(`${field} is too long`)
       } else if (err.keyword === 'pattern') {
         if (field === 'username') {
-          messages.push('Username must start with a letter and contain only letters, numbers, underscores, and hyphens')
+          messages.push('Username must start with a letter or number and contain only letters, numbers, underscores, and hyphens')
         } else {
           messages.push(`${field} format is invalid`)
         }
@@ -562,9 +562,9 @@ await fastify.register(adminHostingRoutes)
 await fastify.register(affRoutes, { prefix: '/api/aff' })
 await fastify.register(entertainmentRoutes, { prefix: '/api/entertainment' })
 await fastify.register(adminEntertainmentRoutes, { prefix: '/api/admin/entertainment' })
-await fastify.register(mailRoutes, { prefix: '/api/mail' })
 await fastify.register(adminNotificationChannelsRoutes, { prefix: '/api/admin/notification-channels' })
 await fastify.register(telegramRoutes, { prefix: '/api/telegram' })
+await fastify.register(agentMonitoringStreamRoutes, { prefix: '/api' })
 await fastify.register(agentRoutes, { prefix: '/api/agent' })
 await fastify.register(agentTunnelRoutes, { prefix: '/api/agent' })
 await fastify.register(userInviteRoutes, { prefix: '/api/user-invites' })
@@ -751,6 +751,8 @@ const start = async (): Promise<void> => {
     if (staleCreatingBackups > 0) {
       console.log(`📦 清理了 ${staleCreatingBackups} 个长时间停留在创建中的备份记录`)
     }
+    const { startAgentMonitoringCleanup } = await import('./services/agent-monitoring-cleanup.js')
+    startAgentMonitoringCleanup()
 
     const port = parseInt(process.env.PORT || '3001', 10)
     const host = process.env.HOST || '127.0.0.1'
@@ -769,18 +771,6 @@ const start = async (): Promise<void> => {
     // 启动计费调度器（自动续费、到期封停、到期删除、到期提醒）
     const { startBillingScheduler } = await import('./services/billing-scheduler.js')
     startBillingScheduler()
-
-    // 启动邮箱订阅过期检查调度器
-    const { startMailExpiryScheduler } = await import('./services/mail-expiry-scheduler.js')
-    startMailExpiryScheduler()
-
-    // 启动邮箱订阅自动续费调度器
-    const { startMailAutoRenewScheduler } = await import('./services/mail-autorenew-scheduler.js')
-    startMailAutoRenewScheduler()
-
-    // 启动邮箱上游实际用量同步调度器
-    const { startMailUsageScheduler } = await import('./services/mail-usage-scheduler.js')
-    startMailUsageScheduler()
 
     // 启动托管余额调度器（解冻）
     const { startHostingScheduler } = await import('./services/hosting-scheduler.js')

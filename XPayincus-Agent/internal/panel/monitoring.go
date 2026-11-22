@@ -193,7 +193,7 @@ func (client *Client) queueMonitoring(payload map[string]any) ([]map[string]any,
 			continue
 		}
 		if performance, ok := item["performance"].(map[string]any); ok {
-			instances = append(instances, map[string]any{"name": item["name"], "sampledAt": item["sampledAt"], "intervalSeconds": performance["intervalSeconds"], "metrics": selectFields(performance, "cpuUsagePercent", "memoryUsedBytes", "diskReadBytesPerSecond", "diskWriteBytesPerSecond", "diskIOBytesPerSecond")})
+			instances = append(instances, map[string]any{"name": item["name"], "sampledAt": item["sampledAt"], "intervalSeconds": performance["intervalSeconds"], "metrics": selectFields(performance, "cpuUsagePercent", "memoryUsedBytes", "diskReadBytesPerSecond", "diskWriteBytesPerSecond", "diskIOBytesPerSecond", "rxBytes", "txBytes", "rxBytesPerSecond", "txBytesPerSecond")})
 		}
 	}
 	return client.queueRecord(map[string]any{

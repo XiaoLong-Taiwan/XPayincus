@@ -59,8 +59,11 @@ type performanceSnapshot struct {
 	cpu       uint64
 	read      uint64
 	write     uint64
+	rx        uint64
+	tx        uint64
 	validCPU  bool
 	validDisk bool
+	validNet  bool
 }
 
 var performanceCache = struct {
@@ -103,9 +106,29 @@ func performanceMetrics(name string, state incusInstanceState, now time.Time) ma
 		sort.Strings(devices)
 		current.devices = strings.Join(devices, "\x00")
 	}
+	if len(state.Network) > 0 {
+		current.validNet = true
+		for ifName, network := range state.Network {
+			if ifName == "lo" {
+				continue
+			}
+			rx, rxErr := strconv.ParseUint(network.Counters.BytesReceived.String(), 10, 64)
+			tx, txErr := strconv.ParseUint(network.Counters.BytesSent.String(), 10, 64)
+			if rxErr != nil || txErr != nil || ^uint64(0)-current.rx < rx || ^uint64(0)-current.tx < tx {
+				current.validNet = false
+				break
+			}
+			current.rx += rx
+			current.tx += tx
+		}
+		if current.validNet {
+			metrics["rxBytes"] = current.rx
+			metrics["txBytes"] = current.tx
+		}
+	}
 	previous, exists := performanceCache.items[name]
 	elapsed := now.Sub(previous.at).Seconds()
-	if exists && elapsed > 0 && elapsed <= 3600 && current.pid > 0 && current.pid == previous.pid && current.startedAt == previous.startedAt {
+	if name != "" && exists && elapsed > 0 && elapsed <= 3600 && current.pid > 0 && current.pid == previous.pid && current.startedAt != "" && current.startedAt == previous.startedAt {
 		metrics["intervalSeconds"] = elapsed
 		if current.validCPU && previous.validCPU && current.cpu >= previous.cpu {
 			metrics["cpuUsagePercent"] = float64(current.cpu-previous.cpu) / (elapsed * 1e9) * 100
@@ -114,6 +137,10 @@ func performanceMetrics(name string, state incusInstanceState, now time.Time) ma
 			metrics["diskReadBytesPerSecond"] = float64(current.read-previous.read) / elapsed
 			metrics["diskWriteBytesPerSecond"] = float64(current.write-previous.write) / elapsed
 			metrics["diskIOBytesPerSecond"] = (float64(current.read-previous.read) + float64(current.write-previous.write)) / elapsed
+		}
+		if current.validNet && previous.validNet && current.rx >= previous.rx && current.tx >= previous.tx {
+			metrics["rxBytesPerSecond"] = float64(current.rx-previous.rx) / elapsed
+			metrics["txBytesPerSecond"] = float64(current.tx-previous.tx) / elapsed
 		}
 	}
 	if len(performanceCache.items) < 10000 || exists {

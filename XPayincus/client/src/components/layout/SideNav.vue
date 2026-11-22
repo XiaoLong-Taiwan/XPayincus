@@ -54,7 +54,6 @@ function getNavLabel(item: MenuItem): string {
 
 const hiddenExpandMenuNames = new Set(['my-hosts', 'my-packages', 'hosting-wallet'])
 const hiddenWhenTicketDisabledMenuNames = new Set(['tickets'])
-const hiddenWhenMailUnavailableMenuNames = new Set(['mail'])
 const collapsibleGroupLabels = new Set(['nav.operations', 'nav.billing', 'nav.resources', 'nav.system'])
 const collapsedGroupLabels = ref(new Set(['nav.operations', 'nav.billing', 'nav.resources', 'nav.system']))
 const navDashboardPath = dashboardPath()
@@ -67,10 +66,6 @@ const menuItems = computed<MenuItem[]>(() => {
 
   if (!isAdminEntry && !configStore.ticketEnabled) {
     baseItems = baseItems.filter(item => !item.name || !hiddenWhenTicketDisabledMenuNames.has(item.name))
-  }
-
-  if (!isAdminEntry && !configStore.mailAvailable) {
-    baseItems = baseItems.filter(item => !item.name || !hiddenWhenMailUnavailableMenuNames.has(item.name))
   }
 
   if (!shouldHideHostingFeature.value) {

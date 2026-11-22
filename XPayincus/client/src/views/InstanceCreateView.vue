@@ -43,6 +43,7 @@ import { validateName as validateInstanceName } from '@/utils/validation'
 import { translateError } from '@/utils/errorHandler'
 import { freeSiteCopy, getFreeSiteBillingCycleLabel } from '@/utils/freeSiteFun'
 import { getVipBadgeInlineStyle, normalizeVipBadgeStyle, type VipBadgeStyle } from '@/utils/vipBadge'
+import InstancePurchaseStepper from '@/components/instances/InstancePurchaseStepper.vue'
 
 interface ImageOption {
   value: string
@@ -124,6 +125,9 @@ const turnstileSectionRef = ref<HTMLElement | null>(null)
 const isCreateTurnstileRequired = computed(() => configStore.turnstileEnabled && Boolean(configStore.turnstileSiteKey))
 const createTurnstileSiteKey = computed(() => configStore.turnstileSiteKey || '')
 const createIntentIdempotencyKey = ref<string | null>(null)
+const activeStep = ref(1)
+const purchaseState = ref<'idle' | 'creating' | 'success' | 'failure'>('idle')
+const submissionErrorDetails = ref<{ code?: string; requestId?: string; taskId?: string | number; detail?: string; retryable?: boolean }>({})
 
 // 表单数据
 interface InstanceForm {
@@ -457,9 +461,31 @@ const canSubmit = computed<boolean>(() => {
   return baseChecks
 })
 
-const submitDisabledReason = computed<string>(() => {
-  return ''
+const canContinuePurchase = computed<boolean>(() => {
+  if (activeStep.value === 1) return !!selectedPackage.value && !selectedPackage.value.soldOut && !prerequisiteMissing.value
+  if (activeStep.value === 2) {
+    return !!selectedPackage.value && !hostsLoading.value && form.value.hostId !== null && !!form.value.image && form.value.sshKeyId !== null
+  }
+  if (activeStep.value === 3) return !!form.value.name.trim() || !!form.value.hostId
+  return canSubmit.value
 })
+
+function goToNextPurchaseStep(): void {
+  if (!canContinuePurchase.value || activeStep.value >= 4) return
+  if (activeStep.value === 3 && !form.value.name.trim()) refreshGeneratedInstanceName()
+  activeStep.value += 1
+  error.value = ''
+}
+
+function goToPreviousPurchaseStep(): void {
+  if (submitting.value || activeStep.value <= 1) return
+  activeStep.value -= 1
+}
+
+function setPurchaseStep(step: number): void {
+  if (submitting.value || step > activeStep.value || step < 1) return
+  activeStep.value = step
+}
 
 // 检测资源不足的情况
 const hostsInsufficient = computed<boolean>(() => {
@@ -1153,6 +1179,8 @@ async function handleSubmit(): Promise<void> {
   if (selectedPackage.value?.soldOut || selectedPlan.value?.isSoldOut) return
   
   error.value = ''
+  submissionErrorDetails.value = {}
+  purchaseState.value = 'creating'
   submitting.value = true
   
   try {
@@ -1197,6 +1225,7 @@ async function handleSubmit(): Promise<void> {
     draftReady.value = false
     if (authStore.user) clearPurchaseDraft(authStore.user.id)
     createIntentIdempotencyKey.value = null
+    purchaseState.value = 'success'
     
     toast.success(t('instance.createPage.createSuccess'))
     resetCreateTurnstile()
@@ -1207,11 +1236,21 @@ async function handleSubmit(): Promise<void> {
     })
   } catch (err: any) {
     error.value = translateError(err)
+    const responseData = err?.response?.data
+    submissionErrorDetails.value = {
+      code: err?.code || responseData?.code || responseData?.errorCode,
+      requestId: err?.requestId || responseData?.requestId || responseData?.errorRequestId,
+      taskId: err?.taskId || responseData?.taskId,
+      detail: responseData?.detail || responseData?.errorDetail,
+      retryable: responseData?.retryable ?? responseData?.errorRetryable
+    }
+    purchaseState.value = 'failure'
   } finally {
     if (submitting.value) {
       resetCreateTurnstile()
     }
     submitting.value = false
+    if (purchaseState.value === 'creating') purchaseState.value = 'idle'
   }
 }
 
@@ -1292,12 +1331,12 @@ async function handleSubmit(): Promise<void> {
     <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto lg:flex-1" @submit.prevent="handleSubmit">
       <div class="mx-auto w-full max-w-5xl space-y-4 pb-4">
         <div class="nimbus-pane space-y-4">
-          <section class="create-step-heading">
+          <section v-if="activeStep === 1" class="create-step-heading">
             <span class="create-step-number">1</span>
             <div><h2>{{ getCreatePageText('sourceTitle') }}</h2><p>{{ getCreatePageText('sourceHint') }}</p></div>
           </section>
           <div
-            v-if="selectedHostingZone"
+            v-if="activeStep === 1 && selectedHostingZone"
             class="flex items-center gap-3 rounded-xl border border-themed bg-themed-tertiary px-5 py-3"
           >
             <svg class="h-5 w-5 shrink-0 text-primary-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
@@ -1306,7 +1345,7 @@ async function handleSubmit(): Promise<void> {
             </p>
           </div>
           <RegionSelector
-            v-if="regions.length > 0"
+            v-if="activeStep === 1 && regions.length > 0"
             :regions="regions"
             :selected-region="selectedRegion"
             :loading="regionsLoading"
@@ -1315,6 +1354,7 @@ async function handleSubmit(): Promise<void> {
             @select="selectRegion"
           />
           <PackageSelector
+            v-if="activeStep === 1"
             :packages="filteredPackages"
             :selected-package-id="form.packageId"
             :step-number="regions.length > 0 ? 2 : 1"
@@ -1325,12 +1365,12 @@ async function handleSubmit(): Promise<void> {
             @show-owner-info="(packageId) => loadHostOwnerInfo(packageId)"
           />
           <div class="nimbus-pane min-h-0 space-y-4">
-            <section class="create-step-heading">
+            <section v-if="activeStep === 2" class="create-step-heading">
               <span class="create-step-number">{{ regions.length > 0 ? 3 : 2 }}</span>
               <div><h2>{{ getCreatePageText('configurationTitle') }}</h2><p>{{ getCreatePageText('configurationHint') }}</p></div>
             </section>
             <PlanSelector
-              v-if="isPaidPackage"
+              v-if="activeStep === 2 && isPaidPackage"
               :plans="packagePlans"
               :selected-plan-id="form.planId"
               :instance-type="(selectedPackage?.instance_type === 'vm' ? 'vm' : 'container')"
@@ -1346,13 +1386,13 @@ async function handleSubmit(): Promise<void> {
               @select="selectPlan"
             />
             <div
-              v-else-if="prerequisiteMissing"
+              v-else-if="activeStep === 2 && prerequisiteMissing"
               class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300"
             >
               {{ prerequisiteMessage }}
             </div>
             <ResourceSliders
-              v-else
+              v-else-if="activeStep === 2"
               :selected-package="selectedPackage || null"
               :user-quota="userQuota"
               :cpu="form.cpu"
@@ -1363,11 +1403,12 @@ async function handleSubmit(): Promise<void> {
               @update:memory="form.memory = $event"
               @update:disk="form.disk = $event"
             />
-            <div class="create-step-heading">
+            <div v-if="activeStep === 2" class="create-step-heading">
               <span class="create-step-number">{{ regions.length > 0 ? 5 : 4 }}</span>
               <div><h2>{{ getCreatePageText('hostTitle') }}</h2><p>{{ getCreatePageText('hostHint') }}</p></div>
             </div>
             <HostSelector
+              v-if="activeStep === 2"
               :available-hosts="availableHosts"
               :selected-host-id="form.hostId"
               :hosts-loading="hostsLoading"
@@ -1380,8 +1421,9 @@ async function handleSubmit(): Promise<void> {
               :auto-selected-label="getCreatePageText('hostAutoSelected')"
               @update:selected-host-id="form.hostId = $event"
             />
-            <PurchaseNetworkProbe v-if="isPaidPackage && form.packageId && form.hostId" :key="`${form.packageId}:${form.hostId}`" :package-id="form.packageId" :host-id="form.hostId" />
+            <PurchaseNetworkProbe v-if="activeStep === 2 && isPaidPackage && form.packageId && form.hostId" :key="`${form.packageId}:${form.hostId}`" :package-id="form.packageId" :host-id="form.hostId" />
             <ImageSelector
+              v-if="activeStep === 2"
               :available-images="availableImages"
               :selected-image="form.image"
               :images-loading="imagesLoading"
@@ -1390,17 +1432,18 @@ async function handleSubmit(): Promise<void> {
               :empty-message="getCreatePageText('noImages')"
               @update:selected-image="form.image = $event"
             />
-            <div v-if="form.image" class="card p-5">
+            <div v-if="activeStep === 2 && form.image" class="card p-5">
               <InitCommandSelector v-model="form.customInitCommandIds" :distro="selectedImageDistro" />
             </div>
             <SSHKeySelector
+              v-if="activeStep === 2"
               :ssh-keys="sshKeys"
               :selected-key-id="form.sshKeyId"
               :step-number="regions.length > 0 ? 6 : 5"
               :title="getCreatePageText('selectSshKey')"
               @update:selected-key-id="form.sshKeyId = $event"
             />
-            <div v-if="isPaidPackage && form.planId && selectedPlan" class="card p-5">
+            <div v-if="activeStep === 3 && isPaidPackage && form.planId && selectedPlan" class="card p-5">
               <div class="flex items-center gap-3 mb-5">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary-500/10 text-primary-600 dark:text-primary-400">
                   <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24">
@@ -1490,7 +1533,7 @@ async function handleSubmit(): Promise<void> {
                 </div>
               </div>
             </div>
-            <section class="nimbus-submit card p-4 space-y-4">
+            <section v-if="activeStep === 3 || activeStep === 4" class="nimbus-submit card p-4 space-y-4">
               <div class="create-step-heading">
                 <span class="create-step-number">{{ regions.length > 0 ? 7 : 6 }}</span>
                 <div><h2>{{ t('instance.createPage.identityTitle') }}</h2><p>{{ t('instance.createPage.identityHint') }}</p></div>
@@ -1540,7 +1583,7 @@ async function handleSubmit(): Promise<void> {
             <div v-if="prerequisiteMissing" class="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
               <p class="text-sm font-medium text-amber-700 dark:text-amber-400">{{ prerequisiteMessage }}</p>
             </div>
-            <div class="border-t border-themed pt-4">
+            <div v-if="activeStep === 3" class="border-t border-themed pt-4">
               <div class="create-step-heading mb-3">
                 <span class="create-step-number">{{ regions.length > 0 ? 8 : 7 }}</span>
                 <div><h2>{{ t('instance.createPage.advancedTitle') }}</h2><p>{{ t('instance.createPage.advancedHint') }}</p></div>
@@ -1557,7 +1600,7 @@ async function handleSubmit(): Promise<void> {
               </span>
               </label>
             </div>
-            <div class="border-t border-themed pt-4">
+            <div v-if="activeStep === 4" class="border-t border-themed pt-4">
               <div class="create-step-heading mb-3">
                 <span class="create-step-number">{{ regions.length > 0 ? 9 : 8 }}</span>
                 <div><h2>{{ t('instance.createPage.paymentTitle') }}</h2><p>{{ t('instance.createPage.paymentHint') }}</p></div>
@@ -1577,7 +1620,7 @@ async function handleSubmit(): Promise<void> {
               </div>
             </div>
             <div
-              v-if="isCreateTurnstileRequired"
+              v-if="activeStep === 4 && isCreateTurnstileRequired"
               ref="turnstileSectionRef"
               tabindex="-1"
               class="space-y-3 p-3 rounded-xl border border-themed bg-themed-tertiary text-sm text-themed-secondary"
@@ -1597,21 +1640,32 @@ async function handleSubmit(): Promise<void> {
                 @error="onTurnstileError"
               />
             </div>
-            <div v-if="error" class="space-y-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-300">
+            <div v-if="error" class="space-y-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-300" data-state="failure">
               <div>{{ error }}</div>
+              <div v-if="submissionErrorDetails.detail || submissionErrorDetails.code || submissionErrorDetails.requestId || submissionErrorDetails.taskId" class="space-y-1 border-t border-rose-500/20 pt-2 text-xs">
+                <div v-if="submissionErrorDetails.detail">{{ submissionErrorDetails.detail }}</div>
+                <div v-if="submissionErrorDetails.code">{{ submissionErrorDetails.code }}</div>
+                <div v-if="submissionErrorDetails.requestId">Request ID: {{ submissionErrorDetails.requestId }}</div>
+                <div v-if="submissionErrorDetails.taskId">Task ID: {{ submissionErrorDetails.taskId }}</div>
+                <div v-if="submissionErrorDetails.retryable === true">{{ t('instance.createPage.retryableError') }}</div>
+              </div>
             </div>
-            <button
-              type="submit"
-              :disabled="!canSubmit"
-              :title="submitDisabledReason"
-              class="btn-primary w-full"
-            >
-              {{ submitting ? $t('instance.createPage.creating') : $t('instance.create') }}
-            </button>
             </section>
           </div>
         </div>
       </div>
+      <InstancePurchaseStepper
+        v-if="!loading"
+        v-model:active-step="activeStep"
+        :can-continue="canContinuePurchase"
+        :can-submit="canSubmit"
+        :submitting="submitting"
+        :status="purchaseState"
+        @update:active-step="setPurchaseStep"
+        @next="goToNextPurchaseStep"
+        @previous="goToPreviousPurchaseStep"
+        @submit="handleSubmit"
+      />
     </form>
   </div>
 

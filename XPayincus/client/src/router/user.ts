@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useConfigStore } from '@/stores/config'
 import type { RouteLocationNormalized, NavigationGuardNext, RouteRecordRaw } from 'vue-router'
 import api from '@/api'
 import { isStaleAssetLoadError, scheduleStaleAssetReload } from '@/utils/staleAssetRecovery'
@@ -17,7 +16,6 @@ const hiddenHostingRouteNames = new Set([
   'my-package-edit',
   'hosting-wallet'
 ])
-const hiddenMailRouteNames = new Set(['mail', 'mail-domain'])
 
 // 处理 OAuth 登录码的函数
 async function handleOAuthCode(): Promise<boolean> {
@@ -126,18 +124,6 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.instanceDetail', title: '实例详情' }
   },
   // 域名邮箱
-  {
-    path: '/mail',
-    name: 'mail',
-    component: () => import('@/views/MailView.vue'),
-    meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.mail', title: '邮箱' }
-  },
-  {
-    path: '/mail/domains/:id',
-    name: 'mail-domain',
-    component: () => import('@/views/MailDomainView.vue'),
-    meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.mailDomain', title: '邮箱域名' }
-  },
   {
     path: '/profile',
     name: 'profile',
@@ -337,7 +323,6 @@ router.onError((error) => {
 // Route guard
 router.beforeEach(async (to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) => {
   const authStore = useAuthStore()
-  const configStore = useConfigStore()
 
   // 检查是否有 OAuth 登录码需要处理
   const urlParams = new URLSearchParams(window.location.search)
@@ -368,19 +353,6 @@ router.beforeEach(async (to: RouteLocationNormalized, _from: RouteLocationNormal
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next({ name: 'login', query: { redirect: to.fullPath } })
     return
-  }
-
-  if (
-    authStore.isAuthenticated &&
-    !authStore.isAdmin &&
-    typeof to.name === 'string' &&
-    hiddenMailRouteNames.has(to.name)
-  ) {
-    await configStore.loadPublicConfig()
-    if (!configStore.mailAvailable) {
-      next({ name: 'dashboard' })
-      return
-    }
   }
 
   // Pages requiring user (non-admin) permission

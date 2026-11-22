@@ -248,6 +248,10 @@ model ProvisioningJob {
   phase String @default("queued")
   payload String
   error String?
+  errorCode String? @map("error_code")
+  errorDetail String? @map("error_detail")
+  errorRequestId String? @map("error_request_id")
+  errorRetryable Boolean? @map("error_retryable")
   attempts Int @default(0)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -583,9 +587,6 @@ model User {
   hostingZone         HostingZone?         @relation("HostingZoneOwner")
   hostingAccessApplications HostingAccessApplication[] @relation("HostingAccessApplicant")
   hostingAccessReviews HostingAccessApplication[] @relation("HostingAccessReviewer")
-
-  // 域名邮箱系统
-  mailSubscriptions   MailSubscription[]
 
   // 抽奖系统
   userPoints       UserPoints?
@@ -2914,7 +2915,6 @@ model AffCode {
   user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   packagePlan PackagePlan? @relation(fields: [packagePlanId], references: [id], onDelete: Cascade)
   bindings    AffBinding[]
-  mailSubscriptionBindings MailSubscriptionAffBinding[]
   logs        AffLog[]
 
   @@unique([userId, packagePlanId]) // 每用户每方案仅一个优惠码（包括全局码：packagePlanId=null时每用户最多一个）
@@ -2937,27 +2937,12 @@ model AffBinding {
   @@map("aff_bindings")
 }
 
-// 邮箱订阅与优惠码永久绑定
-model MailSubscriptionAffBinding {
-  id                 Int      @id @default(autoincrement())
-  mailSubscriptionId Int      @unique @map("mail_subscription_id")
-  affCodeId          Int      @map("aff_code_id")
-  createdAt          DateTime @default(now()) @map("created_at")
-
-  mailSubscription MailSubscription @relation(fields: [mailSubscriptionId], references: [id], onDelete: Cascade)
-  affCode          AffCode          @relation(fields: [affCodeId], references: [id], onDelete: Cascade)
-
-  @@index([affCodeId])
-  @@map("mail_subscription_aff_bindings")
-}
-
 // AFF余额变动日志
 model AffLog {
   id                   Int        @id @default(autoincrement())
   userId               Int        @map("user_id")                // 收益用户
   affCodeId            Int?       @map("aff_code_id")            // 关联优惠码
   instanceId           Int?       @map("instance_id")            // 关联实例
-  mailSubscriptionId   Int?       @map("mail_subscription_id")   // 关联邮箱订阅
   type                 AffLogType
   amount               Decimal    @db.Decimal(10, 2)             // 正数=收入，负数=转出
   originalAmount       Decimal?   @map("original_amount") @db.Decimal(10, 2) // 原始订单金额
@@ -2968,11 +2953,9 @@ model AffLog {
 
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   affCode          AffCode?          @relation(fields: [affCodeId], references: [id], onDelete: SetNull)
-  mailSubscription MailSubscription? @relation(fields: [mailSubscriptionId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([affCodeId])
-  @@index([mailSubscriptionId])
   @@map("aff_logs")
 }
 
@@ -3337,139 +3320,6 @@ enum WithdrawalStatus {
 enum WithdrawalTarget {
   balance // 提现到面板余额
   usdt    // 提现到USDT
-}
-
-// ==================== 域名邮箱模块 ====================
-
-// 域名验证状态
-enum MailDomainStatus {
-  pending   // 等待 DNS 验证
-  verified  // 已验证
-  suspended // 已暂停
-}
-
-// 邮箱订阅状态
-enum MailSubscriptionStatus {
-  active    // 正常
-  expired   // 已过期
-  suspended // 已暂停
-}
-
-// 计费周期
-enum MailBillingCycle {
-  monthly // 月付
-  yearly  // 年付
-}
-
-// 邮箱源（数据中心）
-model MailSource {
-  id            Int      @id @default(autoincrement())
-  name          String   // 名称，如"美国拉斯维加斯"
-  code          String   @unique // 地区代码，如"us"
-  apiUrl        String   @map("api_url")      // CraneMail Reseller API 地址
-  apiKey        String   @map("api_key")      // CraneMail Reseller API Key
-  smarterMailUrl String  @map("smartermail_url") // SmarterMail API 地址
-  enabled       Boolean  @default(true)
-  sortOrder     Int      @default(0) @map("sort_order")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-
-  plans         MailPlan[]
-  subscriptions MailSubscription[]
-  domains       MailDomain[]
-
-  @@map("mail_sources")
-}
-
-// 套餐方案
-model MailPlan {
-  id            Int              @id @default(autoincrement())
-  sourceId      Int              @map("source_id")
-  name          String           // 方案名称，如"基础版"
-  description   String?          // 方案描述
-  domainLimit   Int              @map("domain_limit")  // 主域名数量限制
-  diskLimitGb   Int              @map("disk_limit_gb") // 存储空间 GB
-  billingCycle  MailBillingCycle @map("billing_cycle") // 计费周期
-  price         Decimal          @db.Decimal(10, 2)    // 价格
-  enabled       Boolean          @default(true)
-  sortOrder     Int              @default(0) @map("sort_order")
-  createdAt     DateTime         @default(now()) @map("created_at")
-  updatedAt     DateTime         @updatedAt @map("updated_at")
-
-  source        MailSource       @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  subscriptions MailSubscription[]
-
-  @@index([sourceId, enabled])
-  @@map("mail_plans")
-}
-
-// 用户订阅
-model MailSubscription {
-  id           Int                    @id @default(autoincrement())
-  userId       Int                    @map("user_id")
-  sourceId     Int                    @map("source_id")
-  planId       Int                    @map("plan_id")
-  status       MailSubscriptionStatus @default(active)
-  domainLimit  Int                    @map("domain_limit")  // 冗余存储购买时的限制
-  diskLimitGb  Int                    @map("disk_limit_gb") // 冗余存储购买时的限制
-  expiresAt    DateTime               @map("expires_at")
-  autoRenew    Boolean                @default(false) @map("auto_renew")
-  createdAt    DateTime               @default(now()) @map("created_at")
-  updatedAt    DateTime               @updatedAt @map("updated_at")
-
-  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  source       MailSource             @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  plan         MailPlan               @relation(fields: [planId], references: [id], onDelete: Cascade)
-  domains      MailDomain[]
-  affBinding   MailSubscriptionAffBinding?
-  affLogs      AffLog[]
-
-  @@index([userId, status])
-  @@index([expiresAt])
-  @@map("mail_subscriptions")
-}
-
-// 域名
-model MailDomain {
-  id             Int              @id @default(autoincrement())
-  subscriptionId Int              @map("subscription_id")
-  sourceId       Int              @map("source_id")
-  domain         String           // 域名
-  status         MailDomainStatus @default(pending)
-  adminUsername  String?          @map("admin_username") // CraneMail 返回的管理员账号
-  adminPassword  String?          @map("admin_password") // CraneMail 返回的管理员密码（加密存储）
-  diskUsedMb     Int              @default(0) @map("disk_used_mb") // 已用空间 MB
-  verifiedAt     DateTime?        @map("verified_at")
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
-
-  subscription   MailSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  source         MailSource       @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  accounts       MailAccount[]
-
-  @@unique([domain, sourceId])
-  @@index([subscriptionId])
-  @@map("mail_domains")
-}
-
-// 邮箱账户
-model MailAccount {
-  id          Int         @id @default(autoincrement())
-  domainId    Int         @map("domain_id")
-  email       String      // 完整邮箱地址
-  username    String      // 用户名部分 (@ 前面)
-  displayName String?     @map("display_name") // 显示名称
-  diskLimitMb Int         @default(2048) @map("disk_limit_mb") // 邮箱容量 MB
-  diskUsedMb  Int         @default(0) @map("disk_used_mb")     // 已用空间 MB
-  isAdmin     Boolean     @default(false) @map("is_admin")     // 是否为域管理员
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
-
-  domain      MailDomain  @relation(fields: [domainId], references: [id], onDelete: Cascade)
-
-  @@unique([domainId, username])
-  @@index([domainId])
-  @@map("mail_accounts")
 }
 
 // 托管余额变动日志

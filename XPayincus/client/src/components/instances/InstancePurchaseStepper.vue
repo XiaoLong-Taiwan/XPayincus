@@ -1,0 +1,87 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+
+interface Step {
+  id: number
+  label: string
+}
+
+const props = withDefaults(defineProps<{
+  activeStep: number
+  steps?: Step[]
+  canContinue?: boolean
+  canSubmit?: boolean
+  submitting?: boolean
+  status?: 'idle' | 'creating' | 'success' | 'failure'
+}>(), {
+  steps: () => [
+    { id: 1, label: '套餐' },
+    { id: 2, label: '設定' },
+    { id: 3, label: '確認' },
+    { id: 4, label: '付款' }
+  ],
+  canContinue: true,
+  canSubmit: false,
+  submitting: false,
+  status: 'idle'
+})
+
+const emit = defineEmits<{
+  'update:activeStep': [step: number]
+  next: []
+  previous: []
+  submit: []
+}>()
+
+const isCreating = computed(() => props.status === 'creating' || props.submitting)
+const isComplete = computed(() => props.status === 'success')
+const isFailed = computed(() => props.status === 'failure')
+
+function goToStep(step: Step): void {
+  if (isCreating.value || step.id > props.activeStep) return
+  emit('update:activeStep', step.id)
+}
+</script>
+
+<template>
+  <div class="purchase-stepper" data-instance-purchase-stepper>
+    <nav aria-label="購買步驟" class="mb-4 grid grid-cols-4 gap-2">
+      <button
+        v-for="step in props.steps"
+        :key="step.id"
+        type="button"
+        class="min-w-0 border-b-2 px-1 py-2 text-left text-xs transition-colors sm:px-2 sm:text-sm"
+        :class="step.id === props.activeStep ? 'border-themed text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
+        :disabled="isCreating || step.id > props.activeStep"
+        :aria-current="step.id === props.activeStep ? 'step' : undefined"
+        @click="goToStep(step)"
+      >
+        <span class="mr-1 font-mono">{{ step.id }}</span>{{ step.label }}
+      </button>
+    </nav>
+
+    <div v-if="isCreating" class="mb-4 rounded-lg border border-themed bg-themed-tertiary p-4 text-sm text-themed-secondary" data-state="creating">
+      <div class="flex items-center gap-2">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-themed border-t-transparent" />
+        <span>正在建立實例，請勿重複提交</span>
+      </div>
+    </div>
+    <div v-else-if="isComplete" class="mb-4 rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-700 dark:text-green-300" data-state="success">
+      實例建立請求已送出。
+    </div>
+    <div v-else-if="isFailed" class="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-700 dark:text-rose-300" data-state="failure">
+      建立實例失敗，請檢查錯誤資訊後重試。
+    </div>
+
+    <slot />
+
+    <div v-if="!isCreating && !isComplete" class="mt-4 flex flex-col-reverse gap-2 border-t border-themed pt-4 sm:flex-row sm:justify-between">
+      <button v-if="props.activeStep > 1" type="button" class="btn btn-secondary" :disabled="isCreating" @click="emit('previous')">上一步</button>
+      <span v-else />
+      <button v-if="props.activeStep < props.steps.length" type="button" class="btn-primary" :disabled="!props.canContinue || isCreating" @click="emit('next')">下一步</button>
+      <button v-else type="button" class="btn-primary" data-action="submit" :disabled="!props.canSubmit || isCreating" @click="emit('submit')">
+        {{ props.submitting ? '建立中…' : '確認付款並建立' }}
+      </button>
+    </div>
+  </div>
+</template>

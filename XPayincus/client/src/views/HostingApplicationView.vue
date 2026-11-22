@@ -2,8 +2,11 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api, { type HostingAccessApplication } from '@/api'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
 import { useToast } from '@/stores/toast'
 import { useAuthStore } from '@/stores/auth'
+
+defineOptions({ name: 'HostingApplicationView' })
 
 const toast = useToast()
 const authStore = useAuthStore()
@@ -60,81 +63,67 @@ onMounted(loadApplication)
 </script>
 
 <template>
-  <main class="application-page">
-    <section class="application-panel">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">{{ t('hosting.application.eyebrow') }}</p>
-          <h1>{{ t('hosting.application.title') }}</h1>
+  <main class="kawaii-page space-y-5 animate-fade-in">
+    <div class="page-header flex-col gap-3 sm:flex-row sm:items-start sm:gap-0">
+      <div class="min-w-0">
+        <p class="page-kicker">{{ t('hosting.application.eyebrow') }}</p>
+        <h1 class="page-title">{{ t('hosting.application.title') }}</h1>
+        <p class="page-description">{{ t('hosting.application.description') }}</p>
+      </div>
+      <span
+        class="inline-flex shrink-0 items-center rounded-full border px-3 py-1 text-sm font-medium"
+        :class="{
+          'border-themed bg-themed-secondary text-themed-muted': !application?.status,
+          'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300': application?.status === 'pending',
+          'border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-950/30 dark:text-green-300': application?.status === 'approved',
+          'border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-950/30 dark:text-red-300': application?.status === 'rejected'
+        }"
+      >
+        {{ loading ? t('hosting.application.loading') : statusText }}
+      </span>
+    </div>
+
+    <SkeletonLoader v-if="loading" type="card" />
+
+    <div v-else-if="loadFailed" class="card p-8 text-center">
+      <p class="text-themed-muted">{{ t('hosting.application.loadFailed') }}</p>
+      <button type="button" class="btn btn-secondary mt-4" @click="loadApplication">
+        {{ t('hosting.application.retry') }}
+      </button>
+    </div>
+
+    <section v-else class="card space-y-6 p-5 sm:p-7">
+      <div v-if="application?.reviewReason" class="rounded-lg border-l-4 border-amber-500 bg-amber-50 p-4 text-sm dark:bg-amber-950/30">
+        <strong class="text-themed">{{ t('hosting.application.reviewReason') }}</strong>
+        <p class="mt-2 whitespace-pre-wrap text-themed-muted">{{ application.reviewReason }}</p>
+      </div>
+
+      <form v-if="!application || application.status === 'rejected'" class="space-y-4" @submit.prevent="submitApplication">
+        <div class="space-y-2">
+          <label for="reason" class="block text-sm font-medium text-themed">{{ t('hosting.application.reasonLabel') }}</label>
+          <textarea
+            id="reason"
+            v-model="reason"
+            class="input min-h-36 w-full resize-y"
+            maxlength="1000"
+            rows="7"
+            :placeholder="t('hosting.application.reasonPlaceholder')"
+          />
         </div>
-        <span class="status" :data-status="application?.status || 'none'">{{ loading ? t('hosting.application.loading') : statusText }}</span>
-      </div>
-      <p class="description">{{ t('hosting.application.description') }}</p>
-      <div v-if="application?.reviewReason" class="review-message">
-        <strong>{{ t('hosting.application.reviewReason') }}</strong>
-        <p>{{ application.reviewReason }}</p>
-      </div>
-      <button v-if="loadFailed" type="button" @click="loadApplication">{{ t('hosting.application.retry') }}</button>
-      <form v-else-if="!loading && (!application || application.status === 'rejected')" class="application-form" @submit.prevent="submitApplication">
-        <label for="reason">{{ t('hosting.application.reasonLabel') }}</label>
-        <textarea id="reason" v-model="reason" maxlength="1000" rows="7" :placeholder="t('hosting.application.reasonPlaceholder')" />
-        <button type="submit" :disabled="submitting">{{ submitting ? t('hosting.application.submitting') : application ? t('hosting.application.resubmit') : t('hosting.application.submit') }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="submitting">
+          {{ submitting ? t('hosting.application.submitting') : application ? t('hosting.application.resubmit') : t('hosting.application.submit') }}
+        </button>
       </form>
-      <nav v-else-if="application?.status === 'approved'" class="approved-links" :aria-label="t('hosting.application.management')">
-        <RouterLink to="/resources/hosts">{{ t('hosting.application.manageHosts') }}</RouterLink>
-        <RouterLink to="/resources/packages">{{ t('hosting.application.managePackages') }}</RouterLink>
-        <RouterLink to="/hosting-wallet">{{ t('hosting.application.hostingWallet') }}</RouterLink>
+
+      <nav v-else-if="application?.status === 'approved'" class="flex flex-wrap gap-3" :aria-label="t('hosting.application.management')">
+        <RouterLink to="/resources/hosts" class="btn btn-primary">{{ t('hosting.application.manageHosts') }}</RouterLink>
+        <RouterLink to="/resources/packages" class="btn btn-secondary">{{ t('hosting.application.managePackages') }}</RouterLink>
+        <RouterLink to="/hosting-wallet" class="btn btn-secondary">{{ t('hosting.application.hostingWallet') }}</RouterLink>
       </nav>
-      <div v-else-if="!loading" class="pending-message">
+
+      <div v-else class="rounded-lg border border-themed bg-themed-secondary p-4 text-themed-muted">
         <p>{{ t('hosting.application.pendingMessage') }}</p>
       </div>
     </section>
   </main>
 </template>
-
-<style scoped>
-.application-page {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 32px 24px;
-}
-.application-panel {
-  padding: 28px;
-  background: var(--bg-primary, #fff);
-  border: 1px solid var(--color-border, #e5e7eb);
-  border-radius: 8px;
-}
-.panel-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.eyebrow {
-  margin: 0 0 6px;
-  color: var(--color-text-secondary, #64748b);
-  font-size: 13px;
-}
-h1 {
-  margin: 0;
-  font-size: 24px;
-}
-.status {
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: #e2e8f0;
-  color: #334155;
-  font-size: 13px;
-}
-.status[data-status='approved'] { background: #dcfce7; color: #166534; }
-.status[data-status='pending'] { background: #fef3c7; color: #92400e; }
-.status[data-status='rejected'] { background: #fee2e2; color: #991b1b; }
-.description, .pending-message p, .review-message p { color: var(--color-text-secondary, #64748b); line-height: 1.6; }
-.review-message { margin-top: 20px; padding: 14px; border-left: 3px solid #f59e0b; background: #fffbeb; }
-.review-message p { margin: 6px 0 0; }
-.application-form { display: grid; gap: 10px; margin-top: 24px; }
-textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 12px; border: 1px solid var(--color-border, #cbd5e1); border-radius: 6px; font: inherit; }
-button { justify-self: start; padding: 10px 18px; border: 0; border-radius: 6px; background: var(--text-primary, #171717); color: var(--bg-primary, #fff); cursor: pointer; }
-button:disabled { cursor: wait; opacity: .6; }
-.approved-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
-</style>

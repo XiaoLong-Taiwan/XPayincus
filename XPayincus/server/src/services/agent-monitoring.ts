@@ -1,14 +1,16 @@
 import { readAgentMonitoringJournal, writeAgentMonitoringJournal } from './agent-durable-state.js'
+import { publishInstanceMonitoring } from '../lib/agent-monitoring-stream.js'
 
-const retentionMs = 30 * 86400000
+export const monitoringRetentionMs = 7 * 86400000
 const replayWindowMs = 8 * 86400000
+export const monitoringFreshnessMs = 45 * 1000
 const hostKeys = ['cpuTotal', 'cpuUsagePercent', 'memoryTotalMb', 'memoryAvailableMb', 'memoryUsedMb', 'memoryUsagePercent', 'swapTotalMb', 'swapUsedMb', 'swapUsagePercent', 'diskTotalBytes', 'diskUsedBytes', 'diskAvailableBytes', 'diskUsagePercent', 'processCount', 'load1', 'load5', 'load15', 'uptimeSeconds']
 for (const resource of ['cpu', 'memory', 'io']) {
   for (const kind of ['some', 'full']) {
     for (const field of ['avg10', 'avg60', 'avg300', 'total']) hostKeys.push(`psi.${resource}.${kind}.${field}`)
   }
 }
-export const instanceMonitoringKeys = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond'] as const
+export const instanceMonitoringKeys = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond', 'rxBytesPerSecond', 'txBytesPerSecond'] as const
 export type InstanceMonitoringMetric = typeof instanceMonitoringKeys[number]
 export function isMonitoringInstanceName(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(value)
@@ -45,8 +47,8 @@ function semantic(value: unknown, depth = 0): unknown {
 
 function load(agentId: string, now: number): Journal {
   const state = readAgentMonitoringJournal<Journal>(agentId) ?? { samples: [], events: [], receipts: {}, truncated: false }
-  state.samples = state.samples.filter(item => item.sampledAt >= now - retentionMs)
-  state.events = state.events.filter(item => Date.parse(item.sampledAt) >= now - retentionMs)
+  state.samples = state.samples.filter(item => item.sampledAt >= now - monitoringRetentionMs)
+  state.events = state.events.filter(item => Date.parse(item.sampledAt) >= now - monitoringRetentionMs)
   state.receipts = Object.fromEntries(Object.entries(state.receipts).filter(([, at]) => at >= now - replayWindowMs))
   return state
 }
@@ -121,6 +123,17 @@ export function ingestAgentMonitoring(agentId: string, payload: unknown, now = D
   return accepted
 }
 
+export function publishAgentInstanceMonitoring(agentId: string, instanceId: number, name: string, now = Date.now()): void {
+  const snapshot = readAgentInstanceSnapshot(agentId, name, now)
+  if (snapshot) publishInstanceMonitoring(instanceId, snapshot)
+}
+
+export function cleanupAgentMonitoring(agentId: string, now = Date.now()): boolean {
+  const state = load(agentId, now)
+  writeAgentMonitoringJournal(agentId, state)
+  return true
+}
+
 function coverage(points: Point[], from: number, to: number): number {
   if (to <= from) return 0
   const intervals = points.map(point => [Math.max(from, point.sampledAt - point.intervalSeconds * 1000), Math.min(to, point.sampledAt)] as const).filter(([a, b]) => b > a).sort(([a], [b]) => a - b)
@@ -173,7 +186,7 @@ export function readAgentMonitoring(agentId: string | null, range: MonitoringRan
 }
 
 function monitoringHistory(samples: Point[], range: MonitoringRange, truncated: boolean, now: number) {
-  const from = Math.max(range.from, now - retentionMs)
+  const from = Math.max(range.from, now - monitoringRetentionMs)
   const to = Math.min(range.to, now)
   const points = [...new Map(samples.filter(point => point.sampledAt >= from && point.sampledAt < to).map(point => [point.sampledAt, point])).values()]
   const buckets = new Map<number, Point[]>()
@@ -184,7 +197,7 @@ function monitoringHistory(samples: Point[], range: MonitoringRange, truncated: 
     values.push(point); buckets.set(start, values)
   }
   return {
-    schemaVersion: 2, retentionDays: 30, capacityTruncated: truncated,
+    schemaVersion: 2, retentionDays: 7, capacityTruncated: truncated,
     from: new Date(from).toISOString(), to: new Date(to).toISOString(), resolutionSeconds: range.resolutionSeconds,
     summary: aggregateMonitoring(points, from, to),
     summaryCounters: aggregateMonitoringCounters(points, from, to),
@@ -204,9 +217,18 @@ export function readAgentInstanceHistory(agentId: string | null, range: Monitori
   return { name, ...monitoringHistory(points, range, state.truncated, now) }
 }
 
+export function readAgentInstanceSnapshot(agentId: string | null, name: string, now = Date.now()): { sampledAt: string; online: boolean; metrics: Record<string, number> } | null {
+  if (!agentId || !isMonitoringInstanceName(name)) return null
+  const state = load(agentId, now)
+  const points = state.samples.flatMap(sample => sample.instances.filter(point => point.name === name)).sort((a, b) => b.sampledAt - a.sampledAt)
+  const point = points[0]
+  if (!point) return null
+  return { sampledAt: new Date(point.sampledAt).toISOString(), online: now - point.sampledAt <= monitoringFreshnessMs, metrics: point.metrics }
+}
+
 export function readAgentInstanceTop(agentId: string | null, range: MonitoringRange, metric: InstanceMonitoringMetric, orderBy: 'avg' | 'max', top: number, now = Date.now()) {
   const state = agentId ? load(agentId, now) : { samples: [] as Sample[], truncated: false }
-  const from = Math.max(range.from, now - retentionMs)
+  const from = Math.max(range.from, now - monitoringRetentionMs)
   const to = Math.min(range.to, now)
   const groups = new Map<string, InstancePoint[]>()
   for (const sample of state.samples) for (const point of sample.instances) {

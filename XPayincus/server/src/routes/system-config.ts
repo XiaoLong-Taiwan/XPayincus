@@ -5,7 +5,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as db from '../db/index.js'
 import { prisma } from '../db/prisma.js'
-import { hasAvailableMailOffering } from '../db/mail.js'
 import { createLog } from '../db/logs.js'
 import { apiError, ErrorCode } from '../lib/errors.js'
 import { testSmtpConnection, sendTestEmail, clearTransporterCache } from '../lib/mailer.js'
@@ -127,12 +126,11 @@ export default async function systemConfigRoutes(fastify: FastifyInstance) {
     fastify.get('/public', {
         config: { rateLimit: { max: 60, timeWindow: '1 minute' } }
     }, async (_request: FastifyRequest, _reply: FastifyReply) => {
-        const [registrationEnabled, requireInviteCode, ticketCreationEnabled, freeSiteMode, mailAvailable, turnstileEnabled, turnstileSiteKey, avatarApiBase, smtpEnabled, emailDomainWhitelistEnabled, emailAllowedDomains, transferFee, footerContactEmail, footerTelegramLink, hostingMarketEntryEnabled, hostingNotice, brandName, brandSubtitle, brandLogoUrl, popupAnnouncementConfig, popupPromoImageUrlConfig, popupPromoPackageIdConfig] = await Promise.all([
+        const [registrationEnabled, requireInviteCode, ticketCreationEnabled, freeSiteMode, turnstileEnabled, turnstileSiteKey, avatarApiBase, smtpEnabled, emailDomainWhitelistEnabled, emailAllowedDomains, transferFee, footerContactEmail, footerTelegramLink, hostingMarketEntryEnabled, hostingNotice, brandName, brandSubtitle, brandLogoUrl, popupAnnouncementConfig, popupPromoImageUrlConfig, popupPromoPackageIdConfig] = await Promise.all([
             db.isRegistrationEnabled(),
             db.isInviteCodeRequired(),
             db.getSystemConfigBoolean('ticket_enabled', true),
             db.getSystemConfigBoolean('free_site_mode', false),
-            hasAvailableMailOffering(),
             db.getSystemConfigBoolean('turnstile_enabled', false),
             db.getSystemConfig('turnstile_site_key'),
             db.getSystemConfig('avatar_api_base'),
@@ -238,7 +236,6 @@ export default async function systemConfigRoutes(fastify: FastifyInstance) {
             // ticket_enabled 仅控制新建入口；已有工单仍可查看、回复、关闭和重开。
             ticketEnabled: ticketCreationEnabled,
             freeSiteMode,
-            mailAvailable,
             turnstileEnabled,
             turnstileSiteKey: turnstileEnabled ? turnstileSiteKey : null,
             avatarApiBase: avatarApiBase || 'https://api.dicebear.com/9.x',

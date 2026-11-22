@@ -271,12 +271,6 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'nav.instanceDetail', title: '实例详情' }
   },
   {
-    path: '/admin/mail',
-    name: 'admin-mail',
-    component: () => import('@/views/admin/AdminMailView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true, titleKey: 'nav.mail', title: '邮箱' }
-  },
-  {
     path: '/admin/entertainment',
     name: 'admin-entertainment',
     component: () => import('@/views/admin/EntertainmentView.vue'),

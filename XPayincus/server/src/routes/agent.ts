@@ -37,7 +37,7 @@ import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } 
 import { agentVersionStatus } from '../lib/agent-upgrade.js'
 import { DurableAgentUpgradeRequests, ingestAgentHistory, readAgentHistory, serializeAgentHeartbeat } from '../services/agent-durable-state.js'
 import { readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
-import { ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceName, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric } from '../services/agent-monitoring.js'
+import { ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceName, publishAgentInstanceMonitoring, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric } from '../services/agent-monitoring.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -1311,7 +1311,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid history range, limit or resolution', code: 'AGENT_HISTORY_INVALID_QUERY' })
     }
     const agent = await agentModel.findUnique({ where: { hostId } })
-    return { hostId, retentionDays: 30, recentResolutionSeconds: 30, archiveResolutionSeconds: 3600,
+    return { hostId, retentionDays: 7, recentResolutionSeconds: 30, archiveResolutionSeconds: 3600,
       samples: agent ? readAgentHistory(agent.agentId, from, to, limit, resolutionSeconds * 1000) : [] }
   })
 
@@ -1336,7 +1336,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       if (view === 'instances/history' && !isMonitoringInstanceName(name)) {
         return reply.code(400).send({ error: 'Valid instance name is required', code: 'AGENT_MONITORING_INVALID_NAME' })
       }
-      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to || from < now - 30 * 86400000 || to > now ||
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to || from < now - 7 * 86400000 || to > now ||
         !Number.isInteger(limit) || limit < 1 || limit > 2000 || !Number.isInteger(resolutionSeconds) || resolutionSeconds < 30 || resolutionSeconds > 86400 ||
         !Number.isInteger(top) || top < 1 || top > 100 || !instanceMonitoringKeys.includes(metric as InstanceMonitoringMetric) || !['avg', 'max'].includes(orderBy)) {
         return reply.code(400).send({ error: 'Invalid monitoring query', code: 'AGENT_MONITORING_INVALID_QUERY' })
@@ -1825,6 +1825,17 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     let acceptedMonitoringSampleIds: string[] = []
     try {
       acceptedMonitoringSampleIds = ingestAgentMonitoring(agent.agentId, request.body.monitoring, now.getTime())
+      if (acceptedMonitoringSampleIds.length > 0) {
+        const monitoring = request.body.monitoring as Record<string, unknown> | undefined
+        const names = Array.isArray(monitoring?.samples)
+          ? monitoring.samples.flatMap(sample => {
+            const value = sample as Record<string, unknown>
+            return Array.isArray(value.instances) ? value.instances.flatMap(instance => typeof instance === 'object' && instance !== null && typeof (instance as Record<string, unknown>).name === 'string' ? [(instance as Record<string, unknown>).name as string] : []) : []
+          })
+          : []
+        const instances = await prisma.instance.findMany({ where: { hostId: agent.hostId, name: { in: [...new Set(names)] }, status: { not: 'deleted' } }, select: { id: true, name: true } })
+        for (const instance of instances) publishAgentInstanceMonitoring(agent.agentId, instance.id, instance.name, now.getTime())
+      }
     } catch (error) {
       request.log.warn({ error, agentId: agent.agentId }, 'Agent monitoring persistence unavailable; samples retained by Agent')
     }

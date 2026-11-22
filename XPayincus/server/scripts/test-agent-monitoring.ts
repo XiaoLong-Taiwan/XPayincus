@@ -16,7 +16,7 @@ const range = { from: now - 180000, to: now, resolutionSeconds: 60, limit: 1000 
 const sample = (id: string, at: number, value: number) => ({
   id: id.repeat(32), sampledAt: new Date(at).toISOString(),
   resources: { cpuUsagePercent: value, 'psi.cpu.some.avg10': value / 10 }, metrics: { heartbeatIntervalSeconds: 60 },
-  instances: [{ name: 'vm1', sampledAt: new Date(at).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: value, memoryUsedBytes: value * 1024, diskIOBytesPerSecond: value * 100, rxBytes: 999 } }],
+  instances: [{ name: 'vm1', sampledAt: new Date(at).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: value, memoryUsedBytes: value * 1024, diskIOBytesPerSecond: value * 100, rxBytes: 999, txBytes: 998, rxBytesPerSecond: value * 10, txBytesPerSecond: value * 20 } }],
   events: [{ type: 'component-state', components: { zfs: { available: true, collectedAt: new Date(at).toISOString(), status: { moduleLoaded: true } } } }]
 })
 const envelope = { schemaVersion: 2, samples: [sample('a', now - 120000, 10), sample('b', now - 60000, 30)] }
@@ -32,6 +32,10 @@ try {
   assert.equal(readAgentInstanceTop('fixture', range, 'cpuUsagePercent', 'avg', 10, now).items[0]?.avg, 20)
   const instanceHistory = readAgentInstanceHistory('fixture', range, 'vm1', now)
   assert.deepEqual(instanceHistory.summary.cpuUsagePercent, history.summary.cpuUsagePercent)
+  assert.equal(instanceHistory.summary.rxBytesPerSecond?.avg, 20)
+  assert.equal(instanceHistory.summary.txBytesPerSecond?.avg, 40)
+  assert.equal(instanceHistory.summary.rxBytes, undefined)
+  assert.equal(instanceHistory.summary.txBytes, undefined)
   assert.equal(instanceHistory.buckets.length, 2)
   assert.deepEqual(readAgentInstanceHistory('fixture', range, 'absent', now).summary, {})
   assert.deepEqual(readAgentInstanceHistory(null, range, 'vm1', now).buckets, [])

@@ -14,6 +14,10 @@ interface OperationTask {
   status: string
   progress: string | null
   error: string | null
+  errorCode: string | null
+  errorDetail: string | null
+  errorRequestId: string | null
+  errorRetryable: boolean | null
   createdAt: Date
   updatedAt: Date
 }
@@ -41,13 +45,13 @@ export default async function operationsRoutes(fastify: FastifyInstance) {
     const tasks = Prisma.sql`
       SELECT 'instance-task:' || t.id AS id, t.task_type::text AS kind,
         t.instance_id AS "instanceId", i.name, t.status::text AS status,
-        t.progress, t.error, t.created_at AS "createdAt",
+        t.progress, t.error, NULL::text AS "errorCode", NULL::text AS "errorDetail", NULL::text AS "errorRequestId", NULL::boolean AS "errorRetryable", t.created_at AS "createdAt",
         COALESCE(t.finished_at, t.started_at, t.created_at) AS "updatedAt"
       FROM instance_tasks t JOIN instances i ON i.id = t.instance_id
       WHERE TRUE ${taskOwner}
       UNION ALL
       SELECT 'restore-task:' || t.id, 'restore', t.instance_id, i.name,
-        t.status::text, t.progress, t.error, t.created_at,
+        t.status::text, t.progress, t.error, NULL::text, NULL::text, NULL::text, NULL::boolean, t.created_at,
         COALESCE(t.finished_at, t.started_at, t.created_at)
       FROM restore_tasks t JOIN instances i ON i.id = t.instance_id
       WHERE TRUE ${taskOwner}
@@ -55,12 +59,12 @@ export default async function operationsRoutes(fastify: FastifyInstance) {
       SELECT 'provisioning-job:' || t.id, 'create', t.instance_id, i.name,
         CASE t.status WHEN 'completed' THEN 'COMPLETED' WHEN 'failed' THEN 'FAILED'
           WHEN 'review_required' THEN 'FAILED' WHEN 'pending' THEN 'PENDING' ELSE 'PROCESSING' END,
-        t.phase, t.error, t.created_at, t.updated_at
+        t.phase, t.error, t.error_code, t.error_detail, t.error_request_id, t.error_retryable, t.created_at, t.updated_at
       FROM provisioning_jobs t JOIN instances i ON i.id = t.instance_id
       WHERE TRUE ${instanceOwner}
       UNION ALL
       SELECT 'instance-create:' || i.id, 'create', i.id, i.name,
-        'PROCESSING', NULL::text, NULL::text, i.created_at, i.updated_at
+        'PROCESSING', NULL::text, NULL::text, NULL::text, NULL::text, NULL::text, NULL::boolean, i.created_at, i.updated_at
       FROM instances i WHERE i.status = 'creating' ${instanceOwner}
         AND NOT EXISTS (SELECT 1 FROM provisioning_jobs job WHERE job.instance_id = i.id)
         AND NOT EXISTS (

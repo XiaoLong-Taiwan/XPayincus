@@ -38,6 +38,7 @@ import { parseNullablePostgresBigIntInput } from '../lib/bigint-input.js'
 import { normalizePlanTrafficLimitSpeed } from '../services/traffic-bandwidth.js'
 import { turnstileVerifier } from '../lib/turnstile.js'
 import { customAlphabet } from 'nanoid'
+import { normalizeProvisioningError, provisioningErrorFields } from '../services/provisioning-error.js'
 
 // 自定义 nanoid，只使用小写字母和数字（Incus 不允许下划线）
 const nanoid = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 8)
@@ -2297,7 +2298,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const instance = await db.getInstanceById(instanceId)
     if (!instance) return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
     if (!await checkInstanceOperationPermission(request.user, instance)) return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
-    const job = await prisma.provisioningJob.findUnique({ where: { instanceId }, select: { id: true, status: true, phase: true, error: true, attempts: true, createdAt: true, updatedAt: true } })
+    const job = await prisma.provisioningJob.findUnique({ where: { instanceId }, select: { id: true, status: true, phase: true, error: true, errorCode: true, errorDetail: true, errorRequestId: true, errorRetryable: true, attempts: true, createdAt: true, updatedAt: true } })
     const events = await prisma.provisioningEvent.findMany({ where: { instanceId }, orderBy: { id: 'desc' }, take: 100 })
     return { job, events: events.reverse() }
   })
@@ -2325,7 +2326,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     const claimed = await prisma.$transaction(async tx => {
       const result = await tx.provisioningJob.updateMany({
         where: { instanceId, status: 'review_required', updatedAt: job.updatedAt, instance: { status: { in: preparing ? ['creating'] : ['creating', 'running', 'stopped'] } } },
-        data: { status: preparing ? 'preparing' : 'pending', phase: preparing ? 'preparing' : 'queued', attempts: 0, error: null }
+        data: { status: preparing ? 'preparing' : 'pending', phase: preparing ? 'preparing' : 'queued', attempts: 0, error: null, errorCode: null, errorDetail: null, errorRequestId: null, errorRetryable: null }
       })
       if (result.count) await tx.provisioningEvent.create({ data: { instanceId, phase: preparing ? 'preparing' : 'queued' } })
       return result
@@ -6599,7 +6600,7 @@ export async function processProvisioningJobs(): Promise<void> {
         if (!instance || !['creating', 'running', 'stopped'].includes(instance.status)) {
           const phase = 'review_required'
           await prisma.$transaction([
-            prisma.provisioningJob.update({ where: { id: job.id }, data: { status: phase, phase, error: '實例狀態與交付任務不一致，保留資料等待核實' } }),
+            prisma.provisioningJob.update({ where: { id: job.id }, data: { status: phase, phase, ...provisioningErrorFields(normalizeProvisioningError(new Error('實例狀態與交付任務不一致，保留資料等待核實'), `provisioning-job:${job.id}`)) } }),
             prisma.provisioningEvent.create({ data: { instanceId: job.instanceId, phase } })
           ])
           continue
@@ -6629,7 +6630,10 @@ export async function processProvisioningJobs(): Promise<void> {
         const result = await prisma.instance.findUnique({ where: { id: job.instanceId }, select: { status: true } })
         const phase = result && ['running', 'stopped'].includes(result.status) ? 'completed' : 'failed'
         await prisma.$transaction(async tx => {
-          const completed = await tx.provisioningJob.updateMany({ where: { id: job.id, status: 'processing' }, data: { status: phase, phase, payload: '', error: phase === 'completed' ? null : '交付失敗' } })
+          const completed = await tx.provisioningJob.updateMany({ where: { id: job.id, status: 'processing' }, data: phase === 'completed'
+            ? { status: phase, phase, payload: '', error: null, errorCode: null, errorDetail: null, errorRequestId: null, errorRetryable: null }
+            : { status: phase, phase, payload: '', ...provisioningErrorFields(normalizeProvisioningError(new Error('交付失敗'), `provisioning-job:${job.id}`)) }
+          })
           if (completed.count) await tx.provisioningEvent.create({ data: { instanceId: job.instanceId, phase } })
         })
       } catch (error) {
@@ -6643,7 +6647,7 @@ export async function processProvisioningJobs(): Promise<void> {
             where: { id: job.id, status: latest.status, updatedAt: latest.updatedAt },
             data: {
               status: attempts >= 10 ? 'review_required' : job.status === 'preparing' ? 'preparing' : 'processing',
-              phase, attempts, error: error instanceof Error ? error.message : String(error)
+              phase, attempts, ...provisioningErrorFields(normalizeProvisioningError(error, `provisioning-job:${job.id}`))
             }
           })
           if (claimed.count) await tx.provisioningEvent.create({ data: { instanceId: job.instanceId, phase } })

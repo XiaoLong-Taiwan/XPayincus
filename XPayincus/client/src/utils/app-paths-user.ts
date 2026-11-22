@@ -44,14 +44,6 @@ export function inboxPath(): string {
   return '/inbox'
 }
 
-export function mailPath(): string {
-  return '/mail'
-}
-
-export function mailDomainPath(id: number | string): string {
-  return `/mail/domains/${encodeURIComponent(String(id))}`
-}
-
 export function transfersPath(): string {
   return '/transfers'
 }

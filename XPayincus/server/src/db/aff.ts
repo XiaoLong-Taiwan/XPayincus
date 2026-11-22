@@ -86,7 +86,6 @@ export interface AffBalanceChangeInput {
   amount: number // 正数=收入，负数=转出
   affCodeId?: number
   instanceId?: number
-  mailSubscriptionId?: number
   originalAmount?: number
   remark?: string
 }
@@ -103,7 +102,7 @@ async function changeAffBalanceInTransaction(
   tx: Prisma.TransactionClient,
   input: AffBalanceChangeInput
 ): Promise<AffBalanceChangeResult> {
-  const { userId, type, amount, affCodeId, instanceId, mailSubscriptionId, originalAmount, remark } = input
+  const { userId, type, amount, affCodeId, instanceId, originalAmount, remark } = input
 
   await advisoryTransactionLock(tx, USER_AFF_BALANCE_LOCK_NAMESPACE, userId)
 
@@ -139,7 +138,6 @@ async function changeAffBalanceInTransaction(
       amount,
       affCodeId,
       instanceId,
-      mailSubscriptionId,
       originalAmount,
       balanceBefore,
       balanceAfter,
@@ -405,12 +403,9 @@ export async function deleteAffCode(
       return { success: false, error: '该优惠码已被使用，无法删除' }
     }
 
-    const [instanceBindingCount, mailBindingCount] = await Promise.all([
-      prisma.affBinding.count({ where: { affCodeId: codeId } }),
-      prisma.mailSubscriptionAffBinding.count({ where: { affCodeId: codeId } })
-    ])
+    const instanceBindingCount = await prisma.affBinding.count({ where: { affCodeId: codeId } })
 
-    if (instanceBindingCount > 0 || mailBindingCount > 0) {
+    if (instanceBindingCount > 0) {
       return { success: false, error: '该优惠码已绑定订阅，无法删除' }
     }
 
@@ -1068,134 +1063,4 @@ function maskUsername(username: string): string {
   const first = username.slice(0, 2)
   const last = username.slice(-2)
   return `${first}***${last}`
-}
-
-// ==================== 邮箱订阅 AFF 支持 ====================
-
-/**
- * 验证邮箱订阅优惠码
- * 邮箱订阅仅支持全局码
- */
-export async function validateMailAffCode(
-  code: string,
-  userId: number
-): Promise<{
-  valid: boolean
-  affCode?: AffCode
-  discountRate?: number
-  commissionRate?: number
-  error?: string
-}> {
-  // 1. 查询优惠码
-  const affCode = await prisma.affCode.findUnique({
-    where: { code: code.toUpperCase() }
-  })
-
-  if (!affCode) {
-    return { valid: false, error: '优惠码不存在' }
-  }
-
-  // 2. 检查是否为全局码（邮箱订阅仅支持全局码）
-  if (affCode.packagePlanId !== null) {
-    return { valid: false, error: '该优惠码仅适用于特定实例套餐，不支持邮箱订阅' }
-  }
-
-  // 3. 检查是否为自己的优惠码（禁止自返利）
-  if (affCode.userId === userId) {
-    return { valid: false, error: '不能使用自己的优惠码' }
-  }
-
-  // 4. 检查优惠码是否启用
-  if (!affCode.enabled) {
-    return { valid: false, error: '优惠码已禁用' }
-  }
-
-  return {
-    valid: true,
-    affCode,
-    discountRate: Number(affCode.discountRate),
-    commissionRate: Number(affCode.commissionRate)
-  }
-}
-
-/**
- * 创建邮箱订阅与优惠码的绑定
- */
-export async function createMailAffBinding(
-  mailSubscriptionId: number,
-  affCodeId: number,
-  tx?: Prisma.TransactionClient
-): Promise<void> {
-  const client = tx || prisma
-  await client.mailSubscriptionAffBinding.create({
-    data: { mailSubscriptionId, affCodeId }
-  })
-}
-
-/**
- * 处理邮箱订阅的 AFF 返利
- */
-export async function processMailAffCommission(
-  affCodeId: number,
-  mailSubscriptionId: number,
-  originalAmount: number,
-  type: 'new_purchase' | 'renew',
-  tx?: Prisma.TransactionClient
-): Promise<void> {
-  const client = tx || prisma
-
-  // 1. 获取优惠码信息
-  const affCode = await client.affCode.findUnique({
-    where: { id: affCodeId }
-  })
-
-  if (!affCode) return
-
-  // 2. 计算返利金额
-  const commissionRate = Number(affCode.commissionRate)
-  const commission = Math.round(originalAmount * commissionRate * 100) / 100
-
-  if (commission <= 0) return
-
-  // 3. 给优惠码创建者增加 AFF 余额
-  await changeAffBalance({
-    userId: affCode.userId,
-    type,
-    amount: commission,
-    affCodeId,
-    mailSubscriptionId,
-    originalAmount,
-    remark: type === 'new_purchase' ? '邮箱新购返利' : '邮箱续费返利'
-  }, client as PrismaClient)
-
-  // 4. 更新优惠码统计
-  await client.affCode.update({
-    where: { id: affCodeId },
-    data: {
-      usedCount: type === 'new_purchase' ? { increment: 1 } : undefined,
-      totalEarnings: { increment: commission }
-    }
-  })
-}
-
-/**
- * 获取邮箱订阅绑定的优惠码
- */
-export async function getMailSubscriptionAffBinding(mailSubscriptionId: number): Promise<{
-  affCode: AffCode
-  userId: number
-} | null> {
-  const binding = await prisma.mailSubscriptionAffBinding.findUnique({
-    where: { mailSubscriptionId },
-    include: {
-      affCode: true
-    }
-  })
-
-  if (!binding) return null
-
-  return {
-    affCode: binding.affCode,
-    userId: binding.affCode.userId
-  }
 }

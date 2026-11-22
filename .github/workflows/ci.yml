@@ -122,6 +122,8 @@ jobs:
       - name: Test host port management guards
         run: pnpm --filter server test:host-port-management-guards
       - run: pnpm --filter server test:hosting-access-application-guards
+      - run: pnpm --filter client test:instance-monitoring-guards
+      - run: pnpm --filter server test:agent-monitoring-stream-guards
       - name: Apply PostgreSQL migrations to test database
         run: pnpm --filter server exec prisma migrate deploy
       - run: pnpm --filter server test:registration-ssh-key-guards

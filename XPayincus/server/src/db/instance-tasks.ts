@@ -41,6 +41,13 @@ export interface InstanceTaskWithDetails {
   finishedAt: Date | null
 }
 
+export interface ProvisioningJobErrorView {
+  errorCode: string | null
+  errorDetail: string | null
+  errorRequestId: string | null
+  errorRetryable: boolean | null
+}
+
 export class InstanceTaskConflictError extends Error {
   activeTask: InstanceTaskWithDetails | null
 

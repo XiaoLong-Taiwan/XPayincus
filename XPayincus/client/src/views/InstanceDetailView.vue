@@ -21,6 +21,8 @@ import InstanceConfigTab from '@/components/instance/InstanceConfigTab.vue'
 import InstanceLogsTab from '@/components/instance/InstanceLogsTab.vue'
 import SnapshotManager from '@/components/SnapshotManager.vue'
 import TrafficStats from '@/components/instance/TrafficStats.vue'
+import InstanceMonitoringPanel from '@/components/instances/InstanceMonitoringPanel.vue'
+import InstanceNetworkInfo from '@/components/instances/InstanceNetworkInfo.vue'
 import AddPortModal from '@/components/instance/modals/AddPortModal.vue'
 import PortConflictModal from '@/components/instance/modals/PortConflictModal.vue'
 import { helpPath, hostDetailPath, instancesPath, isAdminEntry } from '@/utils/app-paths'
@@ -40,6 +42,7 @@ import { getStatusInfo } from '@/utils/formatters'
 import { translateError } from '@/utils/errorHandler'
 import { freeSiteCopy, getFreeSiteBillingCycleLabel, getFreeSiteBillingCycleShort } from '@/utils/freeSiteFun'
 import type { Instance, InstanceWithDetails, Snapshot, UserQuota, UpdateInstanceRequest, Package, CloudInitState, CloudInitStatusResponse } from '@/types/api'
+import { useInstanceMonitoring } from '@/composables/useInstanceMonitoring'
 
 // 格式化镜像名称：优先使用 imageName，否则去掉 images: 前缀
 function formatImageName(image: string, imageName?: string | null): string {
@@ -69,6 +72,7 @@ const toast = useToast()
 const themeStore = useThemeStore()
 const authStore = useAuthStore()
 const configStore = useConfigStore()
+const instanceMonitoring = useInstanceMonitoring()
 
 interface CustomerSelfServiceApi {
   billing: {
@@ -371,8 +375,21 @@ function endDrag() {
 }
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
-let statsInterval: ReturnType<typeof setInterval> | null = null
 let isComponentMounted = ref<boolean>(true)  // 组件挂载状态标志
+
+function connectInstanceMonitoring(): void {
+  if (!instance.value?.id) return
+  const hostId = Number((instance.value as any).hostId ?? (instance.value as any).host_id ?? instance.value.host?.id)
+  if (!Number.isFinite(hostId) || hostId <= 0) return
+  instanceMonitoring.connect(instance.value.id, hostId, instance.value.name, (sample) => {
+    const metrics = sample.metrics
+    stats.value = {
+      memory: { usage: metrics.memoryUsedBytes ?? 0, limit: stats.value.memory.limit, usagePercent: stats.value.memory.limit ? (metrics.memoryUsedBytes ?? 0) / stats.value.memory.limit * 100 : 0 },
+      disk: stats.value.disk,
+      network: stats.value.network
+    }
+  })
+}
 
 onMounted(async (): Promise<void> => {
   isComponentMounted.value = true
@@ -383,6 +400,7 @@ onMounted(async (): Promise<void> => {
   // 不需要在这里重复调用
   if (isComponentMounted.value) {
     refreshInterval = setInterval(loadInstance, 5000)
+    connectInstanceMonitoring()
   }
 })
 
@@ -401,10 +419,7 @@ onUnmounted(() => {
     clearInterval(refreshInterval)
     refreshInterval = null
   }
-  if (statsInterval) {
-    clearInterval(statsInterval)
-    statsInterval = null
-  }
+  instanceMonitoring.disconnect()
   // 清理任务轮询
   if (taskPollingInterval) {
     clearInterval(taskPollingInterval)
@@ -530,20 +545,14 @@ watch(() => route.params.id, async (newId, oldId) => {
         clearInterval(refreshInterval)
         refreshInterval = null
       }
-      if (statsInterval) {
-        clearInterval(statsInterval)
-        statsInterval = null
-      }
+      instanceMonitoring.disconnect()
     } else {
       // 切换到新实例，先清除所有定时器
       if (refreshInterval) {
         clearInterval(refreshInterval)
         refreshInterval = null
       }
-      if (statsInterval) {
-        clearInterval(statsInterval)
-        statsInterval = null
-      }
+      instanceMonitoring.disconnect()
       if (taskPollingInterval) {
         clearInterval(taskPollingInterval)
         taskPollingInterval = null
@@ -609,6 +618,8 @@ watch(() => route.params.id, async (newId, oldId) => {
       // 加载新实例数据
       await loadInstance()
 
+      connectInstanceMonitoring()
+
       // 重新启动定时刷新
       if (isComponentMounted.value) {
         refreshInterval = setInterval(loadInstance, 5000)
@@ -621,20 +632,13 @@ watch(() => route.query.tab, (tab) => {
   if (tab === 'network') activeTab.value = 'network'
 })
 
-// 监听实例状态变化，动态管理统计信息定时器
+// 監控狀態由 SSE composable 管理
 // 注意：必须在 isRunning 定义之后
 watch(isRunning, (running: boolean) => {
   // 如果组件已卸载，不执行任何操作
   if (!isComponentMounted.value) return
 
   if (running) {
-    // 实例启动时，启动统计信息定时刷新
-    if (!statsInterval && instance.value?.id) {
-      loadStats()
-      if (isComponentMounted.value) {
-        statsInterval = setInterval(loadStats, 3000)
-      }
-    }
     // 实例启动时，延迟检查 cloud-init 状态（等待实例完全就绪）
     cloudInitRetryCount = 0 // 重置重试计数器
     setTimeout(() => {
@@ -643,11 +647,6 @@ watch(isRunning, (running: boolean) => {
       }
     }, 3000) // 延迟 3 秒再检测
   } else {
-    // 实例停止时，停止统计信息定时刷新
-    if (statsInterval) {
-      clearInterval(statsInterval)
-      statsInterval = null
-    }
     // 实例停止时，重置 cloud-init 状态
     cloudInitReady.value = true
     cloudInitState.value = null
@@ -913,10 +912,6 @@ async function loadInstance(): Promise<void> {
           loadPromises.push(loadTrafficData())
           await Promise.all(loadPromises)
 
-          // 启动统计信息定时刷新（只有运行时）
-          if (!statsInterval && isRunning.value && isComponentMounted.value) {
-            statsInterval = setInterval(loadStats, 3000)
-          }
         }
       } else {
         // 非首次加载时也更新流量数据（但不需要等待）
@@ -1005,10 +1000,6 @@ async function loadStats(): Promise<void> {
         instance.value.status = normalizedStatus as 'creating' | 'running' | 'stopped' | 'error' | 'deleted'
 
         // 如果实例不再运行，停止统计信息轮询
-        if (normalizedStatus !== 'running' && statsInterval) {
-          clearInterval(statsInterval)
-          statsInterval = null
-        }
       }
     }
   } catch (error) {
@@ -3037,6 +3028,14 @@ function formatShortDate(dateStr: string | null | undefined): string {
               @copy="copyToClipboard"
               @edit-config="openConfigEditModal"
               @redeem="openRedeemModal"
+            />
+            <InstanceNetworkInfo v-if="activeTab === 'info'" :instance="instance" />
+            <InstanceMonitoringPanel
+              :sample="instanceMonitoring.sample.value"
+              :trend="instanceMonitoring.trend.value"
+              :status="instanceMonitoring.status.value"
+              :history-loading="instanceMonitoring.historyLoading.value"
+              :history-error="instanceMonitoring.historyError.value"
             />
           </div>
 

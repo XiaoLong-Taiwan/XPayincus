@@ -1,4 +1,5 @@
 import { http } from '@/api'
+import { buildApiUrl } from '@/utils/api-url'
 
 export interface MonitoringStats {
   min: number
@@ -17,7 +18,7 @@ export interface MonitoringCounterStats {
   unit: 'microseconds'
 }
 
-export const instanceMetrics = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond'] as const
+export const instanceMetrics = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond', 'rxBytesPerSecond', 'txBytesPerSecond'] as const
 export type InstanceMetric = typeof instanceMetrics[number]
 export interface MonitoringQuery {
   from: string
@@ -60,6 +61,17 @@ export interface ComponentEvents extends MonitoringResponse {
   events: ComponentEvent[]
 }
 
+export interface InstanceMonitoringSample {
+  sampledAt: string
+  online: boolean
+  metrics: Record<string, number | undefined>
+}
+
+export interface InstanceMonitoringSnapshot extends MonitoringResponse {
+  online: boolean
+  sample?: InstanceMonitoringSample
+}
+
 async function get<T>(hostId: number, view: string, params: MonitoringQuery & { name?: string; metric?: InstanceMetric; orderBy?: 'avg' | 'max'; top?: number }, signal?: AbortSignal): Promise<T> {
   return http.get<T, T>(`/agent/hosts/${hostId}/monitoring/${view}`, {
     params,
@@ -73,4 +85,10 @@ export const agentMonitoringApi = {
   instanceHistory: (hostId: number, query: MonitoringQuery, name: string, signal?: AbortSignal) => get<InstanceHistory>(hostId, 'instances/history', { ...query, name }, signal),
   top: (hostId: number, query: MonitoringQuery, metric: InstanceMetric, orderBy: 'avg' | 'max', top: number, signal?: AbortSignal) => get<InstanceTop>(hostId, 'instances/top', { ...query, metric, orderBy, top }, signal),
   events: (hostId: number, query: MonitoringQuery, signal?: AbortSignal) => get<ComponentEvents>(hostId, 'events', query, signal)
+}
+
+export function instanceMonitoringStreamUrl(instanceId: number, token: string): string {
+  const url = new URL(buildApiUrl(`/instances/${instanceId}/monitoring/stream`), window.location.origin)
+  url.searchParams.set('token', token)
+  return url.toString()
 }

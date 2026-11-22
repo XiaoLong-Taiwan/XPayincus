@@ -70,6 +70,27 @@ func TestMonitoringSpoolRestartSemanticDiffAndBillingIsolation(t *testing.T) {
 	}
 }
 
+func TestMonitoringPayloadIncludesNetworkCountersAndRates(t *testing.T) {
+	client := &Client{spoolDir: t.TempDir(), spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	payload := map[string]any{
+		"instances": map[string]any{"items": []any{map[string]any{
+			"name": "vm1", "sampledAt": "2026-11-11T00:00:00Z",
+			"performance": map[string]any{"intervalSeconds": 60, "rxBytes": uint64(1000), "txBytes": uint64(2000), "rxBytesPerSecond": 10.5, "txBytesPerSecond": 20.5},
+		}}},
+	}
+	samples, err := client.queueMonitoring(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances := samples[len(samples)-1]["instances"].([]any)
+	metrics := instances[0].(map[string]any)["metrics"].(map[string]any)
+	for key, expected := range map[string]any{"rxBytes": float64(1000), "txBytes": float64(2000), "rxBytesPerSecond": 10.5, "txBytesPerSecond": 20.5} {
+		if metrics[key] != expected {
+			t.Fatalf("network metric %s mismatch: got=%#v want=%#v", key, metrics[key], expected)
+		}
+	}
+}
+
 func TestMonitoringAckIsIndependentAndExplicit(t *testing.T) {
 	var ack atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
