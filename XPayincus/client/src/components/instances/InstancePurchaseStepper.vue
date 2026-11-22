@@ -45,18 +45,19 @@ function goToStep(step: Step): void {
 
 <template>
   <div class="purchase-stepper" data-instance-purchase-stepper>
-    <nav aria-label="購買步驟" class="mb-4 grid grid-cols-4 gap-2">
+    <nav aria-label="購買步驟" class="mb-5 grid grid-cols-4 gap-2 border-b border-themed pb-2">
       <button
         v-for="step in props.steps"
         :key="step.id"
         type="button"
         class="min-w-0 border-b-2 px-1 py-2 text-left text-xs transition-colors sm:px-2 sm:text-sm"
-        :class="step.id === props.activeStep ? 'border-themed text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
+        :class="step.id === props.activeStep ? 'border-themed font-semibold text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
         :disabled="isCreating || step.id > props.activeStep"
         :aria-current="step.id === props.activeStep ? 'step' : undefined"
+        :aria-label="`${step.label}${step.id < props.activeStep ? '，已完成' : step.id === props.activeStep ? '，目前步驟' : '，尚未完成'}`"
         @click="goToStep(step)"
       >
-        <span class="mr-1 font-mono">{{ step.id }}</span>{{ step.label }}
+        <span class="mr-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
       </button>
     </nav>
 

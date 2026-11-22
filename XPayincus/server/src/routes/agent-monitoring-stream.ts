@@ -1,13 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { prisma } from '../db/prisma.js'
 import { subscribeInstanceMonitoring, type InstanceMonitoringStreamEvent } from '../lib/agent-monitoring-stream.js'
-import { readAgentInstanceSnapshot } from '../services/agent-monitoring.js'
+import { monitoringFreshnessMs, readAgentInstanceSnapshot } from '../services/agent-monitoring.js'
 import { consumeMonitoringStreamAccessTicket, generateMonitoringStreamAccessTicket, inspectMonitoringStreamAccessTicket } from '../lib/action-ticket.js'
 import { isAccessTokenInvalidated } from '../lib/security.js'
 
 const positiveIdPattern = /^[1-9]\d*$/
-const freshnessMs = 45 * 1000
-
 function writeEvent(response: NodeJS.WritableStream, event: InstanceMonitoringStreamEvent): void {
   response.write(`data: ${JSON.stringify(event)}\n\n`)
 }
@@ -69,8 +67,8 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
     }
     const scheduleFreshness = (sampledAt?: string) => {
       if (freshnessTimer) clearTimeout(freshnessTimer)
-      const age = sampledAt ? Math.max(0, Date.now() - Date.parse(sampledAt)) : freshnessMs
-      freshnessTimer = setTimeout(sendOffline, Math.max(0, freshnessMs - age))
+      const age = sampledAt ? Math.max(0, Date.now() - Date.parse(sampledAt)) : monitoringFreshnessMs
+      freshnessTimer = setTimeout(sendOffline, Math.max(0, monitoringFreshnessMs - age))
     }
     const onEvent = (event: InstanceMonitoringStreamEvent) => {
       if (closed) return

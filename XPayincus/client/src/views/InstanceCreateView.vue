@@ -1786,21 +1786,26 @@ async function handleSubmit(): Promise<void> {
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 5px 12px -5px color-mix(in srgb, var(--kawaii-primary) 55%, transparent);
 }
 
-.nimbus-pane :deep(.card) {
+.nimbus-pane :deep(button.card),
+.nimbus-pane :deep([role="button"].card) {
   transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
   animation: nimbus-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
-.nimbus-pane :deep(.card):hover {
+.nimbus-pane :deep(button.card:hover),
+.nimbus-pane :deep([role="button"].card:hover) {
   transform: translateY(-2px);
   box-shadow: 0 14px 30px -16px rgb(0 0 0 / 0.35);
 }
 
-.nimbus-pane :deep(.card):nth-child(1) { animation-delay: 0.02s; }
-.nimbus-pane :deep(.card):nth-child(2) { animation-delay: 0.06s; }
-.nimbus-pane :deep(.card):nth-child(3) { animation-delay: 0.10s; }
-.nimbus-pane :deep(.card):nth-child(4) { animation-delay: 0.14s; }
-.nimbus-pane :deep(.card):nth-child(n + 5) { animation-delay: 0.18s; }
+.nimbus-pane :deep(button.card:nth-child(1)),
+.nimbus-pane :deep([role="button"].card:nth-child(1)) { animation-delay: 0.02s; }
+.nimbus-pane :deep(button.card:nth-child(2)),
+.nimbus-pane :deep([role="button"].card:nth-child(2)) { animation-delay: 0.06s; }
+.nimbus-pane :deep(button.card:nth-child(3)),
+.nimbus-pane :deep([role="button"].card:nth-child(3)) { animation-delay: 0.10s; }
+.nimbus-pane :deep(button.card:nth-child(n + 4)),
+.nimbus-pane :deep([role="button"].card:nth-child(n + 4)) { animation-delay: 0.14s; }
 
 .nimbus-submit {
   box-shadow: 0 -10px 26px -20px rgb(0 0 0 / 0.55), 0 1px 3px 0 rgb(0 0 0 / 0.08);
@@ -1826,17 +1831,7 @@ async function handleSubmit(): Promise<void> {
 }
 
 .create-step-number {
-  display: inline-flex;
-  width: 1.5rem;
-  height: 1.5rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  background: var(--kawaii-text);
-  color: var(--kawaii-bg);
-  font-size: 0.75rem;
-  font-weight: 700;
+  display: none;
 }
 
 @keyframes nimbus-rise {
@@ -1846,11 +1841,13 @@ async function handleSubmit(): Promise<void> {
 
 @media (prefers-reduced-motion: reduce) {
   .nimbus-seg-pill,
-  .nimbus-pane :deep(.card) {
+  .nimbus-pane :deep(button.card),
+  .nimbus-pane :deep([role="button"].card) {
     transition: none !important;
     animation: none !important;
   }
-  .nimbus-pane :deep(.card):hover {
+  .nimbus-pane :deep(button.card:hover),
+  .nimbus-pane :deep([role="button"].card:hover) {
     transform: none;
   }
 }

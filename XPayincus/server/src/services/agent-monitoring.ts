@@ -3,7 +3,7 @@ import { publishInstanceMonitoring } from '../lib/agent-monitoring-stream.js'
 
 export const monitoringRetentionMs = 7 * 86400000
 const replayWindowMs = 8 * 86400000
-export const monitoringFreshnessMs = 45 * 1000
+export const monitoringFreshnessMs = 120 * 1000
 const hostKeys = ['cpuTotal', 'cpuUsagePercent', 'memoryTotalMb', 'memoryAvailableMb', 'memoryUsedMb', 'memoryUsagePercent', 'swapTotalMb', 'swapUsedMb', 'swapUsagePercent', 'diskTotalBytes', 'diskUsedBytes', 'diskAvailableBytes', 'diskUsagePercent', 'processCount', 'load1', 'load5', 'load15', 'uptimeSeconds']
 for (const resource of ['cpu', 'memory', 'io']) {
   for (const kind of ['some', 'full']) {

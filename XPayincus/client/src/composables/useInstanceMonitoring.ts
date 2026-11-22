@@ -3,6 +3,7 @@ import { agentMonitoringApi, createInstanceMonitoringStreamTicket, instanceMonit
 
 const MAX_TREND_POINTS = 100
 const MAX_RECONNECT_ATTEMPTS = 5
+const MONITORING_FRESHNESS_MS = 120000
 
 export function useInstanceMonitoring() {
   const sample = ref<InstanceMonitoringSample | null>(null)
@@ -65,7 +66,7 @@ export function useInstanceMonitoring() {
           if (staleTimer) clearTimeout(staleTimer)
           staleTimer = setTimeout(() => {
             status.value = 'offline'
-          }, 45000)
+          }, MONITORING_FRESHNESS_MS)
         }
         eventSource.onmessage = (event) => {
           if (generation !== currentGeneration || attempt !== connectionAttempt) return
@@ -79,13 +80,17 @@ export function useInstanceMonitoring() {
               ? payload
               : payload.sample
             if (!next?.sampledAt || !next.metrics) return
+            if (next.online === false) {
+              status.value = 'offline'
+              return
+            }
             sample.value = next
             onSample?.(next)
             status.value = 'connected'
             points.push(next)
             if (points.length > MAX_TREND_POINTS) points = points.slice(-MAX_TREND_POINTS)
             if (staleTimer) clearTimeout(staleTimer)
-            staleTimer = setTimeout(() => { status.value = 'offline' }, 45000)
+            staleTimer = setTimeout(() => { status.value = 'offline' }, MONITORING_FRESHNESS_MS)
           } catch {
             status.value = 'error'
           }
@@ -106,7 +111,14 @@ export function useInstanceMonitoring() {
           reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
         }
       }).catch(() => {
-        if (generation === currentGeneration && activeInstanceId === instanceId) status.value = 'error'
+        if (generation !== currentGeneration || activeInstanceId !== instanceId || attempt !== connectionAttempt) return
+        reconnectAttempt.value += 1
+        if (reconnectAttempt.value > MAX_RECONNECT_ATTEMPTS) {
+          status.value = 'offline'
+          return
+        }
+        status.value = 'reconnecting'
+        reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
       })
     }
     open()

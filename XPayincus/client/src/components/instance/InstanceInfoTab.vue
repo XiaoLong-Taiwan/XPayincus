@@ -185,6 +185,15 @@ function formatBytesPerSecond(value: number | undefined): string {
   return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(amount)} ${units[unit]}`
 }
 
+function clampPercent(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0
+}
+
+function rateBarWidth(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
+  return Math.min(100, Math.max(4, (value / (1024 * 1024)) * 20))
+}
+
 // 格式化带宽值，统一换算成 Mbps
 function formatBandwidth(bandwidth: string | null | undefined): string {
   const value = String(bandwidth || '').trim()
@@ -421,39 +430,6 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
           ></div>
         </div>
       </div>
-      <div class="mb-4 grid grid-cols-2 gap-3 border-b border-themed pb-4 lg:grid-cols-4" aria-label="Live resource monitoring">
-        <div class="border-l-2 border-themed pl-3">
-          <p class="text-xs text-themed-muted">CPU 即時</p>
-          <p class="mt-1 font-mono text-sm tabular-nums">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent, '%') }}</p>
-        </div>
-        <div class="border-l-2 border-themed pl-3">
-          <p class="text-xs text-themed-muted">記憶體即時</p>
-          <p class="mt-1 font-mono text-sm tabular-nums">{{ typeof monitoringMetrics.memoryUsedBytes === 'number' ? formatMemory(monitoringMetrics.memoryUsedBytes) : '—' }}</p>
-        </div>
-        <div class="border-l-2 border-themed pl-3">
-          <p class="text-xs text-themed-muted">網路接收</p>
-          <p class="mt-1 font-mono text-sm tabular-nums">{{ formatBytesPerSecond(monitoringMetrics.rxBytesPerSecond) }}</p>
-        </div>
-        <div class="border-l-2 border-themed pl-3">
-          <p class="text-xs text-themed-muted">網路傳送</p>
-          <p class="mt-1 font-mono text-sm tabular-nums">{{ formatBytesPerSecond(monitoringMetrics.txBytesPerSecond) }}</p>
-        </div>
-        <p class="col-span-full text-xs" :class="monitoringStatus === 'connected' ? 'text-green-600' : monitoringStatus === 'offline' || monitoringStatus === 'error' ? 'text-red-600' : 'text-amber-600'" role="status" aria-live="polite">
-          {{ monitoringStatus === 'connected' ? '即時監控' : monitoringStatus === 'offline' ? 'Agent 離線' : monitoringStatus === 'error' ? '監控連線失敗' : monitoringStatus === 'reconnecting' ? '重新連線中' : '連線中' }}
-        </p>
-        <p v-if="monitoringHistoryLoading" class="col-span-full text-xs text-themed-muted" role="status">載入七日趨勢…</p>
-        <p v-else-if="monitoringHistoryError" class="col-span-full text-xs text-red-600" role="alert">七日趨勢載入失敗</p>
-        <div v-else-if="monitoringTrend" class="col-span-full space-y-2">
-          <h3 class="border-t border-themed pt-3 text-xs font-semibold">七日趨勢 · {{ monitoringTrend.resolutionSeconds }} 秒解析度</h3>
-          <div class="max-h-40 space-y-2 overflow-y-auto">
-            <article v-for="bucket in monitoringTrendRows" :key="bucket.from" class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-themed py-2 text-xs">
-              <time class="text-themed-muted">{{ new Date(bucket.from).toLocaleString() }}</time>
-              <span class="font-mono tabular-nums">CPU {{ bucket.metrics.cpuUsagePercent?.avg?.toFixed(1) ?? '—' }}% · RAM {{ bucket.metrics.memoryUsedBytes?.avg !== undefined ? formatMemory(bucket.metrics.memoryUsedBytes.avg) : '—' }}</span>
-            </article>
-            <p v-if="!monitoringTrendRows.length" class="text-xs text-themed-muted">尚無趨勢資料</p>
-          </div>
-        </div>
-      </div>
       <div class="space-y-4">
         <!-- CPU -->
         <div>
@@ -464,7 +440,10 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               </svg>
               {{ t('instance.detail.info.cpu') }}
             </span>
-            <span class="text-themed font-medium">{{ instance.cpu }}%</span>
+            <span class="text-themed font-medium">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent ?? instance.cpu, '%') }}</span>
+          </div>
+          <div class="h-2 rounded-full overflow-hidden bg-themed/20">
+            <div class="h-full rounded-full bg-green-500 transition-all duration-500" :style="{ width: clampPercent(monitoringMetrics.cpuUsagePercent ?? instance.cpu) + '%' }"></div>
           </div>
         </div>
         <!-- Memory -->
@@ -479,7 +458,7 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             </span>
             <span class="text-themed font-medium">
               <template v-if="stats.memory.usage > 0">
-                {{ formatMemory(stats.memory.usage) }} /
+                {{ typeof monitoringMetrics.memoryUsedBytes === 'number' ? formatMemory(monitoringMetrics.memoryUsedBytes) : formatMemory(stats.memory.usage) }} /
               </template>
               {{ formatMemory(stats.memory.limit > 0 ? stats.memory.limit : instance.memory) }}
               <span v-if="stats.memory.usagePercent > 0" class="text-xs text-themed-muted ml-1">
@@ -491,7 +470,7 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             <div
               class="h-full rounded-full transition-all duration-500"
               :class="stats.memory.usagePercent > 80 ? 'bg-red-500' : stats.memory.usagePercent > 60 ? 'bg-yellow-500' : 'bg-green-500'"
-              :style="{ width: stats.memory.usagePercent + '%' }"
+              :style="{ width: clampPercent(stats.memory.usagePercent) + '%' }"
             ></div>
           </div>
         </div>
@@ -518,7 +497,7 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             <div
               class="h-full rounded-full transition-all duration-500"
               :class="stats.disk.usagePercent > 80 ? 'bg-red-500' : stats.disk.usagePercent > 60 ? 'bg-yellow-500' : 'bg-purple-500'"
-              :style="{ width: stats.disk.usagePercent + '%' }"
+              :style="{ width: clampPercent(stats.disk.usagePercent) + '%' }"
             ></div>
           </div>
         </div>
@@ -558,9 +537,47 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
           >
             <div
               :class="['h-full rounded-full transition-all duration-500', trafficProgressBarClass]"
-              :style="{ width: Math.min(Math.max(trafficData?.percentage || 0, 0), 100) + '%' }"
+              :style="{ width: clampPercent(trafficData?.percentage) + '%' }"
             ></div>
           </div>
+        </div>
+        <!-- Network Rates -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <div class="flex justify-between text-sm mb-1">
+              <span class="text-themed-muted">網路接收速率</span>
+              <span class="text-themed font-medium">{{ formatBytesPerSecond(monitoringMetrics.rxBytesPerSecond) }}</span>
+            </div>
+            <div class="h-2 rounded-full overflow-hidden bg-themed/20">
+              <div class="h-full rounded-full bg-sky-500 transition-all duration-500" :style="{ width: rateBarWidth(monitoringMetrics.rxBytesPerSecond) + '%' }"></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between text-sm mb-1">
+              <span class="text-themed-muted">網路傳送速率</span>
+              <span class="text-themed font-medium">{{ formatBytesPerSecond(monitoringMetrics.txBytesPerSecond) }}</span>
+            </div>
+            <div class="h-2 rounded-full overflow-hidden bg-themed/20">
+              <div class="h-full rounded-full bg-sky-500 transition-all duration-500" :style="{ width: rateBarWidth(monitoringMetrics.txBytesPerSecond) + '%' }"></div>
+            </div>
+          </div>
+        </div>
+        <div class="border-t border-themed pt-3">
+          <p class="text-xs" :class="monitoringStatus === 'connected' ? 'text-green-600' : monitoringStatus === 'offline' || monitoringStatus === 'error' ? 'text-red-600' : 'text-amber-600'" role="status" aria-live="polite">
+            {{ monitoringStatus === 'connected' ? '即時監控' : monitoringStatus === 'offline' ? 'Agent 離線' : monitoringStatus === 'error' ? '監控連線失敗' : monitoringStatus === 'reconnecting' ? '重新連線中' : '連線中' }}
+          </p>
+          <p v-if="monitoringHistoryLoading" class="mt-2 text-xs text-themed-muted" role="status">載入七日趨勢…</p>
+          <p v-else-if="monitoringHistoryError" class="mt-2 text-xs text-red-600" role="alert">七日趨勢載入失敗</p>
+          <details v-else-if="monitoringTrend" class="mt-2 text-xs">
+            <summary class="cursor-pointer text-themed-muted">七日趨勢 · {{ monitoringTrend.resolutionSeconds }} 秒解析度</summary>
+            <div class="mt-2 max-h-40 space-y-2 overflow-y-auto">
+              <article v-for="bucket in monitoringTrendRows" :key="bucket.from" class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-themed py-2">
+                <time class="text-themed-muted">{{ new Date(bucket.from).toLocaleString() }}</time>
+                <span class="font-mono tabular-nums">CPU {{ bucket.metrics.cpuUsagePercent?.avg?.toFixed(1) ?? '—' }}% · RAM {{ bucket.metrics.memoryUsedBytes?.avg !== undefined ? formatMemory(bucket.metrics.memoryUsedBytes.avg) : '—' }}</span>
+              </article>
+              <p v-if="!monitoringTrendRows.length" class="text-xs text-themed-muted">尚無趨勢資料</p>
+            </div>
+          </details>
         </div>
         <!-- Bandwidth Limits -->
         <div class="pt-2 border-t-2 border-themed">
