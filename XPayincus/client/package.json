@@ -15,7 +15,7 @@
     "lint:check": "eslint src",
     "type-check": "vue-tsc --noEmit",
     "test:host-install-ui-guards": "node scripts/test-host-install-ui-guards.mjs",
-    "test:instance-monitoring-guards": "node scripts/test-instance-monitoring-guards.mjs"
+    "test:instance-monitoring-guards": "node src/scripts/test-instance-monitoring-guards.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
