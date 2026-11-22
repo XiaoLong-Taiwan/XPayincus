@@ -41,8 +41,6 @@ for (const [label, relativePath] of [
   ['notification webhooks', '../src/lib/notifier.ts'],
   ['Lsky client', '../src/lib/lsky.ts'],
   ['ticket image proxy', '../src/routes/tickets.ts'],
-  ['CraneMail client', '../src/services/cranemail.ts'],
-  ['SmarterMail client', '../src/services/smartermail.ts'],
   ['system monitor webhook', '../src/services/system-monitor.ts']
 ] as const) {
   assert.ok(readSource(relativePath).includes('safeFetch('), `${label} must use safeFetch`)

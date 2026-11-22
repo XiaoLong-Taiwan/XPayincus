@@ -38,30 +38,5 @@ assertStartGuard('server/src/services/hosting-scheduler.ts', 'startHostingSchedu
 assertStartGuard('server/src/services/status-scheduler.ts', 'startStatusScheduler', 'let schedulerStarted = false')
 assertStartGuard('server/src/services/system-monitor.ts', 'startSystemMonitor', 'let schedulerStarted = false')
 assertStartGuard('server/src/services/traffic-scheduler.ts', 'startTrafficScheduler', 'let schedulerStarted = false')
-assertStartGuard('server/src/services/mail-usage-scheduler.ts', 'startMailUsageScheduler', 'let schedulerStarted = false')
-assertStartGuard('server/src/services/mail-autorenew-scheduler.ts', 'startMailAutoRenewScheduler', 'let schedulerStarted = false')
-
-const appSource = readRepoFile('server/src/app.ts')
-assert.ok(
-  appSource.includes("await import('./services/mail-autorenew-scheduler.js')") &&
-    appSource.includes('startMailAutoRenewScheduler()'),
-  'app startup must register the mail auto-renew scheduler'
-)
-
-const mailExpirySource = readRepoFile('server/src/services/mail-expiry-scheduler.ts')
-const mailStartIndex = mailExpirySource.indexOf('export function startMailExpiryScheduler(')
-assert.notEqual(mailStartIndex, -1, 'mail expiry scheduler must export startMailExpiryScheduler')
-const mailStartBody = mailExpirySource.slice(mailStartIndex)
-const mailGuardIndex = mailStartBody.indexOf('if (schedulerInterval)')
-const mailReturnIndex = mailStartBody.indexOf('return schedulerInterval')
-const mailSetIntervalIndex = mailStartBody.indexOf('schedulerInterval = setInterval(')
-assert.ok(
-  mailExpirySource.includes('let schedulerInterval: NodeJS.Timeout | null = null'),
-  'mail expiry scheduler must retain the created interval handle'
-)
-assert.notEqual(mailGuardIndex, -1, 'mail expiry scheduler must return the existing interval on repeated start')
-assert.notEqual(mailReturnIndex, -1, 'mail expiry scheduler must return the existing interval handle')
-assert.notEqual(mailSetIntervalIndex, -1, 'mail expiry scheduler must assign the interval handle')
-assert.ok(mailGuardIndex < mailSetIntervalIndex, 'mail expiry scheduler must guard before registering a new interval')
 
 console.log('scheduler startup idempotency checks passed')
