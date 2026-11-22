@@ -250,6 +250,11 @@ function isAdminLikeRoute(route: RouteInfo): boolean {
 }
 
 function hasRouteProtection(route: RouteInfo): boolean {
+  if (route.file === 'agent-monitoring-stream.ts' && route.path === '/instances/:instanceId/monitoring/stream') {
+    return route.handler.includes('request.headers.authorization = `Bearer ${token}`')
+      && route.handler.includes('await fastify.authenticate(request, reply)')
+  }
+
   return /onRequest|preHandler|websocket/.test(route.options) || route.fileHasAuthenticateHook
 }
 
