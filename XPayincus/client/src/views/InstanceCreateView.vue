@@ -166,6 +166,8 @@ const purchaseReviewed = ref(false)
 const purchaseReviewLoading = ref(false)
 const purchaseReviewReady = ref(false)
 const purchaseBalance = ref<number | null>(null)
+const hostsLoadedIntent = ref('')
+const hostIntent = () => JSON.stringify([form.value.packageId, form.value.planId, form.value.cpu, form.value.memory, form.value.disk])
 const purchaseShortfall = computed(() => Math.max(0, (planPriceInfo.value?.finalPrice || 0) + (selectedPlan.value?.setupFee || 0) / 100 - (purchaseBalance.value || 0)))
 function persistDraft() {
   if (!draftReady.value || !authStore.user) return
@@ -189,18 +191,19 @@ async function reviewPurchase() {
   const requestedIntent = intent()
   try {
     const [catalog, balance] = await Promise.all([
-      api.packages.list(toPackageSourceRequest(packageSource.value)), api.billing.getUserBalance()
+      packages.value.length ? Promise.resolve(null) : api.packages.list(toPackageSourceRequest(packageSource.value)),
+      api.billing.getUserBalance()
     ])
     if (requestedIntent !== intent()) return
-    packages.value = ((catalog as { packages?: Package[] }).packages || []).filter(p => p.active === 1)
-    if (form.value.packageId) await loadPackagePlans(form.value.packageId, true)
+    if (catalog) packages.value = ((catalog as { packages?: Package[] }).packages || []).filter(p => p.active === 1)
+    if (form.value.packageId && plansLoadedPackageId.value !== form.value.packageId) await loadPackagePlans(form.value.packageId, true)
     if (requestedIntent !== intent()) return
     if (selectedPlan.value) {
       form.value.cpu = selectedPlan.value.cpu
       form.value.memory = selectedPlan.value.memory
       form.value.disk = selectedPlan.value.disk
     }
-    await loadAvailableHosts()
+    if (!hostsLoadedIntent.value || hostsLoadedIntent.value !== hostIntent()) await loadAvailableHosts()
     if (requestedIntent !== intent()) return
     purchaseBalance.value = balance.balance.balance
     promoCodeValid.value = null
@@ -885,24 +888,19 @@ async function selectPackage(pkg: Package, preferredPlanId?: number | null): Pro
   // 加载套餐详情以获取quotaInfo（仅在套餐信息中还没有quotaInfo时加载）
   const currentPkg = packages.value.find(p => p.id === pkg.id)
   if (!currentPkg?.quotaInfo) {
-    try {
-      const detailRes = await api.packages.get(pkg.id) as any
+    void api.packages.get(pkg.id).then((detailRes: any) => {
       const detailPkg = detailRes.package || detailRes
-      // 更新packages数组中的套餐信息，包含quotaInfo
       const index = packages.value.findIndex(p => p.id === pkg.id)
       if (index !== -1) {
-        packages.value[index] = { 
-          ...packages.value[index], 
+        packages.value[index] = {
+          ...packages.value[index],
           quotaInfo: detailPkg.quotaInfo || null,
           required_package_id: detailPkg.required_package_id ?? packages.value[index].required_package_id ?? null,
           required_package_name: detailPkg.required_package_name ?? packages.value[index].required_package_name ?? null,
           has_required_package_instance: detailPkg.has_required_package_instance ?? (packages.value[index] as any).has_required_package_instance ?? true
         }
       }
-    } catch (err) {
-      // 静默失败，不影响其他功能
-      console.warn('Failed to load package quota info:', err)
-    }
+    }).catch(() => undefined)
   }
   
   // 检查套餐是否绑定了宿主机
@@ -1043,7 +1041,6 @@ async function loadAvailableHosts(): Promise<void> {
   }
   
   hostsLoading.value = true
-  const hostIntent = () => JSON.stringify([form.value.packageId, form.value.planId, form.value.cpu, form.value.memory, form.value.disk])
   const requestedHostIntent = hostIntent()
   try {
     const res = await api.instances.getAvailableHosts({
@@ -1055,6 +1052,7 @@ async function loadAvailableHosts(): Promise<void> {
     })
     if (requestedHostIntent !== hostIntent()) return
     availableHosts.value = (res as { hosts?: AvailableHost[] }).hosts || []
+    hostsLoadedIntent.value = requestedHostIntent
 
     if (availableHosts.value.length === 0) {
       form.value.hostId = null
@@ -1320,17 +1318,22 @@ async function handleSubmit(): Promise<void> {
       </div>
     </div>
 
-    <div v-if="loading" class="card p-8 text-center text-themed-muted">
-      <svg class="w-8 h-8 mx-auto mb-2 animate-spin icon-themed-muted" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-      </svg>
-      {{ $t('common.loading') }}
+    <div v-if="loading" class="mx-auto w-full max-w-5xl space-y-4" aria-live="polite">
+      <div class="card space-y-4 p-5 sm:p-6">
+        <div class="flex items-center gap-3 text-sm font-medium text-themed-muted">
+          <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+          {{ $t('common.loading') }}
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div v-for="placeholder in 6" :key="placeholder" class="h-28 animate-pulse rounded-lg border border-themed bg-themed-tertiary"></div>
+        </div>
+      </div>
+      <div class="card space-y-3 p-5"><div class="h-5 w-36 animate-pulse rounded bg-themed-tertiary"></div><div class="h-12 animate-pulse rounded bg-themed-tertiary"></div><div class="h-12 animate-pulse rounded bg-themed-tertiary"></div></div>
     </div>
 
     <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto lg:flex-1" @submit.prevent="handleSubmit">
-      <div class="mx-auto w-full max-w-5xl space-y-4 pb-4">
-        <div class="nimbus-pane space-y-4">
+      <div class="mx-auto w-full max-w-5xl space-y-5 pb-5">
+        <div class="nimbus-pane space-y-5 p-4 sm:p-6">
           <section v-if="activeStep === 1" class="create-step-heading">
             <span class="create-step-number">1</span>
             <div><h2>{{ getCreatePageText('sourceTitle') }}</h2><p>{{ getCreatePageText('sourceHint') }}</p></div>
@@ -1364,7 +1367,7 @@ async function handleSubmit(): Promise<void> {
             @select="selectPackage"
             @show-owner-info="(packageId) => loadHostOwnerInfo(packageId)"
           />
-          <div class="nimbus-pane min-h-0 space-y-4">
+          <div class="nimbus-pane min-h-0 space-y-6 border-t border-themed pt-5">
             <section v-if="activeStep === 2" class="create-step-heading">
               <span class="create-step-number">{{ regions.length > 0 ? 3 : 2 }}</span>
               <div><h2>{{ getCreatePageText('configurationTitle') }}</h2><p>{{ getCreatePageText('configurationHint') }}</p></div>

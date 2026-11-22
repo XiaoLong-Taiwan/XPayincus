@@ -22,6 +22,10 @@ interface OperationTask {
   updatedAt: Date
 }
 
+interface OperationTaskRow extends OperationTask {
+  __total: bigint
+}
+
 function positiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return fallback
   const parsed = Number(value)
@@ -74,17 +78,21 @@ export default async function operationsRoutes(fastify: FastifyInstance) {
         )
     `
     return prisma.$transaction(async tx => {
-      const counts = await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
-        SELECT COUNT(*) AS total FROM (${tasks}) operations
-      `)
-      const items = await tx.$queryRaw<OperationTask[]>(Prisma.sql`
-        SELECT * FROM (${tasks}) operations
+      const rows = await tx.$queryRaw<OperationTaskRow[]>(Prisma.sql`
+        SELECT operations.*, COUNT(*) OVER() AS "__total"
+        FROM (${tasks}) operations
         ORDER BY "createdAt" DESC, id DESC LIMIT ${pageSize} OFFSET ${offset}
       `)
+      const total = rows.length
+        ? Number(rows[0].__total)
+        : Number((await tx.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+          SELECT COUNT(*) AS total FROM (${tasks}) operations
+        `))[0].total)
+      const items: OperationTask[] = rows.map(({ __total: _total, ...item }) => item)
       const ids = items.filter(item => item.id.startsWith('provisioning-job:')).map(item => item.instanceId)
       const jobs = ids.length ? await tx.provisioningJob.findMany({ where: { instanceId: { in: ids } }, select: { instanceId: true, status: true } }) : []
       const states = new Map(jobs.map(job => [job.instanceId, job.status]))
-      return { items: items.map(item => ({ ...item, canRetry: request.user.role === 'admin' && item.id.startsWith('provisioning-job:') && states.get(item.instanceId) === 'review_required' })), total: Number(counts[0].total) }
+      return { items: items.map(item => ({ ...item, canRetry: request.user.role === 'admin' && item.id.startsWith('provisioning-job:') && states.get(item.instanceId) === 'review_required' })), total }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
   })
 

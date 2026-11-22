@@ -43,7 +43,7 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
     if (!user || user.status !== 'active') return reply.code(401).send({ error: 'Unauthorized', code: 'UNAUTHORIZED' })
     const instance = await prisma.instance.findUnique({
       where: { id: instanceId },
-      select: { id: true, userId: true, hostId: true, name: true, status: true }
+      select: { id: true, userId: true, hostId: true, name: true, incusId: true, status: true }
     })
     if (!instance || instance.status === 'deleted') return reply.code(404).send({ error: 'Instance not found', code: 'INSTANCE_NOT_FOUND' })
     if (instance.userId !== inspected.userId && user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
@@ -51,7 +51,8 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
     if (!authResult.valid || !authResult.userId || !authResult.issuedAt) return reply.code(401).send({ error: authResult.error || 'Authentication failed', code: 'UNAUTHORIZED' })
 
     const agent = await prisma.hostAgent.findUnique({ where: { hostId: instance.hostId }, select: { agentId: true } })
-    const snapshot = readAgentInstanceSnapshot(agent?.agentId ?? null, instance.name)
+    const monitoringName = instance.incusId || instance.name
+    const snapshot = readAgentInstanceSnapshot(agent?.agentId ?? null, monitoringName)
     const response = reply.raw
     reply.hijack()
     response.statusCode = 200

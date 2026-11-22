@@ -22,7 +22,8 @@ const assertions = [
   ['submit behavior is retained', view.includes('api.instances.create(requestPayload)')],
   ['all instance fields remain in the payload', ['name:', 'packageId:', 'planId:', 'hostId:', 'image:', 'cpu:', 'memory:', 'disk:', 'sshKeyId:', 'customInitCommandIds:', 'promoCode:', 'autoRemotePort:'].every(field => view.includes(field))],
   ['redirect behavior is retained', view.includes('instancesPath()') && view.includes('created: String(response.instance.id)')],
-  ['structured submission details are shown', view.includes('submissionErrorDetails.requestId') && view.includes('submissionErrorDetails.taskId')]
+  ['structured submission details are shown', view.includes('submissionErrorDetails.requestId') && view.includes('submissionErrorDetails.taskId')],
+  ['host lookup failure remains retryable', !/availableHosts\.value = \[\][\s\S]{0,180}hostsLoadedIntent\.value = requestedHostIntent/.test(view)]
 ]
 
 const failures = assertions.filter(([, passed]) => !passed).map(([name]) => name)

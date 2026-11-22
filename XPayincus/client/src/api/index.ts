@@ -609,6 +609,10 @@ export interface OperationTask {
   status: string
   progress: number | string | null
   error: string | null
+  errorCode: string | null
+  errorDetail: string | null
+  errorRequestId: string | null
+  errorRetryable: boolean | null
   createdAt: string
   updatedAt: string
 }

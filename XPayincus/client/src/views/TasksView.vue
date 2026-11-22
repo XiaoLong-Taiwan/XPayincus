@@ -23,8 +23,10 @@ async function load() {
     items.value = result.items
     total.value = result.total
     if (page.value > pages.value) page.value = pages.value
-  } catch {
-    if (request === sequence) error.value = t('operations.error')
+  } catch (cause: any) {
+    if (request === sequence) {
+      error.value = cause?.response?.data?.error || cause?.message || t('operations.error')
+    }
   } finally {
     if (request === sequence) loading.value = false
   }
@@ -40,6 +42,12 @@ async function retryProvisioning(item: OperationTask) {
   } finally {
     retrying.value = null
   }
+}
+function taskError(item: OperationTask): string {
+  return item.errorDetail || item.error || item.errorCode || '—'
+}
+function taskErrorMeta(item: OperationTask): string {
+  return item.errorRequestId ? `Request ID: ${item.errorRequestId}` : ''
 }
 function taskLabel(group: 'taskKinds' | 'taskStatuses', value: string) {
   const key = `operations.${group}.${value.toLowerCase()}`
@@ -63,14 +71,14 @@ onUnmounted(() => { sequence++; if (timer) clearInterval(timer) })
     <div class="space-y-3 lg:hidden">
       <article v-for="item in items" :key="item.id" class="card p-4 space-y-2 break-words">
         <h2 class="font-semibold">{{ item.name || item.id }}</h2><p>{{ taskLabel('taskKinds', item.kind) }} · {{ taskLabel('taskStatuses', item.status) }} · {{ progress(item.progress) }}</p>
-        <p>{{ t('operations.updated') }}: {{ new Date(item.updatedAt).toLocaleString() }}</p><p v-if="item.error" class="text-red-500">{{ item.error }}</p>
+        <p>{{ t('operations.updated') }}: {{ new Date(item.updatedAt).toLocaleString() }}</p><p v-if="item.error || item.errorDetail || item.errorCode" class="text-red-500">{{ taskError(item) }}</p><p v-if="taskErrorMeta(item)" class="text-xs text-themed-muted">{{ taskErrorMeta(item) }}</p>
         <RouterLink v-if="item.instanceId" :to="instanceDetailPath(item.instanceId)" class="btn btn-secondary">{{ t('operations.instance') }} #{{ item.instanceId }}</RouterLink>
         <button v-if="item.canRetry" class="btn btn-secondary" :disabled="retrying !== null" @click="retryProvisioning(item)">{{ t('operations.provisioningRetry') }}</button>
       </article>
     </div>
     <div class="hidden overflow-hidden rounded-xl border border-themed lg:block">
       <table class="w-full table-fixed text-sm"><thead><tr><th class="w-[26%] p-3 text-left">{{ t('operations.name') }}</th><th class="w-[18%] p-3 text-left">{{ t('operations.kind') }}</th><th class="w-[18%] p-3 text-left">{{ t('operations.status') }}</th><th class="w-[14%] p-3 text-left">{{ t('operations.progress') }}</th><th class="w-[24%] p-3 text-left">{{ t('operations.result') }}</th></tr></thead>
-        <tbody><tr v-for="item in items" :key="item.id" class="border-t border-themed"><td class="p-3 break-words">{{ item.name || item.id }}<RouterLink v-if="item.instanceId" class="block underline" :to="instanceDetailPath(item.instanceId)">#{{ item.instanceId }}</RouterLink><time class="block text-xs text-themed-muted">{{ new Date(item.updatedAt).toLocaleString() }}</time></td><td class="p-3 break-words">{{ taskLabel('taskKinds', item.kind) }}</td><td class="p-3 break-words">{{ taskLabel('taskStatuses', item.status) }}</td><td class="p-3 break-words">{{ progress(item.progress) }}</td><td class="p-3 break-words">{{ item.error || '—' }}<button v-if="item.canRetry" class="btn btn-secondary mt-2" :disabled="retrying !== null" @click="retryProvisioning(item)">{{ t('operations.provisioningRetry') }}</button></td></tr></tbody>
+        <tbody><tr v-for="item in items" :key="item.id" class="border-t border-themed"><td class="p-3 break-words">{{ item.name || item.id }}<RouterLink v-if="item.instanceId" class="block underline" :to="instanceDetailPath(item.instanceId)">#{{ item.instanceId }}</RouterLink><time class="block text-xs text-themed-muted">{{ new Date(item.updatedAt).toLocaleString() }}</time></td><td class="p-3 break-words">{{ taskLabel('taskKinds', item.kind) }}</td><td class="p-3 break-words">{{ taskLabel('taskStatuses', item.status) }}</td><td class="p-3 break-words">{{ progress(item.progress) }}</td><td class="p-3 break-words">{{ taskError(item) }}<span v-if="taskErrorMeta(item)" class="mt-1 block text-xs text-themed-muted">{{ taskErrorMeta(item) }}</span><button v-if="item.canRetry" class="btn btn-secondary mt-2" :disabled="retrying !== null" @click="retryProvisioning(item)">{{ t('operations.provisioningRetry') }}</button></td></tr></tbody>
       </table>
     </div>
     <div class="flex items-center justify-between gap-2"><button class="btn btn-secondary" :disabled="page <= 1 || loading" @click="page--">{{ t('operations.previous') }}</button><span>{{ page }} / {{ pages }} · {{ total }}</span><button class="btn btn-secondary" :disabled="page >= pages || loading" @click="page++">{{ t('operations.next') }}</button></div>

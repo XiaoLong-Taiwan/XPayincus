@@ -374,12 +374,18 @@ function endDrag() {
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 let isComponentMounted = ref<boolean>(true)  // 组件挂载状态标志
+let monitoringBinding = ''
 
 function connectInstanceMonitoring(): void {
   if (!instance.value?.id) return
   const hostId = Number((instance.value as any).hostId ?? (instance.value as any).host_id ?? instance.value.host?.id)
   if (!Number.isFinite(hostId) || hostId <= 0) return
-  instanceMonitoring.connect(instance.value.id, hostId, instance.value.name, (sample) => {
+  const monitoringName = String((instance.value as any).incusId ?? (instance.value as any).incus_id ?? instance.value.name ?? '')
+  if (!monitoringName) return
+  const binding = `${instance.value.id}:${hostId}:${monitoringName}`
+  if (binding === monitoringBinding) return
+  monitoringBinding = binding
+  instanceMonitoring.connect(instance.value.id, hostId, monitoringName, (sample) => {
     const metrics = sample.metrics
     stats.value = {
       memory: { usage: metrics.memoryUsedBytes ?? 0, limit: stats.value.memory.limit, usagePercent: stats.value.memory.limit ? (metrics.memoryUsedBytes ?? 0) / stats.value.memory.limit * 100 : 0 },
@@ -418,6 +424,7 @@ onUnmounted(() => {
     refreshInterval = null
   }
   instanceMonitoring.disconnect()
+  monitoringBinding = ''
   // 清理任务轮询
   if (taskPollingInterval) {
     clearInterval(taskPollingInterval)
@@ -874,6 +881,7 @@ async function loadInstance(): Promise<void> {
     const response = await api.instances.get(instanceId)
     instance.value = (response as { instance?: Instance }).instance || null
     if (instance.value) {
+      connectInstanceMonitoring()
       // 如果实例绑定了套餐，加载套餐信息以检查删除权限
       if (instance.value.package_id && instance.value.package_id > 0) {
         try {

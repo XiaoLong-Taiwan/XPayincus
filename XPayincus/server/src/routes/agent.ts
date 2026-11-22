@@ -1799,7 +1799,6 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       ? hostReport.publicIpv4.find(value => typeof value === 'string' && isIP(value) === 4 && isPublicIpv4(value))
       : undefined
     const hostUpdates: Prisma.HostUpdateInput = {
-      isInstalled: true,
       ...(normalizedArchitecture ? { architecture: normalizedArchitecture } : {}),
       ...(typeof publicIpv4?.address === 'string' ? { ipAddress: publicIpv4.address } : typeof publicIpv4Addresses === 'string' ? { ipAddress: publicIpv4Addresses } : {}),
       ...(currentHost?.cpuAllowanceMax === 0 && cpuTotal ? { cpuAllowanceMax: cpuTotal * 100 } : {}),
@@ -1833,8 +1832,20 @@ export default async function agentRoutes(fastify: FastifyInstance) {
             return Array.isArray(value.instances) ? value.instances.flatMap(instance => typeof instance === 'object' && instance !== null && typeof (instance as Record<string, unknown>).name === 'string' ? [(instance as Record<string, unknown>).name as string] : []) : []
           })
           : []
-        const instances = await prisma.instance.findMany({ where: { hostId: agent.hostId, name: { in: [...new Set(names)] }, status: { not: 'deleted' } }, select: { id: true, name: true } })
-        for (const instance of instances) publishAgentInstanceMonitoring(agent.agentId, instance.id, instance.name, now.getTime())
+        const monitoringNames = [...new Set(names)]
+        const instances = await prisma.instance.findMany({
+          where: {
+            hostId: agent.hostId,
+            status: { not: 'deleted' },
+            OR: [{ incusId: { in: monitoringNames } }, { name: { in: monitoringNames } }]
+          },
+          select: { id: true, name: true, incusId: true }
+        })
+        for (const instance of instances) {
+          const primaryName = instance.incusId || instance.name
+          publishAgentInstanceMonitoring(agent.agentId, instance.id, primaryName, now.getTime())
+          if (instance.name !== primaryName) publishAgentInstanceMonitoring(agent.agentId, instance.id, instance.name, now.getTime())
+        }
       }
     } catch (error) {
       request.log.warn({ error, agentId: agent.agentId }, 'Agent monitoring persistence unavailable; samples retained by Agent')

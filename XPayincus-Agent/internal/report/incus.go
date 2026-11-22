@@ -226,6 +226,7 @@ func buildIncusInstanceReportItem(client *http.Client, instance incusInstanceSum
 		"status":     instance.Status,
 		"statusCode": instance.StatusCode,
 		"type":       instance.Type,
+		"sampledAt":  time.Now().UTC().Format(time.RFC3339Nano),
 	}
 
 	if instance.Name == "" || !isRunningIncusStatus(instance.Status, instance.StatusCode) {

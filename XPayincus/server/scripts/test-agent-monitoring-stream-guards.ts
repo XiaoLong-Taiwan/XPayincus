@@ -26,6 +26,8 @@ try {
   assert.ok(routeSource.includes('instance.userId !== request.user.id'))
   assert.ok(routeSource.includes("type: 'offline'"))
   assert.ok(routeSource.includes("response.on('close'"))
+  assert.ok(routeSource.includes('incusId: true'))
+  assert.ok(routeSource.includes('const monitoringName = instance.incusId || instance.name'))
   assert.ok(appSource.indexOf("fastify.register(agentMonitoringStreamRoutes") < appSource.indexOf("fastify.register(agentRoutes"))
   assert.equal(monitoringRetentionMs, 7 * 86400000)
 

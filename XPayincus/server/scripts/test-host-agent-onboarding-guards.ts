@@ -50,6 +50,7 @@ assert(heartbeatStart >= 0 && heartbeatEnd > heartbeatStart, 'Heartbeat fixture 
 const heartbeatCode = ts.transpileModule(agentRoute.slice(heartbeatStart, heartbeatEnd), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 }
 }).outputText
+assert(!agentRoute.slice(hostUpdateStart, hostUpdateEnd).includes('isInstalled: true'), 'Agent heartbeat must not mark a host as panel-verified')
 const heartbeatFixture = new Function('prisma', 'request', 'agent', 'isRecord', 'finitePositiveNumber', 'isIP', 'isPublicIpv4', 'isRoutedIpv6Prefix', `return (async () => { ${heartbeatCode} })()`)
 for (const scenario of [
   { status: 'maintenance', race: false, pool: 'default', capacity: 0, hostArch: 'arm64', runtimeArch: 'amd64', expectedArch: 'aarch64', expectedCapacity: 100 },

@@ -91,6 +91,22 @@ func TestMonitoringPayloadIncludesNetworkCountersAndRates(t *testing.T) {
 	}
 }
 
+func TestMonitoringPayloadKeepsInstancesWithoutPerformanceData(t *testing.T) {
+	client := &Client{spoolDir: t.TempDir(), spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	samples, err := client.queueMonitoring(map[string]any{
+		"instances": map[string]any{"items": []any{map[string]any{
+			"name": "stopped-vm", "sampledAt": "2026-11-11T00:00:00Z", "status": "Stopped",
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances := samples[len(samples)-1]["instances"].([]any)
+	if len(instances) != 1 || instances[0].(map[string]any)["name"] != "stopped-vm" {
+		t.Fatalf("instance without performance data was dropped: %#v", instances)
+	}
+}
+
 func TestMonitoringAckIsIndependentAndExplicit(t *testing.T) {
 	var ack atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

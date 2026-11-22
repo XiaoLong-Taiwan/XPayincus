@@ -2191,9 +2191,17 @@ YAML
 # 步骤 5: 导入面板证书
 fetch_authenticated_panel_certificate() {
     local phase="$1" target="$2"
-    PANEL_TRUST_URL="$(read_agent_config_value panel_url)" \
-    PANEL_TRUST_ID="$(read_agent_config_value agent_id)" \
-    PANEL_TRUST_SECRET="$(read_agent_config_value agent_secret)" \
+    local panel_trust_url panel_trust_id panel_trust_secret
+    panel_trust_url=$(read_agent_config_value panel_url || true)
+    panel_trust_id=$(read_agent_config_value agent_id || true)
+    panel_trust_secret=$(read_agent_config_value agent_secret || true)
+    if [[ -z "$panel_trust_url" || -z "$panel_trust_id" || -z "$panel_trust_secret" ]]; then
+        error "Agent 配置缺少面板地址或认证信息（配置文件：$AGENT_CONFIG_FILE）"
+        return 1
+    fi
+    PANEL_TRUST_URL="$panel_trust_url" \
+    PANEL_TRUST_ID="$panel_trust_id" \
+    PANEL_TRUST_SECRET="$panel_trust_secret" \
     python3 - "$phase" "$target" <<'PY'
 import hashlib, hmac, json, os, re, secrets, sys, time, urllib.error, urllib.request
 phase, target = sys.argv[1:]
@@ -2214,7 +2222,7 @@ body = b'{}'
 if phase == 'verify':
     try:
         with open('/var/lib/incus/server.crt') as source:
-            body = json.dumps({'incus': {'serverCertificate': source.read(16385)}}, sort_keys=True, separators=(',', ':')).encode()
+            body = json.dumps({'incus': {'serverCertificate': source.read(16384)}}, sort_keys=True, separators=(',', ':')).encode()
     except OSError:
         bail('无法读取 /var/lib/incus/server.crt')
 digest = hashlib.sha256(body).hexdigest()
