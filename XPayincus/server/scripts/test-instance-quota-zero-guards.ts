@@ -10,7 +10,7 @@ const source = readFileSync(resolve(__dirname, '../src/routes/instances.ts'), 'u
 
 const resourceSelectionStart = source.indexOf('// 2. 确定请求的资源')
 assert.notEqual(resourceSelectionStart, -1, 'missing instance resource selection section')
-const resourceSelectionEnd = source.indexOf('// 3. 验证认证方式', resourceSelectionStart)
+const resourceSelectionEnd = source.indexOf('// 宿主机资源检查在 selectAvailableHost 中进行', resourceSelectionStart)
 assert.notEqual(resourceSelectionEnd, -1, 'missing instance resource selection section end marker')
 const resourceSelection = source.slice(resourceSelectionStart, resourceSelectionEnd)
 
