@@ -10,7 +10,6 @@ import { focusTurnstileSection, readTurnstileToken } from '@/utils/turnstile'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import TermsOfServiceModal from '@/components/TermsOfServiceModal.vue'
 import api from '@/api'
-import type { RegisterResponse } from '@/types/api'
 import { useBrand } from '@/composables/useBrand'
 import { dashboardPath, loginPath } from '@/utils/app-paths'
 import { useReveal } from '@/composables/useReveal'
@@ -48,7 +47,6 @@ const form = ref<RegisterForm>({
 const loading = ref<boolean>(false)
 const error = ref<string>('')
 const success = ref<boolean>(false)
-const registrationSshKey = ref<RegisterResponse['sshKey'] | null>(null)
 const registrationEnabled = ref<boolean>(true)
 const requireInviteCode = ref<boolean>(true)
 const configLoading = ref<boolean>(true)
@@ -311,7 +309,6 @@ async function handleRegister(): Promise<void> {
       turnstileToken: verificationToken || undefined,
       emailCode: emailVerificationEnabled.value ? form.value.emailCode : undefined
     })
-    registrationSshKey.value = response.sshKey
     localStorage.setItem('token', response.token)
     authStore.syncToken()
     await authStore.fetchCurrentUser()
@@ -328,32 +325,12 @@ async function handleRegister(): Promise<void> {
     }
 
     success.value = true
+    await router.replace(dashboardPath())
   } catch (err: any) {
     error.value = translateError(err)
     resetTurnstileChallenge()
   } finally {
     loading.value = false
-  }
-}
-
-async function downloadRegistrationPrivateKey(): Promise<void> {
-  const key = registrationSshKey.value
-  if (!key) return
-
-  try {
-    const blob = await api.sshKeys.downloadRegistrationPrivateKey(key.downloadToken)
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${key.name}.pem`
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    URL.revokeObjectURL(url)
-    registrationSshKey.value = null
-    await router.replace(dashboardPath())
-  } catch (err: any) {
-    error.value = translateError(err)
   }
 }
 </script>
@@ -380,11 +357,6 @@ async function downloadRegistrationPrivateKey(): Promise<void> {
           </svg>
         </div>
         <p class="text-themed font-medium">{{ $t('auth.registerSuccess') }}</p>
-        <p class="text-sm leading-6 text-themed-muted">{{ $t('auth.sshKeyDownloadHint') }}</p>
-        <p v-if="registrationSshKey" class="text-xs text-themed-muted">{{ registrationSshKey.fingerprint }}</p>
-        <button v-if="registrationSshKey" type="button" class="btn-primary w-full" @click="downloadRegistrationPrivateKey">
-          {{ $t('auth.downloadSshPrivateKey') }}
-        </button>
       </div>
 
       <div v-else-if="configLoading" class="card nimbus-card nimbus-state" data-reveal>

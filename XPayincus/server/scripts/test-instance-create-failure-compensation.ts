@@ -33,8 +33,15 @@ const failureSection = section(
   '    throw error\n  }\n}'
 )
 
-const createInstanceAsyncSection = instancesSource.slice(
-  indexOfOrThrow(instancesSource, 'async function createInstanceAsync(', 'createInstanceAsync')
+const initialPasswordStart = indexOfOrThrow(instancesSource, 'const initialRootPassword =', 'initial root password generation')
+const initialPasswordEndMarker = 'rootPassword: encryptSensitiveData(initialRootPassword)'
+const initialPasswordEnd = indexOfOrThrow(instancesSource, initialPasswordEndMarker, 'initial root password encryption')
+const initialPasswordSection = instancesSource.slice(initialPasswordStart, initialPasswordEnd + initialPasswordEndMarker.length)
+
+const managedAsyncSection = section(
+  managedProvisionSource,
+  'export async function provisionManagedInstanceAsync(',
+  '\n}\n'
 )
 
 const staticIpAllocationSection = section(
@@ -59,6 +66,22 @@ const compensationHelperSection = section(
   instancesSource,
   'async function compensateFailedInstanceCreation(',
   '\n}\n\n/**\n * 异步创建实例'
+)
+
+assert.ok(
+  initialPasswordSection.includes('request.body.password === undefined') &&
+    managedAsyncSection.includes('password: \'\'') &&
+    initialPasswordSection.includes('rootPassword: encryptSensitiveData(initialRootPassword)'),
+  'initial root password must be encrypted for persistence while Incus is created without an injected password'
+)
+
+const runningCheckIndex = indexOfOrThrow(managedAsyncSection, "stateResp?.status === 'Running'", 'managed guest Running check')
+const passwordDecryptIndex = indexOfOrThrow(managedAsyncSection, 'decryptSensitiveDataStrict(instanceForPassword.rootPassword)', 'initial root password decryption')
+const passwordDeliveryIndex = indexOfOrThrow(managedAsyncSection, 'await changeIncusRootPassword(getAgentTunnel(host.id), config.name, rootPassword)', 'initial root password delivery')
+const runningStatusUpdateIndex = indexOfOrThrow(managedAsyncSection, "data: {\n        status: 'running'", 'managed running DB update')
+assert.ok(
+  runningCheckIndex < passwordDecryptIndex && passwordDecryptIndex < passwordDeliveryIndex && passwordDeliveryIndex < runningStatusUpdateIndex,
+  'managed provisioning must confirm Running before decrypting and delivering the password, and update DB status only after delivery'
 )
 
 assert.ok(
@@ -129,12 +152,6 @@ assert.ok(
     failureSection.includes("throw new Error('實例狀態已改變；保留遠端資源並等待核實')") &&
     !failureSection.includes('await deleteInstance(client, config.name)'),
   'shared provisioning must preserve committed or existing remote resources for ownership review rather than refunding or deleting them after an uncertain failure'
-)
-
-const managedAsyncSection = section(
-  managedProvisionSource,
-  'export async function provisionManagedInstanceAsync(',
-  '\n}\n'
 )
 
 assert.ok(

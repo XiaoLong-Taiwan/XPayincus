@@ -19,7 +19,7 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/upgrade"
 )
 
-var version = "v1.0.34"
+var version = "v1.0.35"
 var operationStatePath string
 
 func main() {
@@ -41,7 +41,7 @@ func main() {
 	defer stop()
 
 	operationStatePath = filepath.Join(cfg.StateDir, "upgrade.json")
-	report.StartCollector(ctx, cfg.HeartbeatInterval)
+	report.StartCollector(ctx, cfg.MonitoringInterval)
 	client := panel.New(cfg)
 	if *once {
 		if _, err := sendHeartbeat(ctx, client, cfg.HeartbeatIntervalSeconds); err != nil {
@@ -51,7 +51,8 @@ func main() {
 	}
 
 	go tunnel.Run(ctx, cfg)
-	log.Printf("incudal-agent started: panel=%s interval=%s", cfg.PanelURL, cfg.HeartbeatInterval)
+	go sendRealtimeMonitoring(ctx, client, cfg.MonitoringIntervalSeconds, cfg.MonitoringInterval)
+	log.Printf("incudal-agent started: panel=%s heartbeat=%s monitoring=%s", cfg.PanelURL, cfg.HeartbeatInterval, cfg.MonitoringInterval)
 	upgradeRunner := upgrade.DefaultRunner(cfg)
 	var upgradeInProgress atomic.Bool
 	heartbeatLogState := newHeartbeatLogState()
@@ -76,6 +77,25 @@ func main() {
 				heartbeatLogState.logSuccess(result)
 				scheduleAgentUpgrade(ctx, upgradeRunner, result, &upgradeInProgress)
 			}
+		}
+	}
+}
+
+func sendRealtimeMonitoring(ctx context.Context, client *panel.Client, intervalSeconds int, interval time.Duration) {
+	send := func() {
+		if err := client.RealtimeMonitoring(ctx, report.RealtimeInstancePayload(intervalSeconds)); err != nil {
+			log.Printf("realtime monitoring failed: %v", err)
+		}
+	}
+	send()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			send()
 		}
 	}
 }

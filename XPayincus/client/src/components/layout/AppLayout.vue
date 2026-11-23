@@ -117,7 +117,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="kawaii-app-shell h-screen flex overflow-hidden" :class="routeThemeClass">
+  <div class="kawaii-app-shell h-[100dvh] min-h-0 flex overflow-hidden" :class="routeThemeClass">
     <!-- 侧边导航 -->
     <SideNav 
       :collapsed="sidebarCollapsed" 
@@ -126,10 +126,10 @@ onUnmounted(() => {
     />
 
     <!-- 主内容区 -->
-    <div class="flex-1 flex flex-col min-w-0 h-full">
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
       <!-- 顶部栏 -->
-      <header class="kawaii-topbar nimbus-topbar h-14 flex items-center justify-between px-4 md:px-6 border-b border-themed">
-        <div class="flex items-center gap-2 md:gap-4">
+      <header class="kawaii-topbar nimbus-topbar flex h-14 shrink-0 items-center justify-between gap-2 px-3 sm:px-4 md:px-6 border-b border-themed">
+        <div class="flex min-w-0 items-center gap-2 md:gap-4">
           <!-- Mobile: Hamburger menu -->
           <button 
             class="kawaii-header-icon md:!hidden p-1.5 rounded transition-colors touch-target"
@@ -153,22 +153,19 @@ onUnmounted(() => {
           </button>
 
           <!-- Mobile: Logo -->
-          <div class="md:hidden flex items-center gap-2">
+          <div class="flex min-w-0 items-center gap-2 md:hidden">
             <img
               :src="brand.brandLogoUrl"
               :alt="brand.brandName"
               class="w-6 h-6 rounded flex-shrink-0"
             />
-            <span
-              class="font-semibold text-sm"
-              :class="'text-themed'"
-            >{{ brand.brandName }}</span>
+            <span class="truncate text-sm font-semibold text-themed">{{ brand.brandName }}</span>
           </div>
 
         </div>
 
         <!-- 右侧菜单 -->
-        <div class="flex items-center gap-2 md:gap-3">
+        <div class="flex shrink-0 items-center gap-1 sm:gap-2 md:gap-3">
           <!-- 终端管理入口 -->
           <button
             v-if="!isAdminEntry"
@@ -339,7 +336,7 @@ onUnmounted(() => {
       </header>
 
       <!-- 页面内容 -->
-      <main class="kawaii-workspace nimbus-workspace flex-1 px-4 md:px-6 xl:px-10 py-5 md:py-6" :class="isSplitPane ? 'overflow-auto lg:overflow-hidden' : 'overflow-auto'">
+      <main class="kawaii-workspace nimbus-workspace min-h-0 flex-1 px-3 sm:px-4 md:px-6 xl:px-10 py-4 md:py-6" :class="isSplitPane ? 'overflow-auto lg:overflow-hidden' : 'overflow-auto'">
         <div class="w-full mx-auto" :class="isSplitPane ? 'lg:h-full' : 'max-w-[1680px]'">
           <slot />
         </div>

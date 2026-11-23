@@ -14,7 +14,6 @@ interface StaticNetworkConfig {
 export interface IncusConfigParams {
   instanceName: string
   imageAlias: string
-  rootPassword: string
   sshKey?: string
   network?: StaticNetworkConfig
   extraShellCommands?: string
@@ -56,20 +55,12 @@ function indentString(str: string, count: number): string {
   return str.split('\n').map(line => line ? indent + line : line).join('\n')
 }
 
-function escapeForShellSingleQuote(str: string): string {
-  return str.replace(/'/g, "'\"'\"'")
-}
-
 function escapeForShellDoubleQuote(str: string): string {
   return str
     .replace(/\\/g, '\\\\')
     .replace(/\$/g, '\\$')
     .replace(/`/g, '\\`')
     .replace(/"/g, '\\"')
-}
-
-function escapeForYamlSingleQuote(str: string): string {
-  return str.replace(/'/g, "''")
 }
 
 function isRhel8Series(alias: string): boolean {
@@ -202,7 +193,6 @@ function getNetworkMatchYaml(macAddress: string): string {
 
 function generateSetupScript(params: IncusConfigParams, osInfo: VmOsInfo): string {
   const escapedKey = escapeForShellDoubleQuote(params.sshKey || '')
-  const escapedPassword = escapeForShellSingleQuote(params.rootPassword)
   const usersList = osInfo.defaultUsers.join(' ')
   const sshServiceName = osInfo.sshServiceName
   const packageInstallCommand = getPackageInstallCommand(osInfo)
@@ -242,7 +232,6 @@ exec >>"$LOG_FILE" 2>&1
 # 不启用 shell trace，避免 ROOT_PASSWORD/SSH_KEY 写入 guest 日志
 
 SSH_KEY="${escapedKey}"
-ROOT_PASSWORD='${escapedPassword}'
 DEFAULT_USERS="${usersList}"
 SSH_SERVICE="${sshServiceName}"
 
@@ -290,13 +279,6 @@ user_home_dir() {
     return 0
   fi
   awk -F: -v target="$user" '$1 == target { print $6; exit }' /etc/passwd 2>/dev/null
-}
-
-set_password() {
-  user="$1"
-  id "$user" >/dev/null 2>&1 || return 0
-  echo "$user:$ROOT_PASSWORD" | chpasswd >/dev/null 2>&1 || true
-  passwd -u "$user" >/dev/null 2>&1 || usermod -U "$user" >/dev/null 2>&1 || true
 }
 
 set_authorized_key() {
@@ -404,7 +386,6 @@ write_sshd_dropin
 update_sshd_main_config
 
 for user in $DEFAULT_USERS; do
-  set_password "$user"
   set_authorized_key "$user"
 done
 
@@ -533,7 +514,6 @@ ${extraCommands}
 
 function generateUserData(params: IncusConfigParams, osInfo: VmOsInfo): string {
   const setupScriptContent = generateSetupScript(params, osInfo)
-  const yamlSafePassword = escapeForYamlSingleQuote(params.rootPassword)
   const packages = getCloudInitPackages(osInfo)
   const packagesSection = packages.length > 0
     ? `packages:\n${packages.map(pkg => `  - ${pkg}`).join('\n')}\n\n`
@@ -554,11 +534,6 @@ ${packagesSection}users:
     lock_passwd: false
     shell: ${osInfo.defaultShell}
 ${sshKeySection}
-chpasswd:
-  expire: false
-  list:
-    - 'root:${yamlSafePassword}'
-
 ssh_pwauth: true
 disable_root: false
 
@@ -645,7 +620,7 @@ ${ipv6Section}
 
 export function generateVmConfig(params: IncusConfigParams): IncusConfigResult {
   const osInfo = detectVmOsInfo(params.imageAlias)
-  const nicMacs = generateVmNicMacs(params.instanceIdSeed || params.instanceName)
+  const nicMacs = generateVmNicMacs(params.instanceName)
 
   return {
     configPayload: {

@@ -45,10 +45,11 @@ type incusAPIResponse struct {
 }
 
 type incusInstanceSummary struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	StatusCode int    `json:"status_code"`
-	Type       string `json:"type"`
+	Name       string            `json:"name"`
+	Status     string            `json:"status"`
+	StatusCode int               `json:"status_code"`
+	Type       string            `json:"type"`
+	Config     map[string]string `json:"config"`
 }
 
 type trafficCounters struct {
@@ -228,10 +229,19 @@ func buildIncusInstanceReportItem(client *http.Client, instance incusInstanceSum
 		"type":       instance.Type,
 		"sampledAt":  time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	incusID := ""
+	if candidate := strings.TrimSpace(instance.Config["volatile.uuid"]); incusUUIDPattern.MatchString(candidate) {
+		incusID = candidate
+		item["incusId"] = candidate
+	}
+	identity := instance.Name
+	if incusID != "" {
+		identity = incusID
+	}
 
 	if instance.Name == "" || !isRunningIncusStatus(instance.Status, instance.StatusCode) {
 		performanceCache.Lock()
-		delete(performanceCache.items, instance.Name)
+		delete(performanceCache.items, identity)
 		performanceCache.Unlock()
 		return item
 	}
@@ -245,7 +255,7 @@ func buildIncusInstanceReportItem(client *http.Client, instance incusInstanceSum
 		item["status"] = state.Status
 	}
 	sampledAt := time.Now()
-	item["performance"] = performanceMetrics(instance.Name, state, sampledAt)
+	item["performance"] = performanceMetrics(instance.Name, identity, state, sampledAt)
 	item["sampledAt"] = sampledAt.UTC().Format(time.RFC3339Nano)
 
 	counters := getTrafficCountersFromIncusState(instance.Name, state)

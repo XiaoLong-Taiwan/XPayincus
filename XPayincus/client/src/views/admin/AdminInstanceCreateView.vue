@@ -556,15 +556,9 @@ async function handleSubmit(): Promise<void> {
       params.disk = form.value.disk
     }
 
-    const res = await api.admin.createInstance(params)
+    await api.admin.createInstance(params)
 
     toast.success(t('admin.instanceCreate.success'))
-
-    // 显示创建结果
-    const instance = (res as any).instance
-    if (instance?.rootPassword) {
-      toast.info(`SSH Port: ${instance.sshPort}, Password: ${instance.rootPassword}`, 10000)
-    }
 
     // 重置表单
     usernameInput.value = ''

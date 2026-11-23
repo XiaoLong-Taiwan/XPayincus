@@ -26,7 +26,9 @@ import * as db from '../db/index.js'
 import { updateInstanceTaskProgress } from '../db/instance-tasks.js'
 import { closeInstanceSessions } from '../lib/terminal-proxy.js'
 import { generateIncusConfig, generateRandomPassword } from '../lib/incus-config-generator.js'
-import { encryptSensitiveData, decryptSensitiveData } from '../lib/security.js'
+import { encryptSensitiveData, decryptSensitiveDataStrict } from '../lib/security.js'
+import { getAgentTunnel } from '../lib/agent-tunnel.js'
+import { changeIncusRootPassword } from '../lib/incus/incus-root-password.js'
 import { generateVmNicMacs } from '../lib/vm-network-identifiers.js'
 import { customAlphabet } from 'nanoid'
 import { generateRandomIPv6 } from '../lib/ip-calculator.js'
@@ -72,6 +74,20 @@ const HEAVY_TASK_NAMES = new Set(['rebuild', 'clone', 'recreate', 'change_host']
 // 重量任务类型数组（用于 Prisma 查询）
 const HEAVY_TASK_TYPES: InstanceTaskType[] = ['rebuild', 'clone', 'recreate', 'change_host' as InstanceTaskType]
 const ALPINE_BUSY_UPDATE_CANCEL_AFTER_MS = 10_000
+
+async function ensureRunningAndDeliverRootPassword(
+  client: Awaited<ReturnType<typeof getIncusClient>>,
+  instanceName: string,
+  hostId: number,
+  password: string
+): Promise<void> {
+  const state = await getInstanceState(client, instanceName) as { status?: string }
+  if (state.status !== 'Running') {
+    throw new Error(`实例 ${instanceName} 未确认处于 Running 状态`)
+  }
+  const tunnel = getAgentTunnel(hostId)
+  await changeIncusRootPassword(tunnel, instanceName, password)
+}
 
 let workerInterval: ReturnType<typeof setInterval> | null = null
 let timeoutCheckInterval: ReturnType<typeof setInterval> | null = null
@@ -1062,7 +1078,6 @@ async function executeRebuildTask(
   let { configPayload } = generateIncusConfig({
     instanceName: instance.name,
     imageAlias,
-    rootPassword: newPassword,
     sshKey,
     networkMode: instance.network_mode as 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat',
     type: instanceType,
@@ -1086,7 +1101,6 @@ async function executeRebuildTask(
       instanceName: instance.name,
       instanceIdSeed: instance.incus_id,
       imageAlias,
-      rootPassword: newPassword,
       sshKey,
       network: instance.ipv4 ? {
         ipAddress: `${instance.ipv4}/22`,
@@ -1161,7 +1175,7 @@ async function executeRebuildTask(
   let rebuildDevices: Record<string, Record<string, string>> | undefined
   if (instanceType === 'virtual-machine') {
     rebuildConfig['security.secureboot'] = 'false'
-    const vmNicMacs = generateVmNicMacs(instance.incus_id)
+    const vmNicMacs = generateVmNicMacs(instance.name)
     const currentDevices = ((incusInstance as unknown as { devices?: Record<string, Record<string, string>> }).devices) || {}
     rebuildDevices = { ...currentDevices }
 
@@ -1197,15 +1211,6 @@ async function executeRebuildTask(
   })
 
   await prisma.trafficSnapshot.deleteMany({ where: { instanceId: task.instanceId } })
-
-  // 更新数据库记录
-  await prisma.instance.update({
-    where: { id: task.instanceId },
-    data: {
-      image: imageAlias,
-      rootPassword: encryptSensitiveData(newPassword)
-    }
-  })
 
   // 启动实例（带 IPv6 路由冲突自动回退：stop 后内核路由可能残留）
   await updateInstanceTaskProgress(task.id, 'starting')
@@ -1266,6 +1271,14 @@ async function executeRebuildTask(
     }
   }
 
+  await ensureRunningAndDeliverRootPassword(client, instance.incus_id, instance.host_id, newPassword)
+  await prisma.instance.update({
+    where: { id: task.instanceId },
+    data: {
+      image: imageAlias,
+      rootPassword: encryptSensitiveData(newPassword)
+    }
+  })
   await db.updateInstanceStatus(task.instanceId, 'running', { ipv4, ipv6 })
   const { reconcileTrafficStateForInstanceIds } = await import('../services/traffic-scheduler.js')
   await reconcileTrafficStateForInstanceIds([task.instanceId])
@@ -1423,7 +1436,6 @@ async function executeRecreateTask(
   let { configPayload } = generateIncusConfig({
     instanceName: instance.name,
     imageAlias,
-    rootPassword: newPassword,
     sshKey,
     networkMode: instance.network_mode as 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat',
     type: instanceType,
@@ -1442,7 +1454,8 @@ async function executeRecreateTask(
   const newIncusId = `u${task.userId}-${shortId}`
   console.log(`[Recreate] 新实例 ID: ${newIncusId}`)
   let oldInstanceDeleted = false
-  let newInstanceCreated = false
+  let replacementState: 'present' | 'absent' | 'unknown' = 'absent'
+  let replacementCleanupConfirmed = false
   let databaseSwitched = false
 
   try {
@@ -1453,7 +1466,6 @@ async function executeRecreateTask(
         instanceName: instance.name,
         instanceIdSeed: newIncusId,
         imageAlias,
-        rootPassword: newPassword,
         sshKey,
         network: {
           ipAddress: `${newIPv4}/22`,
@@ -1538,8 +1550,19 @@ async function executeRecreateTask(
 
   // 12. 创建新实例
   console.log(`[Recreate] 创建新实例 ${newIncusId}...`)
-  await createInstance(client, incusConfig)
-  newInstanceCreated = true
+  try {
+    await createInstance(client, incusConfig)
+    replacementState = 'present'
+  } catch (createErr) {
+    try {
+      await getInstance(client, newIncusId)
+      replacementState = 'present'
+    } catch (getErr) {
+      const getMessage = getErr instanceof Error ? getErr.message : String(getErr)
+      replacementState = getMessage.includes('not found') || getMessage.includes('Instance not found') ? 'absent' : 'unknown'
+    }
+    throw createErr
+  }
 
   if (instanceType === 'container') {
     await updateInstance(client, newIncusId, {
@@ -1578,6 +1601,8 @@ async function executeRecreateTask(
       }
     } catch { /* ignore */ }
   }
+
+  await ensureRunningAndDeliverRootPassword(client, newIncusId, instance.host_id, newPassword)
 
   // 15. 更新数据库（使用新分配的 IP）
   await updateInstanceTaskProgress(task.id, 'updating_database')
@@ -1640,7 +1665,9 @@ async function executeRecreateTask(
 
   await createLog(task.userId, 'instance', 'instance.recreate', `Recreated instance "${instance.name}" with image ${imageAlias} (${oldIncusId} -> ${newIncusId})`, 'success', { instanceId: task.instanceId })
   } catch (err) {
-    if (!databaseSwitched && newInstanceCreated) {
+    let replacementCleanupError: Error | null = null
+    const failedReplacementState = String(replacementState) as 'present' | 'absent' | 'unknown'
+    if (!databaseSwitched && (failedReplacementState === 'present' || failedReplacementState === 'unknown')) {
       try {
         try {
           await stopInstance(client, newIncusId, true)
@@ -1648,13 +1675,22 @@ async function executeRecreateTask(
           // The replacement may not have reached running state; deletion can still proceed.
         }
         await deleteInstance(client, newIncusId)
+        replacementCleanupConfirmed = true
         console.log(`[Recreate] 已清理失败的新实例 ${newIncusId}`)
       } catch (cleanupErr) {
-        console.warn(`[Recreate] 清理失败的新实例 ${newIncusId} 失败:`, cleanupErr)
+        const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+        if (cleanupMessage.includes('not found') || cleanupMessage.includes('Instance not found')) {
+          replacementCleanupConfirmed = true
+        } else {
+          replacementCleanupError = new Error(`清理重建替代实例失败，需人工介入: ${cleanupMessage}`)
+          console.warn(`[Recreate] 清理失败的新实例 ${newIncusId} 失败:`, cleanupErr)
+        }
       }
+    } else if (replacementState === 'absent') {
+      replacementCleanupConfirmed = true
     }
 
-    if (!databaseSwitched && oldInstanceDeleted) {
+    if (!databaseSwitched && oldInstanceDeleted && replacementCleanupConfirmed) {
       try {
         await cleanupRecreatedInstanceRecords(task.instanceId, instance.host_id)
         await prisma.ipAddress.deleteMany({ where: { instanceId: task.instanceId } })
@@ -1673,6 +1709,10 @@ async function executeRecreateTask(
       }
     }
 
+    if (replacementCleanupError) {
+      const originalMessage = err instanceof Error ? err.message : String(err)
+      throw new Error(`${originalMessage}; ${replacementCleanupError.message}`)
+    }
     throw err
   }
 }
@@ -1755,17 +1795,10 @@ async function executeChangeHostTask(
     throw new Error('SSH 密钥不存在或不属于实例所有者')
   }
 
-  let rootPassword = generateRandomPassword(16)
-  if (instance.root_password) {
-    try {
-      const decrypted = decryptSensitiveData(instance.root_password)
-      if (decrypted) {
-        rootPassword = decrypted
-      }
-    } catch (err) {
-      console.warn(`[ChangeHost] 解密原实例密码失败，将生成新密码:`, err)
-    }
-  }
+  const rootPassword = instance.root_password
+    ? decryptSensitiveDataStrict(instance.root_password)
+    : generateRandomPassword(16)
+  if (!rootPassword) throw new Error('無法解密原實例登入密碼')
 
   try {
     await updateInstanceTaskProgress(task.id, 'checking_capacity')
@@ -1828,7 +1861,6 @@ async function executeChangeHostTask(
     let { configPayload } = generateIncusConfig({
       instanceName: instance.name,
       imageAlias,
-      rootPassword,
       sshKey: keyRecord.public_key,
       networkMode: instance.network_mode as 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat',
       type: instanceType,
@@ -1847,7 +1879,6 @@ async function executeChangeHostTask(
         instanceName: instance.name,
         instanceIdSeed: newIncusId,
         imageAlias,
-        rootPassword,
         sshKey: keyRecord.public_key,
         network: {
           ipAddress: `${staticIPv4}/22`,
@@ -1934,6 +1965,8 @@ async function executeChangeHostTask(
         // keep waiting
       }
     }
+
+    await ensureRunningAndDeliverRootPassword(targetClient, newIncusId, targetHostId, rootPassword)
 
     await updateInstanceTaskProgress(task.id, 'switching_database')
 
@@ -2228,6 +2261,7 @@ async function executeCloneTask(
   // 跟踪资源是否已预占（用于失败时回滚）
   let resourcesReserved = false
   let newPortMappingsCount = 0
+  const newPassword = generateRandomPassword(16)
 
   try {
     // 1. 复制实例（使用 Incus copy API）
@@ -2420,7 +2454,7 @@ async function executeCloneTask(
           const networkConfig = generateCloudInitNetworkConfig({
             ipv4Address: newIPv4,
             ipv6List: [newIPv6],
-            nicMacs: generateVmNicMacs(newIncusId)
+            nicMacs: generateVmNicMacs(newInstanceName)
           })
 
           // 更新实例的 cloud-init 配置
@@ -2449,7 +2483,7 @@ async function executeCloneTask(
       const { generateVmNicMacs } = await import('../lib/vm-network-identifiers.js')
       const networkConfig = generateCloudInitNetworkConfig({
         ipv4Address: newIPv4,
-        nicMacs: generateVmNicMacs(newIncusId)
+        nicMacs: generateVmNicMacs(newInstanceName)
       })
       await updateInstance(client, newIncusId, {
         config: {
@@ -2507,7 +2541,7 @@ async function executeCloneTask(
       networkMode: sourceInstance.network_mode as 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat',
       snapshotSpecs,
       sshPort: 22,  // SSH 端口固定为 22
-      rootPassword: sourceInstance.root_password, // 复制密码
+      rootPassword: encryptSensitiveData(newPassword),
       monthlyTrafficLimit,
       // 复制配额限制
       portLimit: sourceInstance.port_limit,
@@ -2577,7 +2611,12 @@ async function executeCloneTask(
     })
     resourcesReserved = true
 
-    // 11. 更新实例状态为 stopped（因为复制后默认是停止状态）
+    // 11. 临时启动实例以交付新的 root password，成功后恢复产品要求的 stopped 状态
+    await startInstance(client, newIncusId)
+    await ensureRunningAndDeliverRootPassword(client, newIncusId, sourceInstance.host_id, newPassword)
+    await stopInstance(client, newIncusId, true)
+
+    // 12. 更新实例状态为 stopped
     await db.updateInstanceStatus(newInstanceId, 'stopped')
 
     // 更新任务记录，记录新实例ID

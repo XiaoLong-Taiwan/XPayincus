@@ -70,7 +70,13 @@ export default async function networkProbeRoutes(fastify: FastifyInstance) {
     const configured = await getNetworkProbeTargets()
     const targets = []
     for (const target of configured) {
-      if (target.packageId === packageId && target.hostId === hostId && await resolvePublicTargetHost(target.host)) targets.push(target)
+      if (
+        target.packageId === packageId &&
+        await canAccessNode(request.user.id, target.packageId, target.hostId) &&
+        await resolvePublicTargetHost(target.host)
+      ) {
+        targets.push(target)
+      }
     }
     return { targets }
   })

@@ -254,6 +254,7 @@ export default async function sshKeyRoutes(fastify: FastifyInstance) {
     await createLog(request.user.id, 'ssh_key', 'ssh_key.generate', `Generated SSH key "${keyName}" [fingerprint: ${fingerprint}]`, 'success')
 
     // 返回私钥给用户保存（系统不会保存私钥）
+    reply.header('Cache-Control', 'no-store, private').header('Pragma', 'no-cache')
     return {
       message: 'SSH key generated',
       privateKey: sshPrivateKey,

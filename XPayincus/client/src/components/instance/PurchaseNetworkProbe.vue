@@ -37,8 +37,11 @@ onBeforeUnmount(() => {
 })
 
 async function loadRecords() {
-  const response = await networkProbeApi.records(props.packageId, props.hostId)
-  if (!disposed) records.value = response.records
+  const response = await networkProbeApi.records(targets.value.map(item => ({
+    packageId: item.packageId,
+    hostId: item.hostId
+  })))
+  if (!disposed) records.value = response.records.sort((a, b) => Date.parse(b.measuredAt) - Date.parse(a.measuredAt)).slice(0, 100)
 }
 
 onMounted(async () => {
@@ -67,7 +70,7 @@ async function prepare(https: boolean) {
   commands.value = ''
   copied.value = false
   try {
-    const prepared = await networkProbeApi.prepare(props.packageId, props.hostId, target.value.id)
+    const prepared = await networkProbeApi.prepare(target.value.packageId, target.value.hostId, target.value.id)
     if (disposed) return
     const lines: string[] = []
     if (prepared.target.icmp) lines.push(`ping -c 4 ${prepared.address}`, `ping -n 4 ${prepared.address}`)
@@ -91,12 +94,12 @@ async function prepare(https: boolean) {
       if (!disposed) result.value = copy.httpsResult.replace('{duration}', durationMs.toFixed(1))
     } catch {
       durationMs = Math.round((performance.now() - started) * 10) / 10
-      if (!disposed) await saveRecord({ packageId: props.packageId, hostId: props.hostId, targetId: prepared.target.id, source: 'browser', method: 'https', measuredAt, samples: [{ durationMs, success: false }] })
+      if (!disposed) await saveRecord({ packageId: prepared.target.packageId, hostId: prepared.target.hostId, targetId: prepared.target.id, source: 'browser', method: 'https', measuredAt, samples: [{ durationMs, success: false }] })
       throw new Error('HTTPS measurement failed')
     } finally {
       window.clearTimeout(timeout)
     }
-    if (!disposed) await saveRecord({ packageId: props.packageId, hostId: props.hostId, targetId: prepared.target.id, source: 'browser', method: 'https', measuredAt, samples: [{ durationMs, success }] })
+    if (!disposed) await saveRecord({ packageId: prepared.target.packageId, hostId: prepared.target.hostId, targetId: prepared.target.id, source: 'browser', method: 'https', measuredAt, samples: [{ durationMs, success }] })
   } catch {
     if (!disposed) error.value = copy.saveError
   } finally {
@@ -110,8 +113,8 @@ async function saveLocalRecord() {
   error.value = ''
   try {
     await saveRecord({
-      packageId: props.packageId,
-      hostId: props.hostId,
+      packageId: target.value.packageId,
+      hostId: target.value.hostId,
       targetId: target.value.id,
       source: 'manual-local',
       method: manualMethod.value,

@@ -385,7 +385,7 @@ function connectInstanceMonitoring(): void {
   const binding = `${instance.value.id}:${hostId}:${monitoringName}`
   if (binding === monitoringBinding) return
   monitoringBinding = binding
-  instanceMonitoring.connect(instance.value.id, hostId, monitoringName, (sample) => {
+  instanceMonitoring.connect(instance.value.id, (sample) => {
     const metrics = sample.metrics
     const memoryUsageMb = typeof metrics.memoryUsedBytes === 'number' && Number.isFinite(metrics.memoryUsedBytes)
       ? metrics.memoryUsedBytes / 1024 / 1024
@@ -416,6 +416,7 @@ onMounted(async (): Promise<void> => {
 })
 
 onUnmounted(() => {
+  clearInstancePassword()
   isComponentMounted.value = false
   // 关闭终端模态框（确保断开连接）
   showTerminalModal.value = false
@@ -2185,21 +2186,41 @@ function requestReassignIpv6(): void {
   void handleReassignIpv6()
 }
 
-async function togglePasswordVisibility(instanceId: number): Promise<void> {
-  const isCurrentlyVisible = showPassword.value[instanceId]
+let pendingPasswordRequest: symbol | null = null
 
-  if (!isCurrentlyVisible && !instancePassword.value[instanceId]) {
-    // 如果密码未加载，先加载密码
-    try {
-      const response = await api.instances.getPassword(instanceId)
-      instancePassword.value[instanceId] = (response as { rootPassword?: string | null }).rootPassword || null
-    } catch (error: any) {
-      toast.error(`${t('instance.detail.password.loadFailed')}: ${translateError(error)}`)
+function clearInstancePassword(): void {
+  pendingPasswordRequest = null
+  showPassword.value = {}
+  instancePassword.value = {}
+}
+
+watch(() => [route.params.id, activeTab.value, authStore.user?.id], clearInstancePassword, { flush: 'sync' })
+
+async function togglePasswordVisibility(instanceId: number): Promise<void> {
+  if (showPassword.value[instanceId]) {
+    clearInstancePassword()
+    return
+  }
+  if (pendingPasswordRequest) return
+
+  const request = Symbol()
+  pendingPasswordRequest = request
+  try {
+    const { rootPassword } = await api.instances.getPassword(instanceId)
+    if (pendingPasswordRequest !== request) return
+    if (!rootPassword) {
+      toast.error(t('instance.detail.password.loadFailed'))
       return
     }
+    instancePassword.value[instanceId] = rootPassword
+    showPassword.value[instanceId] = true
+  } catch (error) {
+    if (pendingPasswordRequest === request) {
+      toast.error(`${t('instance.detail.password.loadFailed')}: ${translateError(error)}`)
+    }
+  } finally {
+    if (pendingPasswordRequest === request) pendingPasswordRequest = null
   }
-
-  showPassword.value[instanceId] = !showPassword.value[instanceId]
 }
 
 // 计算剩余天数（向上取整，与后端保持一致）

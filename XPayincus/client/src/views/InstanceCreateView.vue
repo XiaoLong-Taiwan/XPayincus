@@ -120,6 +120,22 @@ const submitting = ref<boolean>(false)
 const error = ref<string>('')
 const instanceNameEditedByUser = ref<boolean>(false)
 const turnstileToken = ref('')
+const rootPassword = ref('')
+const rootPasswordConfirmation = ref('')
+const showRootPassword = ref(false)
+const rootPasswordValid = computed(() => {
+  if (!rootPassword.value) return !rootPasswordConfirmation.value
+  return rootPassword.value.trim().length > 0
+    && /^[\x20-\x7E]{12,128}$/.test(rootPassword.value)
+    && !rootPassword.value.includes(':')
+    && rootPassword.value === rootPasswordConfirmation.value
+})
+const rootPasswordError = computed(() => {
+  if (!rootPassword.value && !rootPasswordConfirmation.value) return ''
+  if (rootPassword.value.trim().length === 0 || !/^[\x20-\x7E]{12,128}$/.test(rootPassword.value) || rootPassword.value.includes(':')) return t('instance.createPage.passwordInvalid')
+  if (rootPassword.value !== rootPasswordConfirmation.value) return t('instance.createPage.passwordMismatch')
+  return ''
+})
 const turnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
 const turnstileSectionRef = ref<HTMLElement | null>(null)
 const isCreateTurnstileRequired = computed(() => configStore.turnstileEnabled && Boolean(configStore.turnstileSiteKey))
@@ -166,9 +182,10 @@ const purchaseReviewed = ref(false)
 const purchaseReviewLoading = ref(false)
 const purchaseReviewReady = ref(false)
 const purchaseBalance = ref<number | null>(null)
+const vipOrderDiscountPercent = ref(0)
 const hostsLoadedIntent = ref('')
 const hostIntent = () => JSON.stringify([form.value.packageId, form.value.planId, form.value.cpu, form.value.memory, form.value.disk])
-const purchaseShortfall = computed(() => Math.max(0, (planPriceInfo.value?.finalPrice || 0) + (selectedPlan.value?.setupFee || 0) / 100 - (purchaseBalance.value || 0)))
+const purchaseShortfall = computed(() => Math.max(0, (planPriceInfo.value?.finalPrice || 0) - (purchaseBalance.value || 0)))
 function persistDraft() {
   if (!draftReady.value || !authStore.user) return
   savePurchaseDraft(authStore.user.id, { source: packageSource.value, savedAt: Date.now(), idempotencyKey: createIntentIdempotencyKey.value, form: form.value })
@@ -190,9 +207,10 @@ async function reviewPurchase() {
   const intent = () => JSON.stringify([packageSource.value, form.value.packageId, form.value.planId, form.value.promoCode])
   const requestedIntent = intent()
   try {
-    const [catalog, balance] = await Promise.all([
+    const [catalog, balance, vipBenefits] = await Promise.all([
       packages.value.length ? Promise.resolve(null) : api.packages.list(toPackageSourceRequest(packageSource.value)),
-      api.billing.getUserBalance()
+      api.billing.getUserBalance(),
+      api.vipBenefits.getMyOverview()
     ])
     if (requestedIntent !== intent()) return
     if (catalog) packages.value = ((catalog as { packages?: Package[] }).packages || []).filter(p => p.active === 1)
@@ -206,6 +224,7 @@ async function reviewPurchase() {
     if (!hostsLoadedIntent.value || hostsLoadedIntent.value !== hostIntent()) await loadAvailableHosts()
     if (requestedIntent !== intent()) return
     purchaseBalance.value = balance.balance.balance
+    vipOrderDiscountPercent.value = vipBenefits.orderDiscountPercent
     promoCodeValid.value = null
     promoCodeDiscount.value = 0
     if (form.value.promoCode.trim()) await verifyPromoCode()
@@ -343,15 +362,16 @@ const planPriceInfo = computed(() => {
   // 价格单位转换：分 -> 元
   const planPriceYuan = plan.price / 100
   const originalPrice = planPriceYuan
-  const discount = promoCodeValid.value ? promoCodeDiscount.value : 0
-  const discountAmount = Number((planPriceYuan * discount).toFixed(2))
-  const finalPrice = Number((originalPrice - discountAmount).toFixed(2))
+  const affPrice = Number((planPriceYuan * (1 - (promoCodeValid.value ? promoCodeDiscount.value : 0))).toFixed(2))
+  const vipPrice = Number((planPriceYuan * (1 - vipOrderDiscountPercent.value / 100)).toFixed(2))
+  const finalPrice = Math.min(originalPrice, affPrice, vipPrice)
+  const discountAmount = Number((originalPrice - finalPrice).toFixed(2))
   return {
     originalPrice,
     planPrice: planPriceYuan,
     discountAmount,
     finalPrice,
-    discountRate: discount
+    discountRate: originalPrice > 0 ? discountAmount / originalPrice : 0
   }
 })
 
@@ -448,10 +468,9 @@ const canSubmit = computed<boolean>(() => {
          form.value.hostId !== null &&
          !!form.value.image &&
          availableImages.value.length > 0 &&
-         sshKeys.value.length > 0 &&
-         form.value.sshKeyId !== null &&
          quotaCheck.value.valid &&
          resourceLimitCheck.value.valid &&
+         rootPasswordValid.value &&
          !submitting.value &&
          !isOwnPaidPackage.value  // 不允许使用自己的付费套餐
   
@@ -467,7 +486,7 @@ const canSubmit = computed<boolean>(() => {
 const canContinuePurchase = computed<boolean>(() => {
   if (activeStep.value === 1) return !!selectedPackage.value && !selectedPackage.value.soldOut && !prerequisiteMissing.value
   if (activeStep.value === 2) {
-    return !!selectedPackage.value && !hostsLoading.value && form.value.hostId !== null && !!form.value.image && form.value.sshKeyId !== null
+    return !!selectedPackage.value && !hostsLoading.value && form.value.hostId !== null && !!form.value.image
   }
   if (activeStep.value === 3) return !!form.value.name.trim() || !!form.value.hostId
   return canSubmit.value
@@ -1184,7 +1203,6 @@ async function handleSubmit(): Promise<void> {
   try {
     if (form.value.packageId === null) throw new Error(t('instance.createPage.selectPackage'))
     if (form.value.hostId === null) throw new Error(getCreatePageText('selectHost'))
-    if (form.value.sshKeyId === null) throw new Error(getCreatePageText('selectSshKey'))
     
     if (!form.value.name.trim()) {
       refreshGeneratedInstanceName(true)
@@ -1211,7 +1229,8 @@ async function handleSubmit(): Promise<void> {
       cpu: form.value.cpu,
       memory: form.value.memory,
       disk: form.value.disk,
-      sshKeyId: form.value.sshKeyId,
+      sshKeyId: form.value.sshKeyId ?? undefined,
+      password: rootPassword.value || undefined,
       customInitCommandIds: form.value.customInitCommandIds.length > 0 ? form.value.customInitCommandIds : undefined,
       promoCode: (isPaidPackage.value && promoCodeValid.value && form.value.promoCode.trim()) ? form.value.promoCode.trim() : undefined,
       idempotencyKey: isPaidPackage.value ? createIntentIdempotencyKey.value || undefined : undefined,
@@ -1255,8 +1274,8 @@ async function handleSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="kawaii-page animate-fade-in lg:h-full lg:flex lg:flex-col">
-    <header class="mb-4 flex flex-col gap-4 border-b border-themed pb-4 sm:flex-row sm:items-end sm:justify-between lg:mb-3 lg:shrink-0">
+  <div class="kawaii-page animate-fade-in min-w-0 lg:h-full lg:flex lg:flex-col">
+    <header class="mb-3 flex flex-col gap-3 border-b border-themed pb-3 sm:mb-4 sm:flex-row sm:items-end sm:justify-between sm:gap-4 sm:pb-4 lg:mb-3 lg:shrink-0">
       <div class="min-w-0">
         <h1 class="text-xl font-semibold tracking-tight text-themed sm:text-2xl">{{ $t('instance.createPage.title') }}</h1>
         <p class="mt-1.5 text-sm text-themed-muted">{{ $t('instance.createPage.description') }}</p>
@@ -1446,6 +1465,31 @@ async function handleSubmit(): Promise<void> {
               :title="getCreatePageText('selectSshKey')"
               @update:selected-key-id="form.sshKeyId = $event"
             />
+            <div v-if="activeStep === 2" class="space-y-3">
+              <div class="flex flex-wrap items-center gap-2 text-sm text-themed-muted">
+                <button type="button" class="btn-secondary px-3 py-1" :aria-pressed="form.sshKeyId === null" @click="form.sshKeyId = null">
+                  {{ t('instance.createPage.passwordOnly') }}
+                </button>
+                <router-link v-if="sshKeys.length === 0" :to="profilePath()" class="underline">
+                  {{ t('instance.createPage.addSshKey') }}
+                </router-link>
+                <span>{{ t('instance.createPage.passwordDeliveryHint') }}</span>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label class="block text-sm text-themed-muted">
+                  <span class="mb-1 block">{{ t('instance.createPage.rootPassword') }}</span>
+                  <div class="flex gap-2">
+                    <input v-model="rootPassword" :type="showRootPassword ? 'text' : 'password'" autocomplete="new-password" class="input min-w-0 flex-1" />
+                    <button type="button" class="btn-secondary px-3" :aria-label="t(showRootPassword ? 'instance.createPage.hidePassword' : 'instance.createPage.showPassword')" @click="showRootPassword = !showRootPassword">{{ t(showRootPassword ? 'instance.createPage.hidePassword' : 'instance.createPage.showPassword') }}</button>
+                  </div>
+                </label>
+                <label class="block text-sm text-themed-muted">
+                  <span class="mb-1 block">{{ t('instance.createPage.confirmRootPassword') }}</span>
+                  <input v-model="rootPasswordConfirmation" :type="showRootPassword ? 'text' : 'password'" autocomplete="new-password" class="input w-full" />
+                </label>
+              </div>
+              <p v-if="rootPasswordError" class="text-sm text-red-600" role="alert">{{ rootPasswordError }}</p>
+            </div>
             <div v-if="activeStep === 3 && isPaidPackage && form.planId && selectedPlan" class="card p-5">
               <div class="flex items-center gap-3 mb-5">
                 <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary-500/10 text-primary-600 dark:text-primary-400">
@@ -1459,8 +1503,8 @@ async function handleSubmit(): Promise<void> {
                 </div>
               </div>
               <div class="space-y-4">
-                <div class="p-4 rounded-xl border border-themed bg-themed-tertiary">
-                  <div class="flex items-center justify-between mb-3">
+                <div class="min-w-0 p-4 rounded-xl border border-themed bg-themed-tertiary">
+                  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-themed-secondary text-themed-secondary">{{ getBillingCycleLabel(selectedPlan.billingCycle) }}</span>
                     <span v-if="selectedPlan.slaGuarantee" class="flex items-center gap-1 text-xs text-green-500">
                       <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>
@@ -1519,14 +1563,14 @@ async function handleSubmit(): Promise<void> {
                     </div>
                   </div>
                   <div class="rounded-xl overflow-hidden border border-themed">
-                    <div class="p-5 flex items-center justify-between gap-3 bg-themed-secondary">
+                    <div class="flex flex-col items-start gap-2 p-4 bg-themed-secondary sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-5">
                       <div class="min-w-0">
                         <div class="text-sm font-medium text-themed-secondary">{{ configStore.freeSiteMode ? freeSiteCopy.finalPrice : $t('aff.finalPrice') }}</div>
                         <div v-if="selectedPlan.billingCycle > 1" class="text-xs mt-1">
                           <span class="font-mono tabular-nums text-themed-muted">{{ configStore.freeSiteMode ? freeSiteCopy.createMonthlyEquivalent : `≈ ¥${(planPriceInfo.finalPrice / selectedPlan.billingCycle).toFixed(2)}/${$t('instance.createPage.month')}` }}</span>
                         </div>
                       </div>
-                      <div class="text-3xl font-mono font-semibold tabular-nums tracking-tight text-themed"><span class="align-[0.14em] text-[0.62em] font-medium text-themed-muted">¥</span>{{ planPriceInfo.finalPrice.toFixed(2) }}</div>
+                      <div class="max-w-full break-words text-2xl font-mono font-semibold tabular-nums tracking-tight text-themed sm:text-3xl"><span class="align-[0.14em] text-[0.62em] font-medium text-themed-muted">¥</span>{{ planPriceInfo.finalPrice.toFixed(2) }}</div>
                     </div>
                     <div v-if="isHostedMarketPackage" class="px-4 py-3 flex items-center gap-2 bg-amber-500/10 border-t border-amber-500/25">
                       <svg class="w-4 h-4 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
@@ -1549,7 +1593,7 @@ async function handleSubmit(): Promise<void> {
                 </svg>
                 <span>{{ $t('instance.createPage.destroyTrafficNotice') }}</span>
               </p>
-              <div class="flex gap-2">
+              <div class="flex flex-col gap-2 sm:flex-row">
                 <input
                   v-model="form.name"
                   type="text"
@@ -1559,7 +1603,7 @@ async function handleSubmit(): Promise<void> {
                 />
                 <button
                   type="button"
-                  class="btn-secondary shrink-0 px-3 text-sm"
+                  class="btn-secondary w-full shrink-0 px-3 text-sm sm:w-auto"
                   :disabled="!form.hostId"
                   @click="refreshGeneratedInstanceName(true)"
                 >
@@ -1567,10 +1611,6 @@ async function handleSubmit(): Promise<void> {
                 </button>
               </div>
               <p class="mt-1.5 text-xs text-themed-muted">{{ $t('instance.createPage.autoNameHint') }}</p>
-            </div>
-            <div v-if="sshKeys.length === 0" class="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
-              <p class="text-sm font-medium mb-1 text-amber-700 dark:text-amber-300">{{ $t('instance.createPage.missingSshKey') }}</p>
-              <p class="text-xs text-amber-700/90 dark:text-amber-300/90">{{ $t('instance.createPage.missingSshKeyDesc') }} <router-link :to="profilePath()" class="font-medium underline hover:text-amber-900 dark:hover:text-amber-200">{{ $t('instance.createPage.profileSettings') }}</router-link> {{ $t('instance.createPage.addSshKey') }}</p>
             </div>
             <div v-if="!quotaCheck.valid" class="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10">
               <p class="text-sm font-medium mb-2 text-rose-700 dark:text-rose-400">{{ $t('instance.createPage.quotaInsufficient') }}</p>
@@ -1619,7 +1659,7 @@ async function handleSubmit(): Promise<void> {
                   <button type="button" class="btn btn-secondary" @click="rechargeForPurchase">{{ t('operations.recharge') }}</button>
                   <RouterLink class="btn btn-secondary" to="/tasks">{{ t('operations.title') }}</RouterLink>
                 </div>
-                <label class="flex items-start gap-2 text-sm"><input v-model="purchaseReviewed" type="checkbox" :disabled="!purchaseReviewReady || purchaseReviewLoading || purchaseBalance === null || selectedPlan?.isSoldOut || selectedPackage?.soldOut" />{{ t('operations.confirm') }}</label>
+                <label class="flex min-w-0 items-start gap-2 text-sm"><input v-model="purchaseReviewed" type="checkbox" :disabled="!purchaseReviewReady || purchaseReviewLoading || purchaseBalance === null || selectedPlan?.isSoldOut || selectedPackage?.soldOut" />{{ t('operations.confirm') }}</label>
               </div>
             </div>
             <div
@@ -1660,6 +1700,7 @@ async function handleSubmit(): Promise<void> {
       <InstancePurchaseStepper
         v-if="!loading"
         v-model:active-step="activeStep"
+        class="mx-auto w-full max-w-5xl"
         :can-continue="canContinuePurchase"
         :can-submit="canSubmit"
         :submitting="submitting"

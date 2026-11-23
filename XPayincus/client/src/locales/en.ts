@@ -1,17 +1,17 @@
 export default {
     operations: {
-        provisioningRetry: 'Retry provisioning', provisioningRetryConfirm: 'Have you checked instance and remote resource ownership? Continue this task without repeating completed creation or billing.',
+        provisioningRetry: 'Retry provisioning', retrying: 'Retrying…', retrySuccess: 'Provisioning retry queued.', requestId: 'Request ID', provisioningRetryConfirm: 'Have you checked instance and remote resource ownership? Continue this task without repeating completed creation or billing.',
         taskKinds: { create: 'Create', restore: 'Restore', start: 'Start', stop: 'Stop', restart: 'Restart', rebuild: 'Reinstall', clone: 'Clone', recreate: 'Recreate', change_host: 'Change host' },
         taskStatuses: { pending: 'Pending', processing: 'Processing', running: 'Running', completed: 'Completed', succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled' },
         batchHint: 'These results describe API responses. Open task center for the final result of asynchronous operations.',
         forecastHint: 'Forecast of automatic renewals using current prices. Due dates indicate the expected charge time; actual charges may change.',
         title: 'Task center', description: 'Creation, instance operations and restore results are retained by the server across navigation and refresh.',
-        refresh: 'Refresh', previous: 'Previous', next: 'Next', empty: 'No results', error: 'Unable to load data. Try again.',
+        refresh: 'Refresh', retry: 'Retry', loading: 'Loading tasks…', previous: 'Previous', next: 'Next', empty: 'No results', error: 'Unable to load data. Try again.',
         name: 'Name', kind: 'Task type', status: 'Status', progress: 'Progress', updated: 'Updated', result: 'Result', instance: 'Instance',
         forecast: 'Renewal forecast', days: 'Next {days} days', balance: 'Available balance', total: 'Renewal total', shortfall: 'Balance shortfall', firstShortfall: 'First shortfall', due: 'Due date', autoRenew: 'Auto renewal',
         draft: 'Purchase draft restored. Refresh prices, stock and discounts, then confirm the current configuration before purchasing.',
         review: 'Refresh price, stock and discount', confirm: 'I have reviewed the latest price, stock and discount', recharge: 'Recharge and return', resume: 'Resume purchase draft',
-        batchResults: 'Per-instance results', retry: 'Retry failed only', succeeded: 'Succeeded', failed: 'Failed', skipped: 'Skipped', pending: 'Pending', unknown: 'Result unknown; refresh task center before retrying',
+        batchResults: 'Per-instance results', succeeded: 'Succeeded', failed: 'Failed', skipped: 'Skipped', pending: 'Pending', unknown: 'Result unknown; refresh task center before retrying',
         keyword: 'Order number', from: 'Created from', to: 'Created through', instanceSearch: 'Instance ID or name', export: 'Export filtered results', incomplete: 'Only {count} of {total} orders loaded (limit 5000); search and export are incomplete.', complete: 'All {count} authorized orders loaded.', repay: 'Continue payment', cancel: 'Cancel order', cancelConfirm: 'Cancel this unpaid order?', manual: 'Payment instructions',
         minCpu: 'Minimum CPU (%)', minRam: 'Minimum RAM (MB)', minDisk: 'Minimum disk (MB)', type: 'Instance type', maxPrice: 'Maximum monthly price', all: 'All', compare: 'Compare plans (2–4)', addCompare: 'Add selected plan', remove: 'Remove', compareHint: 'Select 2–4 plans to compare. Prices are monthly equivalents; setup fees and billing cycles are shown separately.', price: 'Price', cycle: 'Months', setup: 'Setup fee', stock: 'Stock', available: 'Available', soldOut: 'Sold out'
     },
@@ -868,7 +868,6 @@ export default {
         loginSuccess: 'Login successful',
         logoutSuccess: 'Logged out',
         registerSuccess: 'Registration successful',
-        sshKeyDownloadHint: 'An SSH key was created for your account. The private key can be downloaded once. Download and store it securely now.',
         downloadSshPrivateKey: 'Download SSH private key',
         invalidCredentials: 'Invalid username or password',
         sessionExpired: 'Session expired, please login again',
@@ -980,6 +979,11 @@ export default {
 
     // Instance
     instance: {
+        monitoring: {
+            memory: 'Memory', diskIo: 'Disk I/O', rx: 'Network receive rate', tx: 'Network transmit rate',
+            title: 'Live monitoring', complete: 'Complete', dataStatus: 'Data status', connected: 'Live monitoring', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Agent offline', error: 'Monitoring connection failed',
+            loading: 'Loading seven-day history…', history: 'Seven-day history · {seconds}s resolution', average: 'Seven-day average', empty: 'No monitoring history yet', incomplete: 'Some historical samples are unavailable.', rxBytes: 'Seven-day received', txBytes: 'Seven-day transmitted', received: 'Received', transmitted: 'Transmitted', bytes: 'bytes', coverage: 'Coverage', resetCount: 'Reset count', partial: 'Partial', count: 'Samples', retentionDays: 'Retention days', resolutionSeconds: 'Resolution (seconds)', capacityTruncated: 'Capacity truncated', bucketsTruncated: 'Buckets truncated'
+        },
         networkMode: { routed: 'Routed' },
         servicePanelExtensionTitle: 'Service panel extension',
         servicePanelExtensionDescription: 'This instance provides a controlled service panel extension.',
@@ -1148,6 +1152,9 @@ export default {
             loadFailed: 'Failed to load data',
             loadHostsFailed: 'Failed to load available hosts',
             loadImagesFailed: 'Failed to load available images',
+            passwordOnly: 'Continue without an SSH key',
+            rootPassword: 'Root password (optional)', confirmRootPassword: 'Confirm root password', showPassword: 'Show password', hidePassword: 'Hide password', passwordInvalid: 'Use 12–128 printable ASCII characters, without a colon or whitespace-only value.', passwordMismatch: 'The passwords do not match.',
+            passwordDeliveryHint: 'Leave blank to let the backend generate a password. A custom password is sent only with the create request and is not saved in the draft.',
             missingSshKey: 'Missing SSH Key',
             missingSshKeyDesc: 'An SSH key is required to create an instance. Please go to',
             profileSettings: 'Profile Settings',

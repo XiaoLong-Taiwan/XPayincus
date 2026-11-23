@@ -15,6 +15,12 @@ const previousDirectory = process.env.INCUDAL_AGENT_STATE_DIR
 process.env.INCUDAL_AGENT_STATE_DIR = directory
 
 try {
+  const history = routeSource.slice(routeSource.indexOf("'/instances/:instanceId/monitoring/history'"), routeSource.indexOf("'/instances/:instanceId/monitoring/stream-ticket'"))
+  assert.match(history, /onRequest: \[fastify\.authenticate\]/)
+  assert.match(history, /instance\.userId !== request\.user\.id && request\.user\.role !== 'admin'/)
+  assert.ok(history.indexOf('readAgentInstanceHistory(') > history.indexOf('instance.userId !== request.user.id'))
+  assert.match(history, /from: now - 7 \* 86400000/)
+  assert.match(history, /instance\.name,[\s\S]*instance\.incusId \?\? undefined/)
   assert.ok(routeSource.includes("'/instances/:instanceId/monitoring/stream'"))
   assert.ok(routeSource.includes("'/instances/:instanceId/monitoring/stream-ticket'"))
   assert.ok(routeSource.includes("text/event-stream"))
@@ -27,7 +33,7 @@ try {
   assert.ok(routeSource.includes("type: 'offline'"))
   assert.ok(routeSource.includes("response.on('close'"))
   assert.ok(routeSource.includes('incusId: true'))
-  assert.ok(routeSource.includes('const monitoringName = instance.incusId || instance.name'))
+  assert.match(routeSource, /readAgentInstanceSnapshot\([\s\S]*instance\.name,[\s\S]*instance\.incusId \?\? undefined/)
   assert.ok(appSource.indexOf("fastify.register(agentMonitoringStreamRoutes") < appSource.indexOf("fastify.register(agentRoutes"))
   const agentRouteSource = readFileSync(join(root, 'src/routes/agent.ts'), 'utf8')
   assert.ok(agentRouteSource.includes("code: 'AGENT_HOST_NOT_VERIFIED'"))
@@ -56,7 +62,7 @@ try {
   assert.deepEqual(readAgentInstanceSnapshot('stream-fixture', 'vm1', now), {
     sampledAt: new Date(now - 1000).toISOString(),
     online: true,
-    metrics: { cpuUsagePercent: 25, memoryUsedBytes: 1024, rxBytesPerSecond: 128, txBytesPerSecond: 64 }
+    metrics: { cpuUsagePercent: 25, memoryUsedBytes: 1024, rxBytesPerSecond: 128, txBytesPerSecond: 64, rxBytes: 999, txBytes: 998 }
   })
   assert.equal(readAgentInstanceSnapshot('stream-fixture', 'vm1', now + monitoringRetentionMs + 1), null)
 

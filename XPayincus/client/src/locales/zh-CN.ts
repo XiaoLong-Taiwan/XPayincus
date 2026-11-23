@@ -1,16 +1,16 @@
 export default {
     operations: {
-        provisioningRetry: '重试交付', provisioningRetryConfirm: '已核实实例与远端资源归属，确定继续此交付任务？已完成的建机与账务不会重新执行。',
+        provisioningRetry: '重试交付', retrying: '正在重试…', retrySuccess: '交付重试已排队。', requestId: '请求 ID', provisioningRetryConfirm: '已核实实例与远端资源归属，确定继续此交付任务？已完成的建机与账务不会重新执行。',
         taskKinds: { create: '建立', restore: '还原', start: '启动', stop: '停止', restart: '重启', rebuild: '重装', clone: '克隆', recreate: '重建', change_host: '更换节点' },
         taskStatuses: { pending: '待处理', processing: '处理中', running: '执行中', completed: '已完成', succeeded: '成功', failed: '失败', cancelled: '已取消' },
         batchHint: '此处显示 API 响应结果。异步操作的最终结果请到任务中心查看。',
         forecastHint: '按当前价格预测自动续费。到期时间栏显示预计扣款时间，实际费用可能变化。',
         title: '任务中心', description: '建立、实例操作与还原结果由服务器保留，离页和刷新后可继续查看。',
-        refresh: '刷新', previous: '上一页', next: '下一页', empty: '暂无结果', error: '加载失败，请重试。',
+        refresh: '刷新', retry: '重试', loading: '正在加载任务…', previous: '上一页', next: '下一页', empty: '暂无结果', error: '加载失败，请重试。',
         name: '名称', kind: '任务类型', status: '状态', progress: '进度', updated: '更新时间', result: '结果', instance: '实例',
         forecast: '续费预测', days: '未来 {days} 天', balance: '可用余额', total: '续费总额', shortfall: '余额缺口', firstShortfall: '首次不足时间', due: '到期时间', autoRenew: '自动续费',
         draft: '购买草稿已恢复。请刷新价格、库存与优惠，成功后确认当前配置再购买。', review: '刷新价格、库存与优惠', confirm: '我已确认最新价格、库存与优惠', recharge: '充值后返回', resume: '继续购买草稿',
-        batchResults: '逐项操作结果', retry: '仅重试失败项目', succeeded: '成功', failed: '失败', skipped: '已跳过', pending: '待处理', unknown: '结果未知，请先刷新任务中心再决定是否重试',
+        batchResults: '逐项操作结果', succeeded: '成功', failed: '失败', skipped: '已跳过', pending: '待处理', unknown: '结果未知，请先刷新任务中心再决定是否重试',
         keyword: '订单号', from: '建立日期起', to: '建立日期止', instanceSearch: '实例 ID 或名称', export: '导出全部筛选结果', incomplete: '仅载入 {count} / {total} 条订单（上限 5000），搜索与导出结果不完整。', complete: '已载入全部 {count} 条授权订单。', repay: '继续付款', cancel: '取消订单', cancelConfirm: '取消此待付款订单？', manual: '付款说明',
         minCpu: '最低 CPU (%)', minRam: '最低内存 (MB)', minDisk: '最低磁盘 (MB)', type: '实例类型', maxPrice: '最高月价', all: '全部', compare: '方案比较（2–4 项）', addCompare: '加入所选方案', remove: '移除', compareHint: '选择 2–4 个方案比较。价格为月均价格，开通费与周期另列。', price: '价格', cycle: '月数', setup: '开通费', stock: '库存', available: '有库存', soldOut: '售罄'
     },
@@ -930,7 +930,6 @@ export default {
         loginSuccess: '登录成功',
         logoutSuccess: '已退出登录',
         registerSuccess: '注册成功',
-        sshKeyDownloadHint: '系统已为您创建 SSH 密钥。私钥只能下载一次，请立即下载并妥善保管。',
         downloadSshPrivateKey: '下载 SSH 私钥',
         invalidCredentials: '用户名或密码错误',
         sessionExpired: '会话已过期，请重新登录',
@@ -1042,6 +1041,11 @@ export default {
 
     // 实例相关
     instance: {
+        monitoring: {
+            memory: '内存', diskIo: '磁盘 I/O', rx: '网络接收速率', tx: '网络传输速率',
+            title: '实时监控', complete: '完整', dataStatus: '数据状态', connected: '实时监控', connecting: '连接中', reconnecting: '重新连接中', offline: 'Agent 离线', error: '监控连接失败',
+            loading: '加载七日趋势…', history: '七日趋势 · {seconds} 秒分辨率', average: '七日平均', empty: '暂无趋势数据', incomplete: '部分历史样本无法获取。', rxBytes: '七日接收总量', txBytes: '七日发送总量', received: '收', transmitted: '发', bytes: 'bytes', coverage: '覆盖率', resetCount: '重置次数', partial: '不完整', count: '样本数', retentionDays: '保留天数', resolutionSeconds: '分辨率（秒）', capacityTruncated: '受容量限制截断', bucketsTruncated: '桶数截断'
+        },
         networkMode: { routed: '路由' },
         title: '实例管理',
         create: '创建实例',
@@ -1210,6 +1214,9 @@ selectSshKey: '请选择 SSH 密钥',
             loadFailed: '加载数据失败',
             loadHostsFailed: '加载可用宿主机失败',
             loadImagesFailed: '加载可用镜像失败',
+            passwordOnly: '不使用 SSH 密钥',
+            rootPassword: 'Root 密码（选填）', confirmRootPassword: '确认 Root 密码', showPassword: '显示密码', hidePassword: '隐藏密码', passwordInvalid: '密码须为 12–128 个 ASCII 可打印字符，不得包含冒号，且不能只有空白。', passwordMismatch: '两次输入的密码不一致。',
+            passwordDeliveryHint: '留空会由后端自动生成密码；自定义密码仅用于创建请求，不会保存到草稿。',
             missingSshKey: '缺少 SSH 密钥',
             missingSshKeyDesc: '创建实例需要 SSH 密钥。请先前往',
             profileSettings: '个人设置',

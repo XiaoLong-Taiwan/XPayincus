@@ -206,6 +206,7 @@ export interface VipBenefitAmountSummary {
 
 export interface VipBenefitOverview {
   currentLevel: number
+  orderDiscountPercent: number
   userVipMetric: UserVipMetric
   userStats: UserVipStats
   userVipBadgeStyle: VipBadgeStyle | null
@@ -583,8 +584,9 @@ export async function deleteVipBenefitReward(id: number): Promise<void> {
 }
 
 export async function getVipBenefitOverview(userId: number): Promise<VipBenefitOverview> {
-  const [vip, rewards, claims] = await Promise.all([
+  const [vip, benefitsConfig, rewards, claims] = await Promise.all([
     getCurrentUserVip(userId),
+    getVipBenefitsConfig(),
     prisma.vipBenefitReward.findMany({
       where: { enabled: true },
       orderBy: [
@@ -670,6 +672,9 @@ export async function getVipBenefitOverview(userId: number): Promise<VipBenefitO
 
   return {
     currentLevel: vip.level,
+    orderDiscountPercent: vip.level > 0
+      ? benefitsConfig.levels[String(Math.min(vip.level, MAX_CONTINUOUS_VIP_LEVEL))].orderDiscountPercent
+      : 0,
     userVipMetric: vip.metric,
     userStats: vip.stats,
     userVipBadgeStyle: vip.badgeStyle,

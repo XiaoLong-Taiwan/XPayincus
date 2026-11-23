@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { agentMonitoringApi, createInstanceMonitoringStreamTicket, instanceMonitoringStreamUrl, type InstanceHistory, type InstanceMonitoringSample } from '@/api/agent-monitoring'
+import { getOwnInstanceMonitoringHistory, createInstanceMonitoringStreamTicket, instanceMonitoringStreamUrl, type InstanceHistory, type InstanceMonitoringSample } from '@/api/agent-monitoring'
 
 const MAX_TREND_POINTS = 100
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -12,6 +12,7 @@ export function useInstanceMonitoring() {
   const reconnectAttempt = ref(0)
   const historyLoading = ref(false)
   const historyError = ref<{ message: string; code?: string | null; status?: number | null } | null>(null)
+  let historyRequest: AbortController | null = null
   let source: EventSource | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let staleTimer: ReturnType<typeof setTimeout> | null = null
@@ -29,8 +30,9 @@ export function useInstanceMonitoring() {
     staleTimer = null
   }
 
-  function connect(instanceId: number, hostId: number, instanceName: string, onSample?: (value: InstanceMonitoringSample) => void) {
+  function connect(instanceId: number, onSample?: (value: InstanceMonitoringSample) => void) {
     disconnect()
+    reconnectAttempt.value = 0
     activeInstanceId = instanceId
     const currentGeneration = ++generation
     points = []
@@ -39,12 +41,9 @@ export function useInstanceMonitoring() {
     status.value = 'connecting'
     historyLoading.value = true
     historyError.value = null
-    const historyNow = Date.now()
-    void agentMonitoringApi.instanceHistory(
-      hostId,
-      { from: new Date(historyNow - 7 * 86400000).toISOString(), to: new Date(historyNow - 1000).toISOString(), resolutionSeconds: 3600, limit: 1000 },
-      instanceName
-    ).then((result) => {
+    const request = new AbortController()
+    historyRequest = request
+    void getOwnInstanceMonitoringHistory(instanceId, request.signal).then((result) => {
       if (generation === currentGeneration) trend.value = result
     }).catch((cause: any) => {
       if (generation === currentGeneration) {
@@ -55,7 +54,10 @@ export function useInstanceMonitoring() {
         }
       }
     }).finally(() => {
-      if (generation === currentGeneration) historyLoading.value = false
+      if (generation === currentGeneration) {
+        historyRequest = null
+        historyLoading.value = false
+      }
     })
 
     const open = () => {
@@ -135,6 +137,9 @@ export function useInstanceMonitoring() {
     generation += 1
     connectionAttempt += 1
     activeInstanceId = 0
+    historyRequest?.abort()
+    historyRequest = null
+    historyLoading.value = false
     source?.close()
     source = null
     clearTimers()

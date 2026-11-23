@@ -10,16 +10,33 @@ for (const resource of ['cpu', 'memory', 'io']) {
     for (const field of ['avg10', 'avg60', 'avg300', 'total']) hostKeys.push(`psi.${resource}.${kind}.${field}`)
   }
 }
-export const instanceMonitoringKeys = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond', 'rxBytesPerSecond', 'txBytesPerSecond'] as const
+export const instanceMonitoringKeys = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond', 'rxBytes', 'txBytes', 'rxBytesPerSecond', 'txBytesPerSecond'] as const
 export type InstanceMonitoringMetric = typeof instanceMonitoringKeys[number]
 export function isMonitoringInstanceName(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(value)
 }
+export function isMonitoringInstanceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(value)
+}
 interface Point { sampledAt: number; intervalSeconds: number; metrics: Record<string, number> }
 interface MetricStats { min: number; max: number; avg: number; count: number; coverage: number }
-interface CounterStats { first: number; last: number; delta: number; resetCount: number; count: number; coverage: number; unit: 'microseconds' }
-interface InstancePoint extends Point { name: string }
+interface CounterStats { first: number; last: number; delta: number; resetCount: number; count: number; coverage: number; partial: boolean; unit: 'microseconds' | 'bytes' }
+export interface InstancePoint extends Point { name: string; incusId?: string }
 interface Sample extends Point { id: string; instances: InstancePoint[] }
+
+const realtimeSnapshots = new Map<string, { point: InstancePoint; expiresAt: number }>()
+const realtimeSnapshotTtlMs = 2 * 60 * 1000
+const realtimeSnapshotLimit = 50000
+
+export function cacheAgentRealtimeInstances(agentId: string, points: InstancePoint[], now = Date.now()): void {
+  for (const [key, value] of realtimeSnapshots) if (value.expiresAt <= now) realtimeSnapshots.delete(key)
+  for (const point of points) {
+    const key = `${agentId}:${point.incusId || point.name}`
+    realtimeSnapshots.delete(key)
+    realtimeSnapshots.set(key, { point, expiresAt: now + realtimeSnapshotTtlMs })
+  }
+  while (realtimeSnapshots.size > realtimeSnapshotLimit) realtimeSnapshots.delete(realtimeSnapshots.keys().next().value!)
+}
 interface ComponentEvent { id: string; sampledAt: string; type: 'component-state'; components: Record<string, unknown> }
 interface Journal { samples: Sample[]; events: ComponentEvent[]; receipts: Record<string, number>; truncated: boolean }
 export interface MonitoringRange { from: number; to: number; resolutionSeconds: number; limit: number }
@@ -59,7 +76,7 @@ export function ingestAgentMonitoring(agentId: string, payload: unknown, now = D
   const state = load(agentId, now)
   const accepted: string[] = []
   let receiptCount = Object.keys(state.receipts).length
-  const instanceSamples = new Set(state.samples.flatMap(sample => sample.instances.map(point => `${point.name}:${point.sampledAt}`)))
+  const instanceSamples = new Set(state.samples.flatMap(sample => sample.instances.map(point => `${point.incusId || point.name}:${point.sampledAt}`)))
   const eventIds = new Set(state.events.map(event => event.id))
   for (const raw of envelope.samples) {
     const sample = record(raw)
@@ -75,16 +92,19 @@ export function ingestAgentMonitoring(agentId: string, payload: unknown, now = D
     if (Array.isArray(sample.instances) && sample.instances.length <= 500) {
       for (const rawInstance of sample.instances) {
         const instance = record(rawInstance)
-        if (!isMonitoringInstanceName(instance.name) || seen.has(instance.name)) continue
+        if (!isMonitoringInstanceName(instance.name)) continue
+        const incusId = isMonitoringInstanceId(instance.incusId) ? instance.incusId : undefined
+        const identity = incusId || instance.name
+        if (seen.has(identity)) continue
         const time = typeof instance.sampledAt === 'string' ? Date.parse(instance.sampledAt) : NaN
         if (!Number.isFinite(time) || time > sampledAt + 60000 || time < sampledAt - 3600000) continue
-        const identity = `${instance.name}:${time}`
-        if (instanceSamples.has(identity)) continue
-        instanceSamples.add(identity)
-        seen.add(instance.name)
+        const sampleIdentity = `${identity}:${time}`
+        if (instanceSamples.has(sampleIdentity)) continue
+        instanceSamples.add(sampleIdentity)
+        seen.add(identity)
         const duration = instance.intervalSeconds
         const instanceInterval = typeof duration === 'number' && Number.isFinite(duration) && duration > 0 && duration <= 3600 ? duration : 0
-        instances.push({ name: instance.name, sampledAt: time, intervalSeconds: instanceInterval, metrics: numbers(instance.metrics, instanceMonitoringKeys) })
+        instances.push({ name: instance.name, ...(incusId ? { incusId } : {}), sampledAt: time, intervalSeconds: instanceInterval, metrics: numbers(instance.metrics, instanceMonitoringKeys) })
       }
     }
     const metrics = { ...numbers(sample.resources, hostKeys), ...numbers(sample.metrics, hostKeys) }
@@ -123,8 +143,8 @@ export function ingestAgentMonitoring(agentId: string, payload: unknown, now = D
   return accepted
 }
 
-export function publishAgentInstanceMonitoring(agentId: string, instanceId: number, name: string, now = Date.now()): void {
-  const snapshot = readAgentInstanceSnapshot(agentId, name, now)
+export function publishAgentInstanceMonitoring(agentId: string, instanceId: number, name: string, now = Date.now(), incusId?: string): void {
+  const snapshot = readAgentInstanceSnapshot(agentId, name, now, incusId)
   if (snapshot) publishInstanceMonitoring(instanceId, snapshot)
 }
 
@@ -145,7 +165,7 @@ function coverage(points: Point[], from: number, to: number): number {
 
 export function aggregateMonitoring(points: Point[], from: number, to: number): Record<string, MetricStats> {
   const unique = [...new Map(points.filter(point => point.sampledAt >= from && point.sampledAt < to).map(point => [point.sampledAt, point])).values()]
-  const keys = new Set(unique.flatMap(point => Object.keys(point.metrics).filter(key => !isPressureCounter(key))))
+  const keys = new Set(unique.flatMap(point => Object.keys(point.metrics).filter(key => !isPressureCounter(key) && !isByteCounter(key))))
   return Object.fromEntries([...keys].sort().map(key => {
     const available = unique.filter(point => point.metrics[key] !== undefined)
     const values = available.map(point => point.metrics[key]!)
@@ -158,26 +178,37 @@ function isPressureCounter(key: string): boolean {
   return /^psi\.(cpu|memory|io)\.(some|full)\.total$/.test(key)
 }
 
+function isByteCounter(key: string): boolean {
+  return key === 'rxBytes' || key === 'txBytes'
+}
+
 export function aggregateMonitoringCounters(points: Point[], from: number, to: number): Record<string, CounterStats> {
-  const unique = [...new Map(points.filter(point => point.sampledAt >= from && point.sampledAt < to).map(point => [point.sampledAt, point])).values()].sort((a, b) => a.sampledAt - b.sampledAt)
-  const keys = new Set(unique.flatMap(point => Object.keys(point.metrics).filter(isPressureCounter)))
+  const unique = [...new Map(points.map(point => [point.sampledAt, point])).values()].sort((a, b) => a.sampledAt - b.sampledAt)
+  const inWindow = unique.filter(point => point.sampledAt >= from && point.sampledAt < to)
+  const keys = new Set(inWindow.flatMap(point => Object.keys(point.metrics).filter(key => isPressureCounter(key) || isByteCounter(key))))
   return Object.fromEntries([...keys].sort().map(key => {
     const available = unique.filter(point => point.metrics[key] !== undefined)
+    const windowAvailable = available.filter(point => point.sampledAt >= from && point.sampledAt < to)
+    if (windowAvailable.length === 0) return [key, undefined]
     const intervals: Point[] = []
     let delta = 0
     let resetCount = 0
+    let partial = available.length < 2
     for (let index = 1; index < available.length; index++) {
       const before = available[index - 1]!
       const after = available[index]!
+      if (after.sampledAt < from || after.sampledAt >= to) continue
       const elapsed = (after.sampledAt - before.sampledAt) / 1000
       const reboot = before.metrics.uptimeSeconds !== undefined && after.metrics.uptimeSeconds !== undefined && after.metrics.uptimeSeconds < before.metrics.uptimeSeconds
-      if (reboot || after.metrics[key]! < before.metrics[key]!) { resetCount++; continue }
-      if (elapsed <= 0 || elapsed > 3600) continue
+      if (reboot || after.metrics[key]! < before.metrics[key]!) { resetCount++; partial = true; continue }
+      if (elapsed <= 0 || elapsed > 3600) { partial = true; continue }
       delta += after.metrics[key]! - before.metrics[key]!
       intervals.push({ ...after, intervalSeconds: elapsed })
     }
-    return [key, { first: available[0]!.metrics[key]!, last: available[available.length - 1]!.metrics[key]!, delta, resetCount, count: available.length, coverage: coverage(intervals, from, to), unit: 'microseconds' as const }]
-  }))
+    const unit = isByteCounter(key) ? 'bytes' : 'microseconds'
+    const intervalCoverage = coverage(intervals, from, to)
+    return [key, { first: windowAvailable[0]!.metrics[key]!, last: windowAvailable[windowAvailable.length - 1]!.metrics[key]!, delta, resetCount, count: windowAvailable.length, coverage: intervalCoverage, partial: partial || intervalCoverage < 1, unit }]
+  }).filter(([, value]) => value !== undefined))
 }
 
 export function readAgentMonitoring(agentId: string | null, range: MonitoringRange, now = Date.now()) {
@@ -188,7 +219,10 @@ export function readAgentMonitoring(agentId: string | null, range: MonitoringRan
 function monitoringHistory(samples: Point[], range: MonitoringRange, truncated: boolean, now: number) {
   const from = Math.max(range.from, now - monitoringRetentionMs)
   const to = Math.min(range.to, now)
-  const points = [...new Map(samples.filter(point => point.sampledAt >= from && point.sampledAt < to).map(point => [point.sampledAt, point])).values()]
+  const allPoints = [...new Map(samples.map(point => [point.sampledAt, point])).values()].sort((a, b) => a.sampledAt - b.sampledAt)
+  const points = allPoints.filter(point => point.sampledAt >= from && point.sampledAt < to)
+  const predecessor = allPoints.filter(point => point.sampledAt < from).at(-1)
+  const aggregationPoints = predecessor ? [predecessor, ...points] : points
   const buckets = new Map<number, Point[]>()
   const resolution = range.resolutionSeconds * 1000
   for (const point of points) {
@@ -196,31 +230,52 @@ function monitoringHistory(samples: Point[], range: MonitoringRange, truncated: 
     const values = buckets.get(start) ?? []
     values.push(point); buckets.set(start, values)
   }
+  const summaryCounters = aggregateMonitoringCounters(aggregationPoints, from, to)
+  const bucketResults = [...buckets].sort(([a], [b]) => a - b).map(([start, values]) => {
+    const bucketFrom = Math.max(from, start)
+    const bucketTo = Math.min(to, start + resolution)
+    const bucketPredecessor = allPoints.filter(point => point.sampledAt < bucketFrom).at(-1)
+    const counterPoints = bucketPredecessor ? [bucketPredecessor, ...values] : values
+    return {
+      from: new Date(bucketFrom).toISOString(), to: new Date(bucketTo).toISOString(),
+      metrics: aggregateMonitoring(values, bucketFrom, bucketTo),
+      counters: aggregateMonitoringCounters(counterPoints, bucketFrom, bucketTo)
+    }
+  })
+  const bucketsTruncated = buckets.size > range.limit
   return {
     schemaVersion: 2, retentionDays: 7, capacityTruncated: truncated,
     from: new Date(from).toISOString(), to: new Date(to).toISOString(), resolutionSeconds: range.resolutionSeconds,
+    incomplete: truncated || bucketsTruncated || Object.values(summaryCounters).some(counter => counter.partial) || bucketResults.some(bucket => Object.values(bucket.counters).some(counter => counter.partial)),
     summary: aggregateMonitoring(points, from, to),
-    summaryCounters: aggregateMonitoringCounters(points, from, to),
-    buckets: [...buckets].sort(([a], [b]) => a - b).slice(-range.limit).map(([start, values]) => ({
-      from: new Date(Math.max(from, start)).toISOString(), to: new Date(Math.min(to, start + resolution)).toISOString(),
-      metrics: aggregateMonitoring(values, Math.max(from, start), Math.min(to, start + resolution)),
-      counters: aggregateMonitoringCounters(values, Math.max(from, start), Math.min(to, start + resolution))
-    })),
-    bucketsTruncated: buckets.size > range.limit
+    summaryCounters,
+    buckets: bucketResults.slice(-range.limit),
+    bucketsTruncated
   }
 }
 
-export function readAgentInstanceHistory(agentId: string | null, range: MonitoringRange, name: string, now = Date.now()) {
-  if (!isMonitoringInstanceName(name)) throw new Error('Invalid monitoring instance name')
-  const state = agentId ? load(agentId, now) : { samples: [] as Sample[], truncated: false }
-  const points = state.samples.flatMap(sample => sample.instances.filter(point => point.name === name))
-  return { name, ...monitoringHistory(points, range, state.truncated, now) }
+function matchesInstance(point: InstancePoint, name: string | undefined, incusId?: string): boolean {
+  return isMonitoringInstanceId(incusId) ? point.incusId === incusId : point.incusId === undefined && point.name === name
 }
 
-export function readAgentInstanceSnapshot(agentId: string | null, name: string, now = Date.now()): { sampledAt: string; online: boolean; metrics: Record<string, number> } | null {
-  if (!agentId || !isMonitoringInstanceName(name)) return null
+export function readAgentInstanceHistory(agentId: string | null, range: MonitoringRange, name: string | undefined, now = Date.now(), incusId?: string) {
+  if ((!name || !isMonitoringInstanceName(name)) && !isMonitoringInstanceId(incusId)) throw new Error('Invalid monitoring instance identity')
+  if (incusId !== undefined && !isMonitoringInstanceId(incusId)) throw new Error('Invalid monitoring instance identity')
+  const state = agentId ? load(agentId, now) : { samples: [] as Sample[], truncated: false }
+  const points = state.samples.flatMap(sample => sample.instances.filter(point => matchesInstance(point, name, incusId)))
+  return { ...(name ? { name } : {}), ...(incusId ? { incusId } : {}), ...monitoringHistory(points, range, state.truncated, now) }
+}
+
+export function readAgentInstanceSnapshot(agentId: string | null, name: string, now = Date.now(), incusId?: string): { sampledAt: string; online: boolean; metrics: Record<string, number> } | null {
+  if (!agentId || !isMonitoringInstanceName(name) || (incusId !== undefined && !isMonitoringInstanceId(incusId))) return null
+  for (const [key, value] of realtimeSnapshots) if (value.expiresAt <= now) realtimeSnapshots.delete(key)
+  const identity = incusId || name
+  const realtime = realtimeSnapshots.get(`${agentId}:${identity}`)?.point
+  if (realtime && now - realtime.sampledAt <= monitoringFreshnessMs) {
+    return { sampledAt: new Date(realtime.sampledAt).toISOString(), online: true, metrics: realtime.metrics }
+  }
   const state = load(agentId, now)
-  const points = state.samples.flatMap(sample => sample.instances.filter(point => point.name === name)).sort((a, b) => b.sampledAt - a.sampledAt)
+  const points = state.samples.flatMap(sample => sample.instances.filter(point => matchesInstance(point, name, incusId))).sort((a, b) => b.sampledAt - a.sampledAt)
   const point = points[0]
   if (!point) return null
   return { sampledAt: new Date(point.sampledAt).toISOString(), online: now - point.sampledAt <= monitoringFreshnessMs, metrics: point.metrics }
@@ -233,12 +288,14 @@ export function readAgentInstanceTop(agentId: string | null, range: MonitoringRa
   const groups = new Map<string, InstancePoint[]>()
   for (const sample of state.samples) for (const point of sample.instances) {
     if (point.sampledAt < from || point.sampledAt >= to) continue
-    const points = groups.get(point.name) ?? []
-    points.push(point); groups.set(point.name, points)
+    const identity = point.incusId || point.name
+    const points = groups.get(identity) ?? []
+    points.push(point); groups.set(identity, points)
   }
-  const items = [...groups].flatMap(([name, points]) => {
+  const items = [...groups].flatMap(([, points]) => {
     const stats = aggregateMonitoring(points, from, to)[metric]
-    return stats ? [{ name, ...stats }] : []
+    const point = points[0]!
+    return stats ? [{ name: point.name, ...(point.incusId ? { incusId: point.incusId } : {}), ...stats }] : []
   }).sort((a, b) => b[orderBy] - a[orderBy] || a.name.localeCompare(b.name)).slice(0, top)
   return { schemaVersion: 2, from: new Date(from).toISOString(), to: new Date(to).toISOString(), metric, orderBy, top, capacityTruncated: state.truncated, items }
 }

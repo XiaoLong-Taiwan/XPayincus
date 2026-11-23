@@ -19,6 +19,36 @@ func TestPressureMissingAndMalformedAreNotZero(t *testing.T) {
 	}
 }
 
+func TestPerformanceRatesUseStableIdentity(t *testing.T) {
+	identityA := t.Name() + ":a"
+	identityB := t.Name() + ":b"
+	defer func() {
+		performanceCache.Lock()
+		delete(performanceCache.items, identityA)
+		delete(performanceCache.items, identityB)
+		performanceCache.Unlock()
+	}()
+	state := func(cpu int) incusInstanceState {
+		body, _ := json.Marshal(map[string]any{"pid": 7, "started_at": "2026-11-11T00:00:00Z", "cpu": map[string]any{"usage": cpu}, "memory": map[string]any{"usage": 1024}})
+		var value incusInstanceState
+		if err := json.Unmarshal(body, &value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	at := time.Now()
+	if metrics := performanceMetrics("same-name", identityA, state(1000000000), at); metrics["cpuUsagePercent"] != nil {
+		t.Fatal("first stable identity sample produced a rate")
+	}
+	if metrics := performanceMetrics("same-name", identityB, state(2000000000), at.Add(time.Second)); metrics["cpuUsagePercent"] != nil {
+		t.Fatal("different stable identity reused predecessor")
+	}
+	metrics := performanceMetrics("renamed", identityA, state(3000000000), at.Add(2*time.Second))
+	if metrics["cpuUsagePercent"] != float64(100) {
+		t.Fatalf("renamed instance did not retain stable predecessor: %#v", metrics)
+	}
+}
+
 func TestPerformanceRatesResetAndIncusDiskContract(t *testing.T) {
 	name := t.Name()
 	defer func() { performanceCache.Lock(); delete(performanceCache.items, name); performanceCache.Unlock() }()
@@ -32,16 +62,16 @@ func TestPerformanceRatesResetAndIncusDiskContract(t *testing.T) {
 		return value
 	}
 	at := time.Now()
-	first := performanceMetrics(name, state(1000000000, 100, 200, 1), at)
+	first := performanceMetrics(name, name, state(1000000000, 100, 200, 1), at)
 	if _, exists := first["cpuUsagePercent"]; exists {
 		t.Fatal("first counter produced CPU rate")
 	}
-	second := performanceMetrics(name, state(2000000000, 300, 600, 1), at.Add(time.Second))
+	second := performanceMetrics(name, name, state(2000000000, 300, 600, 1), at.Add(time.Second))
 	if second["cpuUsagePercent"] != float64(100) || second["diskIOBytesPerSecond"] != float64(600) || second["memoryUsedBytes"] != uint64(1024) {
 		t.Fatalf("unexpected rates: %#v", second)
 	}
 	for index, value := range []incusInstanceState{state(1, 1, 1, 1), state(2000000000, 300, 600, 2)} {
-		metrics := performanceMetrics(name, value, at.Add(time.Duration(index+2)*time.Second))
+		metrics := performanceMetrics(name, name, value, at.Add(time.Duration(index+2)*time.Second))
 		if _, exists := metrics["cpuUsagePercent"]; exists {
 			t.Fatal("reset produced CPU spike")
 		}

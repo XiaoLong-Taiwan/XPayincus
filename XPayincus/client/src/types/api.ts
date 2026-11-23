@@ -41,13 +41,6 @@ export interface RegisterRequest {
 
 export interface RegisterResponse {
   token: string
-  sshKey: {
-    id: number
-    name: string
-    fingerprint: string
-    publicKeyPreview: string
-    downloadToken: string
-  }
   user: {
     id: number
     username: string
@@ -899,7 +892,8 @@ export interface CreateInstanceRequest {
   memory: number
   disk: number
   hostId: number
-  sshKeyId: number
+  sshKeyId?: number
+  password?: string
   networkMode?: 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat' | 'public_ipv4' | 'public_ipv4_ipv6'
   portLimit?: number
   snapshotLimit?: number
@@ -922,7 +916,6 @@ export interface CreateInstanceResponse {
     host: string
     status: Instance['status']
     sshPort: number | null
-    rootPassword?: string | null
   }
 }
 

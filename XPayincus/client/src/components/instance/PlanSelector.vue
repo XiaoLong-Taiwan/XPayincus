@@ -154,8 +154,8 @@ function handleSelect(plan: PackagePlan): void {
 </script>
 
 <template>
-  <div class="card p-5">
-    <div class="flex items-center gap-2 mb-4">
+  <div class="card p-4 sm:p-5">
+    <div class="mb-4 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)]">
       <span
         class="w-6 h-6 rounded-full text-sm font-bold flex items-center justify-center"
         :class="themeStore.isDark ? 'bg-white text-gray-900' : 'bg-gray-900 text-white'"
@@ -166,7 +166,7 @@ function handleSelect(plan: PackagePlan): void {
       >
         {{ props.title || t('instance.selector.selectPlan') }}
       </h2>
-      <span class="text-xs text-themed-muted ml-auto">
+      <span class="col-start-2 text-xs text-themed-muted sm:col-start-3 sm:text-right">
         {{ props.description || t('instance.selector.planDesc') }}
       </span>
     </div>

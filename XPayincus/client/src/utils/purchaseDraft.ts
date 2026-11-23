@@ -34,7 +34,25 @@ export function readPurchaseDraft(userId: number): PurchaseDraft | null {
       || typeof form.autoRemotePort !== 'boolean' || !Array.isArray(form.customInitCommandIds)
       || !form.customInitCommandIds.every(value => Number.isInteger(value) && value > 0)) return null
     if (draft.idempotencyKey != null && (typeof draft.idempotencyKey !== 'string' || !/^[a-zA-Z0-9-]{1,160}$/.test(draft.idempotencyKey))) return null
-    return draft
+    return {
+      source: draft.source,
+      savedAt: draft.savedAt,
+      idempotencyKey: draft.idempotencyKey ?? null,
+      form: {
+        name: form.name,
+        packageId: form.packageId,
+        planId: form.planId,
+        hostId: form.hostId,
+        image: form.image,
+        cpu: form.cpu,
+        memory: form.memory,
+        disk: form.disk,
+        sshKeyId: form.sshKeyId,
+        customInitCommandIds: [...form.customInitCommandIds],
+        promoCode: form.promoCode,
+        autoRemotePort: form.autoRemotePort
+      }
+    }
   } catch { return null }
 }
 export function savePurchaseDraft(userId: number, draft: PurchaseDraft) {

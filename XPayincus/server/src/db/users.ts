@@ -12,9 +12,7 @@ import {
   advisoryTransactionLockString,
   tryAdvisoryTransactionLock
 } from './advisory-locks.js'
-import { encryptSensitiveData } from '../lib/security.js'
-import { generateSshKeyPair } from '../lib/ssh-key-pair.js'
-import crypto from 'crypto'
+
 
 const MAX_REGISTER_GIFT_BALANCE = 99999999.99
 const MAX_REGISTER_GIFT_POINTS = 2147483647
@@ -29,13 +27,6 @@ export interface RegisterGiftResult {
 export interface CreateRegisteredUserResult {
   userId: number
   registerGift: RegisterGiftResult | null
-  sshKey: {
-    id: number
-    name: string
-    fingerprint: string
-    publicKeyPreview: string
-    downloadToken: string
-  }
 }
 
 /**
@@ -412,10 +403,6 @@ export async function createRegisteredUser(
   ])
   const avatarStyle = AVATAR_STYLES[Math.floor(Math.random() * AVATAR_STYLES.length)]
   const normalizedEmail = input.email?.toLowerCase().trim() || null
-  const sshKeyPair = generateSshKeyPair()
-  const downloadToken = crypto.randomBytes(32).toString('base64url')
-  const downloadTokenHash = crypto.createHash('sha256').update(downloadToken).digest('hex')
-  const keyName = `Incudal-${crypto.randomBytes(4).toString('base64url').slice(0, 5)}`
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -463,17 +450,6 @@ export async function createRegisteredUser(
         }
       })
 
-      const sshKey = await tx.sshKey.create({
-        data: {
-          userId: user.id,
-          name: keyName,
-          publicKey: sshKeyPair.publicKey,
-          fingerprint: sshKeyPair.fingerprint,
-          privateKeyEncrypted: encryptSensitiveData(sshKeyPair.privateKey),
-          registrationTokenHash: downloadTokenHash,
-          registrationTokenExpiresAt: new Date(Date.now() + 15 * 60 * 1000)
-        }
-      })
 
       if (input.inviteCode) {
         const inviteUpdate = await tx.inviteCode.updateMany({
@@ -502,14 +478,7 @@ export async function createRegisteredUser(
 
       return {
         userId: user.id,
-        registerGift,
-        sshKey: {
-          id: sshKey.id,
-          name: keyName,
-          fingerprint: sshKeyPair.fingerprint,
-          publicKeyPreview: sshKeyPair.publicKey.length < 60 ? sshKeyPair.publicKey : `${sshKeyPair.publicKey.substring(0, 30)}...${sshKeyPair.publicKey.substring(sshKeyPair.publicKey.length - 20)}`,
-          downloadToken
-        }
+        registerGift
       }
     })
   } catch (error) {

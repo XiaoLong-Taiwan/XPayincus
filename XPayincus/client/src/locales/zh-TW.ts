@@ -4,17 +4,17 @@ import en from './en'
 
 const zhTW = {
     operations: {
-        provisioningRetry: '重試交付', provisioningRetryConfirm: '已核實實例與遠端資源歸屬，確定繼續此交付任務？已完成的建機與帳務不會重新執行。',
+        provisioningRetry: '重試交付', retrying: '正在重試…', retrySuccess: '交付重試已排入佇列。', requestId: '請求 ID', provisioningRetryConfirm: '已核實實例與遠端資源歸屬，確定繼續此交付任務？已完成的建機與帳務不會重新執行。',
         taskKinds: { create: '建立', restore: '還原', start: '啟動', stop: '停止', restart: '重新啟動', rebuild: '重裝', clone: '複製', recreate: '重建', change_host: '更換節點' },
         taskStatuses: { pending: '待處理', processing: '處理中', running: '執行中', completed: '已完成', succeeded: '成功', failed: '失敗', cancelled: '已取消' },
         batchHint: '此處顯示 API 回應結果。非同步操作的最終結果請到任務中心查看。',
         forecastHint: '按目前價格預測自動續費。到期時間欄顯示預計扣款時間，實際費用可能變動。',
         title: '任務中心', description: '建立、實例操作與還原結果由伺服器保留，離頁和重新整理後可繼續查看。',
-        refresh: '重新整理', previous: '上一頁', next: '下一頁', empty: '暫無結果', error: '載入失敗，請重試。',
+        refresh: '重新整理', retry: '重試', loading: '正在載入任務…', previous: '上一頁', next: '下一頁', empty: '暫無結果', error: '載入失敗，請重試。',
         name: '名稱', kind: '任務類型', status: '狀態', progress: '進度', updated: '更新時間', result: '結果', instance: '實例',
         forecast: '續費預測', days: '未來 {days} 天', balance: '可用餘額', total: '續費總額', shortfall: '餘額缺口', firstShortfall: '首次不足時間', due: '到期時間', autoRenew: '自動續費',
         draft: '購買草稿已恢復。請重新取得價格、庫存與優惠，成功後確認目前設定再購買。', review: '重新取得價格、庫存與優惠', confirm: '我已確認最新價格、庫存與優惠', recharge: '儲值後返回', resume: '繼續購買草稿',
-        batchResults: '逐項操作結果', retry: '僅重試失敗項目', succeeded: '成功', failed: '失敗', skipped: '已略過', pending: '待處理', unknown: '結果未知，請先重新整理任務中心再決定是否重試',
+        batchResults: '逐項操作結果', succeeded: '成功', failed: '失敗', skipped: '已略過', pending: '待處理', unknown: '結果未知，請先重新整理任務中心再決定是否重試',
         keyword: '訂單號', from: '建立日期起', to: '建立日期迄', instanceSearch: '實例 ID 或名稱', export: '匯出全部篩選結果', incomplete: '僅載入 {count} / {total} 筆訂單（上限 5000），搜尋與匯出結果不完整。', complete: '已載入全部 {count} 筆授權訂單。', repay: '繼續付款', cancel: '取消訂單', cancelConfirm: '取消此待付款訂單？', manual: '付款說明',
         minCpu: '最低 CPU (%)', minRam: '最低記憶體 (MB)', minDisk: '最低磁碟 (MB)', type: '實例類型', maxPrice: '最高月價', all: '全部', compare: '方案比較（2–4 項）', addCompare: '加入所選方案', remove: '移除', compareHint: '選擇 2–4 個方案比較。價格為月均價格，開通費與週期另列。', price: '價格', cycle: '月數', setup: '開通費', stock: '庫存', available: '有庫存', soldOut: '售罄'
     },
@@ -878,7 +878,6 @@ const zhTW = {
         loginSuccess: '登入成功',
         logoutSuccess: '已登出',
         registerSuccess: '註冊成功',
-        sshKeyDownloadHint: '系統已為您建立 SSH 金鑰。私鑰只能下載一次，請立即下載並妥善保管。',
         downloadSshPrivateKey: '下載 SSH 私鑰',
         invalidCredentials: '使用者名稱或密碼錯誤',
         sessionExpired: '會話已過期，請重新登入',
@@ -1139,6 +1138,11 @@ const zhTW = {
 
     // 實例相關
     instance: {
+        monitoring: {
+            memory: '記憶體', diskIo: '磁碟 I/O', rx: '網路接收速率', tx: '網路傳送速率',
+            title: '即時監控', complete: '完整', dataStatus: '資料狀態', connected: '即時監控', connecting: '連線中', reconnecting: '重新連線中', offline: 'Agent 離線', error: '監控連線失敗',
+            loading: '載入七日趨勢…', history: '七日趨勢 · {seconds} 秒解析度', average: '七日平均', empty: '尚無趨勢資料', incomplete: '部分歷史樣本無法取得。', rxBytes: '七日接收總量', txBytes: '七日傳送總量', received: '收', transmitted: '發', bytes: 'bytes', coverage: '涵蓋率', resetCount: '重設次數', partial: '不完整', count: '樣本數', retentionDays: '保留天數', resolutionSeconds: '解析度（秒）', capacityTruncated: '受容量限制截斷', bucketsTruncated: '桶數截斷'
+        },
         title: '實例管理',
         titlePlural: '實例',
         name: '實例名稱',
@@ -1290,6 +1294,9 @@ selectSshKey: '請選擇 SSH 金鑰',
             loadFailed: '載入資料失敗',
             loadHostsFailed: '載入可用主機失敗',
             loadImagesFailed: '載入可用映像檔失敗',
+            passwordOnly: '不使用 SSH 金鑰',
+            rootPassword: 'Root 密碼（選填）', confirmRootPassword: '確認 Root 密碼', showPassword: '顯示密碼', hidePassword: '隱藏密碼', passwordInvalid: '密碼須為 12–128 個 ASCII 可列印字元，不得包含冒號，且不可只有空白。', passwordMismatch: '兩次輸入的密碼不一致。',
+            passwordDeliveryHint: '留空會由後端自動產生密碼；自訂密碼僅用於建立請求，不會保存到草稿。',
             missingSshKey: '缺少 SSH 金鑰',
             missingSshKeyDesc: '建立實例需要 SSH 金鑰。請先前往',
             profileSettings: '個人設定',

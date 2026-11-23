@@ -5029,11 +5029,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
 
     // 导入必要的模块
     const { stopInstance, deleteInstance, createInstance, startInstance } = await import('../lib/incus/index.js')
-    const { buildInstanceConfig } = await import('../lib/incus/incus-instances.js')
+    const { buildInstanceConfig, getInstanceState } = await import('../lib/incus/incus-instances.js')
     const { generateIncusConfig, generateRandomPassword } = await import('../lib/incus-config-generator.js')
     const { generateVmConfig } = await import('../lib/incus-config-vm.js')
     const { generateRandomIPv6 } = await import('../lib/ip-calculator.js')
-    const { decryptSensitiveData, encryptSensitiveData } = await import('../lib/security.js')
+    const { decryptSensitiveDataStrict, encryptSensitiveData } = await import('../lib/security.js')
+    const { changeIncusRootPassword } = await import('../lib/incus/incus-root-password.js')
     const { getInstanceAffBinding, createAffBinding } = await import('../db/aff.js')
     const { createInboxMessage } = await import('../db/inbox.js')
     const { customAlphabet } = await import('nanoid')
@@ -5046,6 +5047,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       let targetIncusId: string | null = null
       let newDbInstanceId: number | null = null
       let sourceIncusDeleted = false
+      let targetIncusCleanupConfirmed = false
       const originalInstanceStatus = instance.status as InstanceStatus
 
       try {
@@ -5081,12 +5083,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         const sshKey = userSshKeys[0].public_key
 
         // 3. 解密原实例密码
-        let rootPassword: string
-        if (instance.rootPassword) {
-          const decrypted = decryptSensitiveData(instance.rootPassword)
-          rootPassword = decrypted || generateRandomPassword(16)
-        } else {
-          rootPassword = generateRandomPassword(16)
+        const rootPassword = instance.rootPassword
+          ? decryptSensitiveDataStrict(instance.rootPassword)
+          : generateRandomPassword(16)
+        if (!rootPassword) {
+          results.push({ id: instance.id, name: instance.name, success: false, error: '無法解密原實例登入密碼' })
+          continue
         }
 
         // 4. 获取套餐信息
@@ -5122,7 +5124,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         const { configPayload, metaData } = generateIncusConfig({
           instanceName: instance.name,
           imageAlias,
-          rootPassword,
           sshKey,
           networkMode: instance.networkMode,
           type: effectiveInstanceType
@@ -5166,7 +5167,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
             instanceName: instance.name,
             instanceIdSeed: newIncusId,
             imageAlias,
-            rootPassword,
             sshKey,
             network: staticIPv4 ? {
               ipAddress: `${staticIPv4}/22`,
@@ -5182,7 +5182,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
           const containerResult = generateIncusConfig({
             instanceName: instance.name,
             imageAlias,
-            rootPassword,
             sshKey,
             networkMode: instance.networkMode,
             type: 'container',
@@ -5278,6 +5277,12 @@ export default async function hostRoutes(fastify: FastifyInstance) {
         // 15. 启动新实例
         console.log(`[Migrate] 启动新实例 ${newIncusId}...`)
         await startInstance(targetClient, newIncusId)
+        const targetState = await getInstanceState(targetClient, newIncusId) as { status?: string }
+        if (targetState.status !== 'Running') {
+          throw new Error(`实例 ${newIncusId} 未确认处于 Running 状态`)
+        }
+        const targetTunnel = getAgentTunnel(targetHostId)
+        await changeIncusRootPassword(targetTunnel, newIncusId, rootPassword)
 
         // 16. 获取原实例的 AFF 绑定信息
         const affBinding = await getInstanceAffBinding(instance.id)
@@ -5421,7 +5426,22 @@ export default async function hostRoutes(fastify: FastifyInstance) {
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err)
         if (!sourceIncusDeleted) {
-          if (newDbInstanceId !== null) {
+          if (targetIncusCreated && targetIncusId) {
+            try {
+              await deleteIncusInstanceForMigration(
+                targetClient,
+                { stopInstance, deleteInstance },
+                { incusId: targetIncusId, status: 'running' },
+                fastify.log
+              )
+              targetIncusCleanupConfirmed = true
+            } catch (compensationErr) {
+              const compensationMessage = compensationErr instanceof Error ? compensationErr.message : String(compensationErr)
+              fastify.log.warn(`迁移失败后删除目标实例失败 (${targetIncusId}): ${compensationMessage}`)
+            }
+          }
+
+          if (newDbInstanceId !== null && targetIncusCleanupConfirmed) {
             try {
               await prisma.$transaction(async tx => {
                 await db.reassignInstanceBillingRecords(newDbInstanceId!, instance.id, tx)
@@ -5439,23 +5459,11 @@ export default async function hostRoutes(fastify: FastifyInstance) {
               const compensationMessage = compensationErr instanceof Error ? compensationErr.message : String(compensationErr)
               fastify.log.warn(`迁移失败后回滚数据库记录失败 (${instance.name}): ${compensationMessage}`)
             }
+          } else if (newDbInstanceId !== null) {
+            fastify.log.warn(`迁移目标实例 ${targetIncusId} 未确认清理，保留数据库记录与资源占用供人工处理`)
           }
 
-          if (targetIncusCreated && targetIncusId) {
-            try {
-              await deleteIncusInstanceForMigration(
-                targetClient,
-                { stopInstance, deleteInstance },
-                { incusId: targetIncusId, status: 'running' },
-                fastify.log
-              )
-            } catch (compensationErr) {
-              const compensationMessage = compensationErr instanceof Error ? compensationErr.message : String(compensationErr)
-              fastify.log.warn(`迁移失败后删除目标实例失败 (${targetIncusId}): ${compensationMessage}`)
-            }
-          }
-
-          if (targetResourcesReserved) {
+          if (targetResourcesReserved && targetIncusCleanupConfirmed) {
             try {
               await db.rollbackResources({
                 hostId: targetHostId,
@@ -5772,7 +5780,6 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     const { metaData } = generateIncusConfig({
       instanceName: name,
       imageAlias: image,
-      rootPassword: autoPassword,
       sshKey,
       networkMode,
       type: pkgInstanceType === 'vm' ? 'virtual-machine' : 'container'
@@ -5872,7 +5879,7 @@ export default async function hostRoutes(fastify: FastifyInstance) {
             networkMode,
             snapshottedSpecs: snapshotSpecs as any,
             sshPort: metaData.sshPort,
-            rootPassword: encryptSensitiveData(metaData.rootPassword),
+            rootPassword: encryptSensitiveData(autoPassword),
             status: 'creating',
             monthlyTrafficLimit: instanceQuota.monthlyTrafficLimit,
             portLimit: instanceQuota.portLimit,

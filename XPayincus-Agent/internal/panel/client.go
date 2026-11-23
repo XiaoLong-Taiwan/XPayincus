@@ -16,7 +16,10 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/protocol"
 )
 
-const heartbeatPath = "/api/agent/heartbeat"
+const (
+	heartbeatPath = "/api/agent/heartbeat"
+	realtimePath  = "/api/agent/monitoring/realtime"
+)
 
 type Client struct {
 	panelURL       string
@@ -103,6 +106,46 @@ func New(cfg config.Config) *Client {
 			Timeout: cfg.RequestTimeout,
 		},
 	}
+}
+
+func (client *Client) RealtimeMonitoring(ctx context.Context, payload map[string]any) error {
+	body, err := protocol.CanonicalJSON(payload)
+	if err != nil {
+		return err
+	}
+	if len(body) > 400*1024 {
+		return fmt.Errorf("realtime monitoring payload exceeds limit")
+	}
+	timestamp := protocol.NewTimestamp()
+	nonce, err := protocol.NewNonce()
+	if err != nil {
+		return err
+	}
+	bodyHash := protocol.BodySHA256(body)
+	signature := protocol.Signature(client.agentSecret, protocol.SigningPayload(http.MethodPost, realtimePath, timestamp, nonce, bodyHash))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.panelURL+realtimePath, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-incudal-agent-id", client.agentID)
+	request.Header.Set("x-incudal-timestamp", timestamp)
+	request.Header.Set("x-incudal-nonce", nonce)
+	request.Header.Set("x-incudal-body-sha256", bodyHash)
+	request.Header.Set("x-incudal-signature", signature)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("realtime monitoring failed: status=%d", response.StatusCode)
+	}
+	return nil
 }
 
 func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (HeartbeatResult, error) {

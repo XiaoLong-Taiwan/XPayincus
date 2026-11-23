@@ -138,7 +138,7 @@ const fastify = Fastify({
 })
 
 fastify.addHook('preParsing', async (request, _reply, payload) => {
-  if (request.method !== 'POST' || request.url.split('?')[0] !== '/api/agent/heartbeat') {
+  if (request.method !== 'POST' || !['/api/agent/heartbeat', '/api/agent/monitoring/realtime'].includes(request.url.split('?')[0])) {
     return payload
   }
 

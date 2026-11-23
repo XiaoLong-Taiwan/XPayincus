@@ -71,7 +71,7 @@ var performanceCache = struct {
 	items map[string]performanceSnapshot
 }{items: map[string]performanceSnapshot{}}
 
-func performanceMetrics(name string, state incusInstanceState, now time.Time) map[string]any {
+func performanceMetrics(name string, identity string, state incusInstanceState, now time.Time) map[string]any {
 	performanceCache.Lock()
 	defer performanceCache.Unlock()
 	for key, value := range performanceCache.items {
@@ -126,9 +126,9 @@ func performanceMetrics(name string, state incusInstanceState, now time.Time) ma
 			metrics["txBytes"] = current.tx
 		}
 	}
-	previous, exists := performanceCache.items[name]
+	previous, exists := performanceCache.items[identity]
 	elapsed := now.Sub(previous.at).Seconds()
-	if name != "" && exists && elapsed > 0 && elapsed <= 3600 && current.pid > 0 && current.pid == previous.pid && current.startedAt != "" && current.startedAt == previous.startedAt {
+	if identity != "" && exists && elapsed > 0 && elapsed <= 3600 && current.pid > 0 && current.pid == previous.pid && current.startedAt != "" && current.startedAt == previous.startedAt {
 		metrics["intervalSeconds"] = elapsed
 		if current.validCPU && previous.validCPU && current.cpu >= previous.cpu {
 			metrics["cpuUsagePercent"] = float64(current.cpu-previous.cpu) / (elapsed * 1e9) * 100
@@ -144,7 +144,7 @@ func performanceMetrics(name string, state incusInstanceState, now time.Time) ma
 		}
 	}
 	if len(performanceCache.items) < 10000 || exists {
-		performanceCache.items[name] = current
+		performanceCache.items[identity] = current
 	}
 	return metrics
 }

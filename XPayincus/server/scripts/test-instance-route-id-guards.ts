@@ -36,7 +36,7 @@ assert.equal(
 
 assert.equal(
   source.match(/parsePositiveRouteId\(request\.params\.id\)/g)?.length ?? 0,
-  5,
+  6,
   'all direct request.params.id routes must use strict positive route ID parsing'
 )
 
@@ -121,4 +121,16 @@ assert.ok(
   'boost-processes Incus failures must be logged and returned instead of silently succeeding'
 )
 
+const passwordRouteStart = source.indexOf("fastify.put<{ Params: { id: string }; Body: { newPassword?: unknown } }>('/:id/password'")
+assert.ok(passwordRouteStart >= 0, 'instance password change route not found')
+const passwordRouteEnd = source.indexOf('\n  fastify.', passwordRouteStart + 3)
+assert.ok(passwordRouteEnd > passwordRouteStart, 'instance password change route end marker not found')
+const passwordRoute = source.slice(passwordRouteStart, passwordRouteEnd)
+const passwordHelper = readFileSync(resolve(__dirname, '../src/lib/incus/incus-root-password.ts'), 'utf8')
+assert.ok(passwordRoute.includes('onRequest: [fastify.authenticate]') && passwordRoute.includes('user.role !== \'admin\''), 'password change must require authentication and owner/admin authorization')
+assert.ok(source.includes("'instance.password.change'") && passwordRoute.includes('createLog('), 'password change attempts must be audited')
+assert.ok(passwordRoute.includes('tryAdvisoryTransactionLock') && passwordRoute.includes('INSTANCE_OPERATION_LOCK_NAMESPACE'), 'password change must share the instance operation lock')
+assert.ok(passwordRoute.includes('await changeIncusRootPassword') && passwordRoute.indexOf('await changeIncusRootPassword') < passwordRoute.indexOf('data: { rootPassword: encrypted }'), 'stored credential must update only after guest confirmation')
+assert.ok(passwordHelper.includes("command: ['chpasswd']") && passwordHelper.includes('stdin.value.send(Buffer.from(`root:${password}\\n`))') && !passwordHelper.includes("command: ['chpasswd',"), 'password must be sent through stdin, never command arguments')
+assert.ok(passwordHelper.includes("stdin.value.send('')") && passwordHelper.includes("throw new Error('Incus did not confirm the password change')"), 'stdin EOF and sanitized errors must be used')
 console.log('instance route ID guard tests passed')

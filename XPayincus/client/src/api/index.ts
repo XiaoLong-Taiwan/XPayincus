@@ -188,6 +188,7 @@ export interface VipBenefitAmountSummary {
 
 export interface VipBenefitOverviewResponse {
   currentLevel: number
+  orderDiscountPercent: number
   userVipMetric: UserVipMetric
   userStats: {
     totalRecharge: number

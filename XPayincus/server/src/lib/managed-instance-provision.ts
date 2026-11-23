@@ -4,6 +4,9 @@ import { buildInstanceConfig, createInstance, deleteInstance, getIncusClient, ge
 import type { Host } from '../types/database.js'
 import { networkModeAllowsPortMapping, networkModeNeedsPublicIpv4 } from './network-modes.js'
 import { provisionAutoRemotePort } from './instance-port-mapping.js'
+import { getAgentTunnel } from './agent-tunnel.js'
+import { decryptSensitiveDataStrict } from './security.js'
+import { changeIncusRootPassword } from './incus/incus-root-password.js'
 
 export interface ManagedInstanceProvisionConfig {
   name: string
@@ -107,17 +110,30 @@ export async function provisionManagedInstanceAsync(
 
     await startInstance(client, config.name)
 
+    let running = false
     for (let i = 0; i < 30; i++) {
       await new Promise(resolve => setTimeout(resolve, 2000))
       try {
         const stateResp = await getInstanceState(client, config.name) as { status?: string }
         if (stateResp?.status === 'Running') {
+          running = true
           break
         }
       } catch {
         // keep waiting
       }
     }
+    if (!running) throw new Error('Instance did not reach Running state')
+
+    const instanceForPassword = await prisma.instance.findUniqueOrThrow({
+      where: { id: instanceId },
+      select: { rootPassword: true }
+    })
+    const rootPassword = instanceForPassword.rootPassword
+      ? decryptSensitiveDataStrict(instanceForPassword.rootPassword)
+      : null
+    if (!rootPassword) throw new Error('Initial root password unavailable')
+    await changeIncusRootPassword(getAgentTunnel(host.id), config.name, rootPassword)
 
     let ipv4: string | null = config.ipv4Address || null
     let ipv6: string | null = config.ipv6Address || null

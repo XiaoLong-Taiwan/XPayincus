@@ -37,7 +37,8 @@ import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } 
 import { agentVersionStatus } from '../lib/agent-upgrade.js'
 import { DurableAgentUpgradeRequests, ingestAgentHistory, readAgentHistory, serializeAgentHeartbeat } from '../services/agent-durable-state.js'
 import { readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
-import { ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceName, publishAgentInstanceMonitoring, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric } from '../services/agent-monitoring.js'
+import { cacheAgentRealtimeInstances, ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceId, isMonitoringInstanceName, publishAgentInstanceMonitoring, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric, type InstancePoint } from '../services/agent-monitoring.js'
+import { publishInstanceMonitoring } from '../lib/agent-monitoring-stream.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -67,6 +68,13 @@ interface AgentHeartbeatBody {
   history?: Record<string, unknown>
   monitoring?: Record<string, unknown>
   host?: Record<string, unknown>
+}
+
+interface AgentRealtimeBody {
+  schemaVersion?: number
+  sampledAt?: string
+  intervalSeconds?: number
+  instances?: unknown[]
 }
 
 interface AgentBinaryParams {
@@ -130,6 +138,8 @@ interface AgentUpgradeInstruction {
 
 const agentModel = prisma.hostAgent
 const nonceModel = prisma.hostAgentNonce
+const realtimeNonces = new Map<string, number>()
+const realtimeNonceLimit = 50000
 const agentUpgradeRequests = new DurableAgentUpgradeRequests()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -1055,6 +1065,67 @@ async function authenticateAgentRequest(
   return agent
 }
 
+async function authenticateRealtimeAgentRequest(
+  request: FastifyRequest<{ Body: AgentRealtimeBody }>,
+  reply: FastifyReply
+): Promise<HostAgentRecord | null> {
+  const headers = readAgentAuthHeaders(request.headers)
+  if (!headers) return reply.code(401).send({ error: 'Agent authentication headers are required', code: 'AGENT_AUTH_REQUIRED' }) as never
+  const headerError = validateAgentHeaders(headers)
+  if (headerError) return reply.code(401).send({ error: 'Invalid Agent authentication headers', code: 'AGENT_AUTH_INVALID', details: headerError }) as never
+  if (!isAgentTimestampFresh(headers.timestamp)) return reply.code(401).send({ error: 'Agent request timestamp is expired', code: 'AGENT_AUTH_EXPIRED' }) as never
+  const bodyHash = request.rawAgentBody
+    ? createHash('sha256').update(request.rawAgentBody).digest('hex')
+    : createAgentBodyHash(request.body ?? {})
+  if (bodyHash !== headers.bodyHash.toLowerCase()) return reply.code(401).send({ error: 'Agent body hash mismatch', code: 'AGENT_BODY_HASH_MISMATCH' }) as never
+  const agent = await agentModel.findUnique({ where: { agentId: headers.agentId } })
+  if (!agent || !agent.enabled) return reply.code(401).send({ error: 'Agent is not enabled', code: 'AGENT_DISABLED' }) as never
+  const secret = decryptSensitiveData(agent.secretEncrypted)
+  if (!secret || !isValidAgentSecret(secret)) return reply.code(401).send({ error: 'Agent secret is not available', code: 'AGENT_SECRET_INVALID' }) as never
+  if (!verifyAgentSignature(secret, { method: request.method, path: buildRequestPath(request), timestamp: headers.timestamp, nonce: headers.nonce, bodyHash }, headers.signature)) {
+    return reply.code(401).send({ error: 'Agent signature verification failed', code: 'AGENT_SIGNATURE_INVALID' }) as never
+  }
+  const now = Date.now()
+  for (const [key, expiresAt] of realtimeNonces) if (expiresAt <= now) realtimeNonces.delete(key)
+  const nonceKey = `${agent.agentId}:${headers.nonce}`
+  if (realtimeNonces.has(nonceKey)) return reply.code(401).send({ error: 'Agent nonce was already used', code: 'AGENT_NONCE_REPLAY' }) as never
+  realtimeNonces.set(nonceKey, now + agentNonceTtlMs)
+  while (realtimeNonces.size > realtimeNonceLimit) realtimeNonces.delete(realtimeNonces.keys().next().value!)
+  return agent
+}
+
+function normalizeRealtimeInstances(body: AgentRealtimeBody, now: number): InstancePoint[] | null {
+  if (body.schemaVersion !== 1 || !Array.isArray(body.instances) || body.instances.length > 500) return null
+  if (typeof body.intervalSeconds !== 'number' || !Number.isInteger(body.intervalSeconds) || body.intervalSeconds < 1 || body.intervalSeconds > 60) return null
+  const envelopeTime = typeof body.sampledAt === 'string' ? Date.parse(body.sampledAt) : NaN
+  if (!Number.isFinite(envelopeTime) || envelopeTime > now + 60000 || envelopeTime < now - 120000) return null
+  const points: InstancePoint[] = []
+  const identities = new Set<string>()
+  for (const raw of body.instances) {
+    if (!isRecord(raw)) return null
+    if (!isMonitoringInstanceName(raw.name)) return null
+    if (raw.incusId !== undefined && !isMonitoringInstanceId(raw.incusId)) return null
+    const incusId = isMonitoringInstanceId(raw.incusId) ? raw.incusId : undefined
+    const identity = incusId || raw.name
+    if (identities.has(identity)) return null
+    const sampledAt = typeof raw.sampledAt === 'string' ? Date.parse(raw.sampledAt) : NaN
+    if (!Number.isFinite(sampledAt) || sampledAt > now + 60000 || sampledAt < now - 120000) return null
+    const metricsRaw = isRecord(raw.metrics) ? raw.metrics : null
+    if (!metricsRaw) return null
+    const metrics: Record<string, number> = {}
+    for (const key of instanceMonitoringKeys) {
+      const value = metricsRaw[key]
+      if (value !== undefined) {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) return null
+        metrics[key] = value
+      }
+    }
+    identities.add(identity)
+    points.push({ name: raw.name as string, ...(incusId ? { incusId } : {}), sampledAt, intervalSeconds: body.intervalSeconds, metrics })
+  }
+  return points
+}
+
 export default async function agentRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: AgentHeartbeatBody; Params: { phase: string } }>('/panel-trust/:phase', async (request, reply) => {
     if (request.params.phase !== 'certificate' && request.params.phase !== 'verify') {
@@ -1316,7 +1387,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
   })
 
   for (const view of ['history', 'instances/top', 'instances/history', 'events'] as const) {
-    fastify.get<{ Params: AgentCredentialsParams; Querystring: { name?: string; from?: string; to?: string; limit?: string; resolutionSeconds?: string; metric?: string; orderBy?: string; top?: string } }>(`/hosts/:hostId/monitoring/${view}`, {
+    fastify.get<{ Params: AgentCredentialsParams; Querystring: { name?: string; incusId?: string; from?: string; to?: string; limit?: string; resolutionSeconds?: string; metric?: string; orderBy?: string; top?: string } }>(`/hosts/:hostId/monitoring/${view}`, {
       onRequest: [fastify.authenticate]
     }, async (request, reply) => {
       const hostId = parsePositiveId(request.params.hostId)
@@ -1335,8 +1406,12 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       const metric = request.query.metric ?? 'cpuUsagePercent'
       const orderBy = request.query.orderBy ?? 'avg'
       const name = request.query.name
-      if (view === 'instances/history' && !isMonitoringInstanceName(name)) {
-        return reply.code(400).send({ error: 'Valid instance name is required', code: 'AGENT_MONITORING_INVALID_NAME' })
+      const incusId = request.query.incusId
+      if (view === 'instances/history' && ((!name || !isMonitoringInstanceName(name)) && !isMonitoringInstanceId(incusId))) {
+        return reply.code(400).send({ error: 'Valid instance name or ID is required', code: 'AGENT_MONITORING_INVALID_NAME' })
+      }
+      if (view === 'instances/history' && incusId !== undefined && !isMonitoringInstanceId(incusId)) {
+        return reply.code(400).send({ error: 'Invalid instance ID', code: 'AGENT_MONITORING_INVALID_ID' })
       }
       if (!Number.isFinite(requestedFrom) || !Number.isFinite(requestedTo) || !Number.isFinite(from) || !Number.isFinite(to) || from >= to ||
         !Number.isInteger(limit) || limit < 1 || limit > 2000 || !Number.isInteger(resolutionSeconds) || resolutionSeconds < 30 || resolutionSeconds > 86400 ||
@@ -1348,7 +1423,7 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       const range = { from, to, limit, resolutionSeconds }
       try {
         reply.header('Cache-Control', 'no-store')
-        if (view === 'instances/history') return { hostId, ...readAgentInstanceHistory(agentId, range, name!, now) }
+        if (view === 'instances/history') return { hostId, ...readAgentInstanceHistory(agentId, range, name, now, incusId) }
         if (view === 'instances/top') return { hostId, ...readAgentInstanceTop(agentId, range, metric as InstanceMonitoringMetric, orderBy as 'avg' | 'max', top, now) }
         if (view === 'events') return { hostId, ...readAgentComponentEvents(agentId, range, now) }
         return { hostId, ...readAgentMonitoring(agentId, range, now) }
@@ -1682,6 +1757,51 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     })
   })
 
+  fastify.post<{ Body: AgentRealtimeBody }>('/monitoring/realtime', async (request, reply) => {
+    const agent = await authenticateRealtimeAgentRequest(request, reply)
+    if (!agent) return
+    const now = Date.now()
+    const bodyBytes = request.rawAgentBody?.byteLength ?? Buffer.byteLength(JSON.stringify(request.body ?? {}))
+    if (bodyBytes > 400 * 1024) return reply.code(413).send({ error: 'Realtime monitoring payload is too large', code: 'AGENT_MONITORING_TOO_LARGE' })
+    const points = normalizeRealtimeInstances(request.body, now)
+    if (!points) return reply.code(400).send({ error: 'Invalid realtime monitoring payload', code: 'AGENT_MONITORING_INVALID' })
+    const reportedIds = [...new Set(points.flatMap(point => point.incusId ? [point.incusId] : []))]
+    const reportedNames = [...new Set(points.flatMap(point => point.incusId ? [] : [point.name]))]
+    const instances = reportedIds.length + reportedNames.length === 0 ? [] : await prisma.instance.findMany({
+      where: {
+        hostId: agent.hostId,
+        status: { not: 'deleted' },
+        OR: [
+          ...(reportedIds.length > 0 ? [{ incusId: { in: reportedIds } }] : []),
+          ...(reportedNames.length > 0 ? [{ name: { in: reportedNames } }] : [])
+        ]
+      },
+      select: { id: true, name: true, incusId: true }
+    })
+    const byIncusId = new Map(instances.map(instance => [instance.incusId, instance]))
+    const byLegacyName = new Map<string, typeof instances[number]>()
+    for (const instance of instances) {
+      byLegacyName.set(instance.name, instance)
+    }
+    const accepted: InstancePoint[] = []
+    const cached: InstancePoint[] = []
+    for (const point of points) {
+      const instance = point.incusId ? byIncusId.get(point.incusId) : byLegacyName.get(point.name)
+      if (!instance) continue
+      const canonicalPoint = { ...point, name: instance.name, ...(point.incusId ? { incusId: instance.incusId } : {}) }
+      accepted.push(canonicalPoint)
+      cached.push(canonicalPoint)
+      const snapshot = {
+        sampledAt: new Date(point.sampledAt).toISOString(),
+        online: true,
+        metrics: point.metrics
+      }
+      publishInstanceMonitoring(instance.id, snapshot)
+    }
+    cacheAgentRealtimeInstances(agent.agentId, cached, now)
+    return { ok: true, acceptedInstances: accepted.length, serverTime: new Date(now).toISOString() }
+  })
+
   fastify.post<{ Body: AgentHeartbeatBody }>('/heartbeat', {
     schema: {
       body: {
@@ -1828,25 +1948,33 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       acceptedMonitoringSampleIds = ingestAgentMonitoring(agent.agentId, request.body.monitoring, now.getTime())
       if (acceptedMonitoringSampleIds.length > 0) {
         const monitoring = request.body.monitoring as Record<string, unknown> | undefined
-        const names = Array.isArray(monitoring?.samples)
+        const reported = Array.isArray(monitoring?.samples)
           ? monitoring.samples.flatMap(sample => {
             const value = sample as Record<string, unknown>
-            return Array.isArray(value.instances) ? value.instances.flatMap(instance => typeof instance === 'object' && instance !== null && typeof (instance as Record<string, unknown>).name === 'string' ? [(instance as Record<string, unknown>).name as string] : []) : []
+            return Array.isArray(value.instances) ? value.instances.flatMap(instance => {
+              if (typeof instance !== 'object' || instance === null) return []
+              const item = instance as Record<string, unknown>
+              return typeof item.name === 'string' ? [{ name: item.name, incusId: isMonitoringInstanceId(item.incusId) ? item.incusId : undefined }] : []
+            }) : []
           })
           : []
-        const monitoringNames = [...new Set(names)]
+        const reportedIds = [...new Set(reported.flatMap(item => item.incusId ? [item.incusId] : []))]
+        const reportedNames = [...new Set(reported.flatMap(item => item.incusId ? [] : [item.name]))]
         const instances = await prisma.instance.findMany({
           where: {
             hostId: agent.hostId,
             status: { not: 'deleted' },
-            OR: [{ incusId: { in: monitoringNames } }, { name: { in: monitoringNames } }]
+            OR: [
+              ...(reportedIds.length ? [{ incusId: { in: reportedIds } }] : []),
+              ...(reportedNames.length ? [{ name: { in: reportedNames } }] : [])
+            ]
           },
           select: { id: true, name: true, incusId: true }
         })
         for (const instance of instances) {
-          const primaryName = instance.incusId || instance.name
-          publishAgentInstanceMonitoring(agent.agentId, instance.id, primaryName, now.getTime())
-          if (instance.name !== primaryName) publishAgentInstanceMonitoring(agent.agentId, instance.id, instance.name, now.getTime())
+          if (reported.some(item => item.incusId ? item.incusId === instance.incusId : item.name === instance.name)) {
+            publishAgentInstanceMonitoring(agent.agentId, instance.id, instance.name, now.getTime(), instance.incusId)
+          }
         }
       }
     } catch (error) {

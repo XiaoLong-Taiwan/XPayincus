@@ -31,7 +31,6 @@ export function generateIncusConfig(params: IncusConfigParams): IncusConfigResul
     const vmParams: VmConfigParams = {
       instanceName: params.instanceName,
       imageAlias: params.imageAlias,
-      rootPassword: params.rootPassword,
       sshKey: params.sshKey,
       network: params.network,
       extraShellCommands: params.extraShellCommands,
@@ -42,7 +41,6 @@ export function generateIncusConfig(params: IncusConfigParams): IncusConfigResul
       configPayload: vmResult.configPayload,
       metaData: {
         sshPort: SSH_PORT,
-        rootPassword: params.rootPassword,
         osFamily: 'linux',
         imageAlias: params.imageAlias,
         instanceType: 'virtual-machine',

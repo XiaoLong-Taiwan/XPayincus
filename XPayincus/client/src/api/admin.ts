@@ -221,6 +221,7 @@ export interface VipBenefitAmountSummary {
 
 export interface VipBenefitOverviewResponse {
   currentLevel: number
+  orderDiscountPercent: number
   userVipMetric: UserVipMetric
   userStats: {
     totalRecharge: number
@@ -3439,7 +3440,6 @@ const api = {
         status: string
         user: { id: number; username: string }
         sshPort: number
-        rootPassword: string
         isPaid: boolean
         planName: string | null
         charged: boolean

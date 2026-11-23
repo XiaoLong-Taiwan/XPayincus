@@ -50,7 +50,6 @@ interface StaticNetworkConfig {
 export interface IncusConfigParams {
   instanceName: string
   imageAlias: string
-  rootPassword: string
   sshKey?: string
   type?: 'container' | 'virtual-machine'
   networkMode?: 'nat' | 'nat_ipv6' | 'nat_ipv6_nat' | 'ipv6_only' | 'ipv6_nat' | 'public_ipv4' | 'public_ipv4_ipv6'
@@ -62,7 +61,6 @@ export interface IncusConfigParams {
 
 export interface IncusConfigMetaData {
   sshPort: number
-  rootPassword: string
   osFamily: OsFamily
   imageAlias: string
   instanceType: 'container' | 'virtual-machine'
@@ -99,10 +97,6 @@ export function generateRandomPassword(length: number = 16): string {
     password += chars.charAt(crypto.randomInt(chars.length))
   }
   return password
-}
-
-function escapeForShellSingleQuote(str: string): string {
-  return str.replace(/'/g, "'\"'\"'")
 }
 
 function escapeForShellDoubleQuote(str: string): string {
@@ -313,12 +307,10 @@ function getSetupCommands(osInfo: OsInfo): string[] {
 
 function generateSetupScript(
   sshKey: string | undefined,
-  rootPassword: string,
   users: string[],
   osInfo: OsInfo
 ): string {
   const escapedKey = escapeForShellDoubleQuote(sshKey || '')
-  const escapedPassword = escapeForShellSingleQuote(rootPassword)
   const usersListForLoop = users.join(' ')
   const sshServiceName = osInfo.sshServiceName
 
@@ -333,16 +325,7 @@ function generateSetupScript(
 set -e
 
 SSH_KEY="${escapedKey}"
-ROOT_PASSWORD='${escapedPassword}'
 USERS="${usersListForLoop}"
-
-if echo "root:$ROOT_PASSWORD" | chpasswd >/dev/null 2>&1; then
-  :
-else
-  echo -e "$ROOT_PASSWORD\\n$ROOT_PASSWORD" | passwd root >/dev/null 2>&1 || true
-fi
-
-passwd -u root >/dev/null 2>&1 || usermod -U root >/dev/null 2>&1 || true
 
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
@@ -366,7 +349,6 @@ for u in $USERS; do
     fi
     chown -R "$u" "$HOMEDIR/.ssh" 2>/dev/null || true
     chmod 700 "$HOMEDIR/.ssh"
-    echo "$u:$ROOT_PASSWORD" | chpasswd >/dev/null 2>&1 || true
   fi
 done
 
@@ -489,9 +471,9 @@ ${dnsV6.map(d => `          - ${d}`).join('\n')}
 // ==================== 主函数 ====================
 
 export function generateContainerConfig(params: IncusConfigParams): IncusConfigResult {
-  const { imageAlias, rootPassword, sshKey, network, extraShellCommands, networkMode } = params
+  const { imageAlias, sshKey, network, extraShellCommands, networkMode } = params
 
-  if (!imageAlias || !rootPassword) throw new Error('Missing params')
+  if (!imageAlias) throw new Error('Missing params')
   if (sshKey && !isValidSshKey(sshKey)) throw new Error('Invalid SSH Key')
 
   const osInfo = detectOsInfo(imageAlias)
@@ -526,7 +508,7 @@ export function generateContainerConfig(params: IncusConfigParams): IncusConfigR
   ].join('\n')
 
   // 3. Scripts
-  const setupScript = generateSetupScript(sshKey, rootPassword, commonUsers, osInfo)
+  const setupScript = generateSetupScript(sshKey, commonUsers, osInfo)
   const setupCmds = getSetupCommands(osInfo)
 
   // 4. Runcmd
@@ -582,20 +564,10 @@ export function generateContainerConfig(params: IncusConfigParams): IncusConfigR
   const runcmdYaml = runcmd.map(cmd => `  - ${JSON.stringify(cmd)}`).join('\n')
   const bootcmdList = getBootcmd(osInfo)
   const bootcmdSection = bootcmdList.length > 0 ? `bootcmd:\n${bootcmdList.map(cmd => `  - ${cmd}`).join('\n')}\n` : ''
-  const yamlSafePassword = rootPassword.replace(/'/g, "''").replace(/\\/g, '\\\\')
   const sshPwauth = isAlpine ? 'false' : 'true'
   const packagesSection = packages.length > 0
     ? `packages:\n${packagesYaml}\n\n`
     : ''
-  const chpasswdSection = isAlpine
-    ? ''
-    : `chpasswd:
-  expire: false
-  list: |
-    root:${yamlSafePassword}
-
-`
-
   // 6. Network Config
   const networkConfigYaml = getNetworkConfig(network, shouldBlockSharedIpv6OnEth0)
 
@@ -608,7 +580,7 @@ timezone: Asia/Shanghai
 ssh_pwauth: ${sshPwauth}
 disable_root: false
 
-${packagesSection}${chpasswdSection}users:
+${packagesSection}users:
 ${usersYaml}
 
 write_files:
@@ -625,7 +597,6 @@ ${runcmdYaml}
     },
     metaData: {
       sshPort,
-      rootPassword,
       osFamily: osInfo.family,
       imageAlias,
       instanceType: 'container',

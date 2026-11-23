@@ -50,14 +50,14 @@ function goToStep(step: Step): void {
         v-for="step in props.steps"
         :key="step.id"
         type="button"
-        class="min-w-0 border-b-2 px-1 py-2 text-left text-xs transition-colors sm:px-2 sm:text-sm"
+        class="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 border-b-2 px-1 py-2 text-center text-xs transition-colors sm:flex-row sm:justify-start sm:px-2 sm:text-left sm:text-sm"
         :class="step.id === props.activeStep ? 'border-themed font-semibold text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
         :disabled="isCreating || step.id > props.activeStep"
         :aria-current="step.id === props.activeStep ? 'step' : undefined"
         :aria-label="`${step.label}${step.id < props.activeStep ? '，已完成' : step.id === props.activeStep ? '，目前步驟' : '，尚未完成'}`"
         @click="goToStep(step)"
       >
-        <span class="mr-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
+        <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
       </button>
     </nav>
 

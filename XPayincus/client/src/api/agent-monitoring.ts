@@ -15,7 +15,8 @@ export interface MonitoringCounterStats {
   resetCount: number
   count: number
   coverage: number
-  unit: 'microseconds'
+  partial: boolean
+  unit: 'microseconds' | 'bytes'
 }
 
 export const instanceMetrics = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond', 'rxBytesPerSecond', 'txBytesPerSecond'] as const
@@ -34,6 +35,7 @@ interface MonitoringResponse {
   capacityTruncated: boolean
 }
 export interface MonitoringHistory extends MonitoringResponse {
+  incomplete: boolean
   retentionDays: number
   resolutionSeconds: number
   summary: Record<string, MonitoringStats>
@@ -85,6 +87,10 @@ export const agentMonitoringApi = {
   instanceHistory: (hostId: number, query: MonitoringQuery, name: string, signal?: AbortSignal) => get<InstanceHistory>(hostId, 'instances/history', { ...query, name }, signal),
   top: (hostId: number, query: MonitoringQuery, metric: InstanceMetric, orderBy: 'avg' | 'max', top: number, signal?: AbortSignal) => get<InstanceTop>(hostId, 'instances/top', { ...query, metric, orderBy, top }, signal),
   events: (hostId: number, query: MonitoringQuery, signal?: AbortSignal) => get<ComponentEvents>(hostId, 'events', query, signal)
+}
+
+export function getOwnInstanceMonitoringHistory(instanceId: number, signal: AbortSignal): Promise<InstanceHistory> {
+  return http.get<InstanceHistory, InstanceHistory>(`/instances/${instanceId}/monitoring/history`, { signal, timeout: 30000 })
 }
 
 export async function createInstanceMonitoringStreamTicket(instanceId: number): Promise<{ ticket: string; expiresIn: number }> {

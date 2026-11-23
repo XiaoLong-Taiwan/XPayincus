@@ -14,6 +14,7 @@ import (
 
 const (
 	DefaultHeartbeatIntervalSeconds = 60
+	DefaultMonitoringIntervalSeconds = 3
 	MinHeartbeatIntervalSeconds     = 30
 	MaxHeartbeatIntervalSeconds     = 3600
 )
@@ -23,8 +24,10 @@ type Config struct {
 	AgentID                  string
 	AgentSecret              string
 	HeartbeatInterval        time.Duration
+	MonitoringInterval       time.Duration
 	RequestTimeout           time.Duration
 	HeartbeatIntervalSeconds int
+	MonitoringIntervalSeconds int
 	RequestTimeoutSeconds    int
 	StateDir                 string
 	SpoolMaxBytes            int
@@ -47,6 +50,7 @@ func Load(path string) (Config, error) {
 	overlayEnv(values, "agent_id", "INCUDAL_AGENT_ID")
 	overlayEnv(values, "agent_secret", "INCUDAL_AGENT_SECRET")
 	overlayEnv(values, "heartbeat_interval_seconds", "INCUDAL_HEARTBEAT_INTERVAL_SECONDS")
+	overlayEnv(values, "monitoring_interval_seconds", "INCUDAL_MONITORING_INTERVAL_SECONDS")
 	overlayEnv(values, "request_timeout_seconds", "INCUDAL_REQUEST_TIMEOUT_SECONDS")
 
 	heartbeatSeconds := clampInt(
@@ -54,6 +58,7 @@ func Load(path string) (Config, error) {
 		MinHeartbeatIntervalSeconds,
 		MaxHeartbeatIntervalSeconds,
 	)
+	monitoringSeconds := clampInt(parsePositiveInt(values["monitoring_interval_seconds"], DefaultMonitoringIntervalSeconds), 1, 60)
 	overlayEnv(values, "state_dir", "INCUDAL_AGENT_STATE_DIR")
 	overlayEnv(values, "spool_max_bytes", "INCUDAL_AGENT_SPOOL_MAX_BYTES")
 	overlayEnv(values, "spool_retention_hours", "INCUDAL_AGENT_SPOOL_RETENTION_HOURS")
@@ -68,10 +73,12 @@ func Load(path string) (Config, error) {
 		PanelURL:                 strings.TrimRight(values["panel_url"], "/"),
 		AgentID:                  values["agent_id"],
 		AgentSecret:              values["agent_secret"],
-		HeartbeatIntervalSeconds: heartbeatSeconds,
-		RequestTimeoutSeconds:    timeoutSeconds,
-		HeartbeatInterval:        time.Duration(heartbeatSeconds) * time.Second,
-		RequestTimeout:           time.Duration(timeoutSeconds) * time.Second,
+		HeartbeatIntervalSeconds:  heartbeatSeconds,
+		MonitoringIntervalSeconds: monitoringSeconds,
+		RequestTimeoutSeconds:     timeoutSeconds,
+		HeartbeatInterval:         time.Duration(heartbeatSeconds) * time.Second,
+		MonitoringInterval:        time.Duration(monitoringSeconds) * time.Second,
+		RequestTimeout:             time.Duration(timeoutSeconds) * time.Second,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -100,6 +107,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.HeartbeatInterval < time.Duration(MinHeartbeatIntervalSeconds)*time.Second {
 		return fmt.Errorf("heartbeat interval must be at least %d seconds", MinHeartbeatIntervalSeconds)
+	}
+	if cfg.MonitoringInterval < time.Second {
+		return errors.New("monitoring interval must be at least 1 second")
 	}
 	if cfg.RequestTimeout < time.Second {
 		return errors.New("request timeout must be at least 1 second")

@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '../db/prisma.js'
 import * as db from '../db/index.js'
-import { encryptSensitiveData, decryptSensitiveData } from './security.js'
+import { encryptSensitiveData } from './security.js'
 import { generateIncusConfig } from './incus-config-generator.js'
 import { generateRandomIPv6 } from './ip-calculator.js'
 import { networkModeNeedsNatIpv4, networkModeNeedsPublicIpv4, networkModeNeedsRoutedIpv6 } from './network-modes.js'
@@ -13,7 +13,7 @@ export interface DurableProvisionInput {
   userId: number
   resources: { cpu: number; memory: number; disk: number }
   config: ManagedInstanceProvisionConfig & { swapEnabled?: boolean; swapSize?: number | null }
-  preparation?: { displayName: string; sshKey: string; extraShellCommands?: string }
+  preparation?: { displayName: string; sshKey?: string; extraShellCommands?: string }
 }
 
 export async function createPreparingProvisionJob(tx: Prisma.TransactionClient, instanceId: number, input: DurableProvisionInput): Promise<void> {
@@ -63,8 +63,6 @@ export async function prepareDurableInstance(instanceId: number, host: Host, inp
   }
   const pool = await db.resolveStoragePoolForNewInstance(host.id, { packageId: instance.packageId })
   if (!pool) throw new Error('無可用系統儲存池')
-  const rootPassword = instance.rootPassword ? decryptSensitiveData(instance.rootPassword) : null
-  if (!rootPassword) throw new Error('交付密碼無法解密')
   const network = ipv4 ? {
     ipAddress: `${ipv4}/${assignment?.prefixLength ?? 22}`,
     gateway: assignment?.gateway || '10.10.0.1',
@@ -74,9 +72,9 @@ export async function prepareDurableInstance(instanceId: number, host: Host, inp
   } : undefined
   if (config.instanceType === 'vm') {
     const { generateVmConfig } = await import('./incus-config-vm.js')
-    config.cloudInitConfig = generateVmConfig({ instanceName: input.preparation.displayName, instanceIdSeed: config.name, imageAlias: config.image, rootPassword, sshKey: input.preparation.sshKey, network, networkMode: config.networkMode, extraShellCommands: input.preparation.extraShellCommands }).configPayload
+    config.cloudInitConfig = generateVmConfig({ instanceName: input.preparation.displayName, instanceIdSeed: config.name, imageAlias: config.image, sshKey: input.preparation.sshKey, network, networkMode: config.networkMode, extraShellCommands: input.preparation.extraShellCommands }).configPayload
   } else {
-    config.cloudInitConfig = generateIncusConfig({ instanceName: input.preparation.displayName, imageAlias: config.image, rootPassword, sshKey: input.preparation.sshKey, networkMode: config.networkMode, type: 'container', network, extraShellCommands: input.preparation.extraShellCommands }).configPayload
+    config.cloudInitConfig = generateIncusConfig({ instanceName: input.preparation.displayName, imageAlias: config.image, sshKey: input.preparation.sshKey, networkMode: config.networkMode, type: 'container', network, extraShellCommands: input.preparation.extraShellCommands }).configPayload
   }
   Object.assign(config, { ipv4Address: ipv4, ipv6Address: ipv6, ipv6Gateway: host.ipv6_gateway, hostInterface: host.ipv6_parent_interface || 'eth0', storagePool: pool })
   delete input.preparation

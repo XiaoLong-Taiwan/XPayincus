@@ -9,9 +9,9 @@ export function formatMemory(mb: number | null | undefined): string {
     if (!mb) return '0'
     if (mb >= 1024) {
         const gb = mb / 1024
-        return gb % 1 === 0 ? gb.toFixed(0) + ' GB' : gb.toFixed(1) + ' GB'
+        return Math.round(gb) + ' GB'
     }
-    return mb + ' MB'
+    return Math.round(mb) + ' MB'
 }
 
 /**

@@ -161,7 +161,7 @@ function formatTraffic(bytes: string | null | undefined): string {
           >
             {{ t('instance.selector.available') }}: {{ formatResourceDisplay(host.resources?.cpuAvailable, props.cpu, '%') }} / {{ formatMemoryDisplay(host.resources?.memoryAvailable, props.memory) }}
           </span>
-          <!-- 探针图标 -->
+          <!-- 探針圖示 -->
           <a
             v-if="host.probeUrl"
             :href="host.probeUrl"

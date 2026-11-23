@@ -19,7 +19,7 @@ const batchResult = ref<{ batchId: string; codes: GiftCardRecord[] } | null>(nul
 
 const form = ref({
   faceValue: 10,
-  balanceValue: null as number | null,
+  balanceValue: null as number | '' | null,
   count: 1,
   expiresAt: '',
   remark: ''
@@ -85,7 +85,7 @@ async function loadData(): Promise<void> {
 async function createCards(): Promise<void> {
   const count = Number(form.value.count)
   const faceValue = Number(form.value.faceValue)
-  const balanceValue = form.value.balanceValue === null || form.value.balanceValue === undefined
+  const balanceValue = form.value.balanceValue === null || form.value.balanceValue === undefined || form.value.balanceValue === ''
     ? undefined
     : Number(form.value.balanceValue)
   if (!Number.isFinite(faceValue) || faceValue <= 0 || !Number.isSafeInteger(count) || count < 1) {

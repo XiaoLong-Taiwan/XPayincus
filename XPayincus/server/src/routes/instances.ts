@@ -24,8 +24,10 @@ import {
   getTrafficCountersFromState
 } from '../lib/incus/index.js'
 import { deleteSnapshot } from '../lib/incus/incus-snapshots.js'
+import { changeIncusRootPassword, isValidInstanceRootPassword } from '../lib/incus/incus-root-password.js'
+import { getAgentTunnel } from '../lib/agent-tunnel.js'
 import { generateIncusConfig, generateRandomPassword } from '../lib/incus-config-generator.js'
-import { encryptSensitiveData, decryptSensitiveData, validateName } from '../lib/security.js'
+import { encryptSensitiveData, decryptSensitiveDataStrict, validateName } from '../lib/security.js'
 import {
   claimOperationVerificationRequirement
 } from '../lib/operation-verification.js'
@@ -1239,22 +1241,34 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
   }>, reply: FastifyReply) => {
     const { packageId, planId, image, cpu, memory, disk, hostId, sshKeyId, customInitCommandIds, promoCode, idempotencyKey } = request.body
     let { name, sshKey } = request.body
+    const initialRootPassword = request.body.password === undefined ? generateRandomPassword(16) : request.body.password
     const { user } = request
     const normalPaidIdempotencyKey = idempotencyKey?.trim() || null
 
     // ==================== 阶段一: 验证与校验 ====================
     name = typeof name === 'string' ? name.trim() : ''
 
+    if (request.body.password !== undefined && !isValidInstanceRootPassword(request.body.password)) {
+      return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS, '实例 root 密码格式无效'))
+    }
+
     await turnstileVerifier(request, reply)
     if (reply.sent) return
 
-    // 0. 处理 SSH 密钥：支持 sshKeyId 或直接传 sshKey
-    if (sshKeyId && !sshKey) {
+    // SSH 公鑰選填。只將金鑰類型及資料交給 cloud-init。
+    if (sshKeyId !== undefined) {
       const keyRecord = await db.getSSHKeyById(sshKeyId)
       if (!keyRecord || keyRecord.user_id !== user.id) {
         return reply.code(400).send(apiError(ErrorCode.SSH_KEY_NOT_OWNED))
       }
       sshKey = keyRecord.public_key
+    }
+    if (sshKey !== undefined) {
+      const match = /^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-dss) +([A-Za-z0-9+/]+={0,2})(?: +[^\r\n]*)?$/.exec(sshKey.trim())
+      if (!match || /[\u0000-\u001f\u007f]/.test(sshKey)) {
+        return reply.code(400).send(apiError(ErrorCode.INVALID_SSH_KEY))
+      }
+      sshKey = `${match[1]} ${match[2]}`
     }
 
     // 1. 验证套餐是否存在且可用
@@ -1434,12 +1448,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
 
     // 宿主机资源检查在 selectAvailableHost 中进行
 
-    // 3. 验证认证方式（必须提供 SSH 公钥）
-    // 注意：不再限制用户的实例配额，用户可以创建无限数量的实例
-    if (!sshKey) {
-      return reply.code(400).send(apiError(ErrorCode.SSH_KEY_REQUIRED))
-    }
-
     // 5. 验证镜像是否在预设列表中
     if (!await isValidSystemImage(image)) {
       return reply.code(400).send(apiError(ErrorCode.IMAGE_NOT_FOUND))
@@ -1598,11 +1606,9 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
 
     // ==================== 阶段三: 生成配置 =====================
     // SSH 端口固定为 22（不再使用随机端口）
-    const autoPassword = generateRandomPassword(16)
     const { configPayload, metaData } = generateIncusConfig({
       instanceName: name,
       imageAlias: actualImageAlias,
-      rootPassword: autoPassword,
       sshKey: sshKey,
       networkMode,
       type: effectiveInstanceType === 'vm' ? 'virtual-machine' : 'container',
@@ -1764,7 +1770,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
             networkMode,
             snapshottedSpecs: snapshotSpecs as any,
             sshPort: metaData.sshPort,
-            rootPassword: encryptSensitiveData(metaData.rootPassword),
+            rootPassword: encryptSensitiveData(initialRootPassword),
             status: 'creating',
             monthlyTrafficLimit: instanceQuota.monthlyTrafficLimit,
             portLimit: instanceQuota.portLimit,
@@ -2145,7 +2151,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         instanceName: name,
         instanceIdSeed: incusId,
         imageAlias: actualImageAlias,
-        rootPassword: metaData.rootPassword,
         sshKey: sshKey,
         network: staticIPv4 && ipv4Cidr ? {
           ipAddress: ipv4Cidr,
@@ -2163,7 +2168,6 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       const containerResult = generateIncusConfig({
         instanceName: name,
         imageAlias: actualImageAlias,
-        rootPassword: metaData.rootPassword,
         sshKey: sshKey,
         networkMode,
         type: 'container',
@@ -2281,8 +2285,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
         incusId,
         host: host.name,
         status: 'creating',
-        sshPort: metaData.sshPort,
-        rootPassword: metaData.rootPassword
+        sshPort: metaData.sshPort
       }
     })
     } finally {
@@ -2310,7 +2313,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     if (!instanceId) return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
     const job = await prisma.provisioningJob.findUnique({ where: { instanceId } })
     if (!job || job.status !== 'review_required') return reply.code(409).send({ error: '交付任務不允許重試' })
-    const payload = decryptSensitiveData(job.payload)
+    const payload = decryptSensitiveDataStrict(job.payload)
     if (!payload) return reply.code(409).send({ error: '無法解密交付準備資料' })
     let preparing: boolean
     try {
@@ -2740,8 +2743,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
     // 返回节点是否启用资源池玩法（用于前端显示兑换按钮）
     ; (response as any).enableResourcePool = host?.enable_resource_pool ?? false
 
-    // root_password should NEVER be returned in API responses
-    // It's only returned once during instance creation
+    // Do not return root_password in instance details. Use the dedicated credential endpoint.
 
     return { instance: response }
   })
@@ -2769,16 +2771,82 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 
-    // 解密并返回密码
-    if (instance.root_password) {
-      const decryptedPassword = decryptSensitiveData(instance.root_password)
-      return {
-        rootPassword: decryptedPassword
-      }
+    reply.header('Cache-Control', 'no-store, private').header('Pragma', 'no-cache')
+    if (!['running', 'stopped', 'frozen'].includes(instance.status)) {
+      return reply.code(409).send(apiError(ErrorCode.INVALID_PARAMS, '實例目前無法交付登入密碼'))
+    }
+    if (!instance.root_password) return { rootPassword: null }
+
+    const rootPassword = decryptSensitiveDataStrict(instance.root_password)
+    if (!rootPassword) {
+      return reply.code(409).send(apiError(ErrorCode.INVALID_PARAMS, '無法讀取實例登入密碼'))
+    }
+    return { rootPassword }
+  })
+
+  fastify.put<{ Params: { id: string }; Body: { newPassword?: unknown } }>('/:id/password', {
+    onRequest: [fastify.authenticate],
+    bodyLimit: 2048,
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store, private')
+    const instanceId = parsePositiveRouteId(request.params.id)
+    if (!instanceId || instanceId > 2147483647) return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
+    const newPassword = request.body?.newPassword
+    if (!isValidInstanceRootPassword(newPassword)) {
+      return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS, '密碼須為 12–128 個可列印 ASCII 字元，不得包含冒號或全部為空白'))
     }
 
-    return {
-      rootPassword: null
+    const { user } = request
+    let attempted = false
+    let guestConfirmed = false
+    try {
+      const result = await prisma.$transaction(async tx => {
+        if (!await tryAdvisoryTransactionLock(tx, INSTANCE_OPERATION_LOCK_NAMESPACE, instanceId)) return 'busy'
+        const [instance] = await tx.$queryRaw<Array<{ user_id: number; host_id: number; incus_id: string; status: string }>>`
+          SELECT user_id, host_id, incus_id, status FROM instances WHERE id = ${instanceId} FOR UPDATE
+        `
+        if (!instance || instance.status === 'deleted') return 'missing'
+        if (instance.user_id !== user.id && user.role !== 'admin') return 'forbidden'
+        if (instance.status !== 'running' || !instance.incus_id) return 'not_ready'
+
+        const [provisioning, instanceTask, restoreTask, transfer, maintenance] = await Promise.all([
+          tx.provisioningJob.findUnique({ where: { instanceId }, select: { status: true } }),
+          tx.instanceTask.findFirst({ where: { instanceId, status: { in: ['PENDING', 'PROCESSING'] } }, select: { id: true } }),
+          tx.restoreTask.findFirst({ where: { instanceId, status: { in: ['PENDING', 'PROCESSING'] } }, select: { id: true } }),
+          tx.instanceTransfer.findFirst({ where: { instanceId, status: 'processing' }, select: { id: true } }),
+          tx.hostMaintenancePlan.findFirst({ where: { status: { in: ['running', 'review_required', 'completed', 'recovering'] }, instanceIds: { array_contains: [instanceId] } }, select: { id: true } })
+        ])
+        if (provisioning && provisioning.status !== 'completed') return 'not_ready'
+        if (instanceTask || restoreTask || transfer || maintenance) return 'busy'
+
+        const encrypted = encryptSensitiveData(newPassword)
+        const tunnel = getAgentTunnel(instance.host_id)
+        attempted = true
+        await changeIncusRootPassword(tunnel, instance.incus_id, newPassword)
+        guestConfirmed = true
+        await tx.instance.update({ where: { id: instanceId }, data: { rootPassword: encrypted } })
+        return 'changed'
+      }, { maxWait: 2000, timeout: 30_000 })
+
+      if (result === 'missing') return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
+      if (result === 'forbidden') {
+        await createLog(user.id, 'instance', 'instance.password.change', 'Root password change denied', 'failed', { instanceId })
+        return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
+      }
+      if (result !== 'changed') {
+        return reply.code(409).send(apiError(ErrorCode.INVALID_PARAMS, result === 'busy'
+          ? '實例有其他操作正在進行' : '僅能為已交付且運行中的實例變更密碼'))
+      }
+      await createLog(user.id, 'instance', 'instance.password.change', 'Root password changed', 'success', { instanceId })
+      return reply.code(204).send()
+    } catch {
+      await createLog(user.id, 'instance', 'instance.password.change', guestConfirmed
+        ? 'Guest changed root password; panel credential update was not confirmed'
+        : attempted ? 'Guest root password change was not confirmed' : 'Root password change did not start', 'failed', { instanceId })
+      return reply.code(503).send(apiError(ErrorCode.INVALID_PARAMS, guestConfirmed
+        ? '實例已變更密碼，但面板未能確認儲存結果；請使用本次輸入的密碼驗證登入'
+        : attempted ? '無法確認實例是否已變更密碼；請先驗證登入，不要直接重送' : '目前無法變更密碼'))
     }
   })
 
@@ -6317,7 +6385,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       }
       const devices = instanceInfo.devices || {}
       const { generateVmNicMacs } = await import('../lib/vm-network-identifiers.js')
-      const generatedVmNicMacs = generateVmNicMacs(instance.incus_id)
+      const generatedVmNicMacs = generateVmNicMacs(instance.name)
 
       // 更新 eth1 设备的 IPv6 地址
       const eth1Device = devices['eth1'] || {
@@ -6590,7 +6658,7 @@ export async function processProvisioningJobs(): Promise<void> {
     for (const job of jobs) {
       try {
         if (activePreparations.has(job.instanceId)) continue
-        const payload = decryptSensitiveData(job.payload)
+        const payload = decryptSensitiveDataStrict(job.payload)
         if (!payload) throw new Error('Cannot decrypt provisioning payload')
         const input = JSON.parse(payload) as DurableProvisionInput
         if (!input || !Number.isSafeInteger(input.hostId) || !Number.isSafeInteger(input.userId) || !input.config || typeof input.config.name !== 'string' || !input.resources || [input.resources.cpu, input.resources.memory, input.resources.disk].some(value => !Number.isFinite(value) || value < 0)) throw new Error('交付任務資料不完整，保留等待核實')

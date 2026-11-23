@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
 import ts from 'typescript'
 import { testAgentMonitoringClient } from './test-agent-monitoring-client.js'
-import { aggregateMonitoring, aggregateMonitoringCounters, ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceName, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring } from '../src/services/agent-monitoring.js'
+import { aggregateMonitoring, aggregateMonitoringCounters, cacheAgentRealtimeInstances, ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceId, isMonitoringInstanceName, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceSnapshot, readAgentInstanceTop, readAgentMonitoring } from '../src/services/agent-monitoring.js'
 
 const directory = mkdtempSync(join(tmpdir(), 'agent-monitoring-'))
 const previousDirectory = process.env.INCUDAL_AGENT_STATE_DIR
@@ -16,7 +16,7 @@ const range = { from: now - 180000, to: now, resolutionSeconds: 60, limit: 1000 
 const sample = (id: string, at: number, value: number) => ({
   id: id.repeat(32), sampledAt: new Date(at).toISOString(),
   resources: { cpuUsagePercent: value, 'psi.cpu.some.avg10': value / 10 }, metrics: { heartbeatIntervalSeconds: 60 },
-  instances: [{ name: 'vm1', sampledAt: new Date(at).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: value, memoryUsedBytes: value * 1024, diskIOBytesPerSecond: value * 100, rxBytes: 999, txBytes: 998, rxBytesPerSecond: value * 10, txBytesPerSecond: value * 20 } }],
+  instances: [{ name: 'vm1', sampledAt: new Date(at).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: value, memoryUsedBytes: value * 1024, diskIOBytesPerSecond: value * 100, rxBytes: 1000 + value * 10, txBytes: 2000 + value * 20, rxBytesPerSecond: value * 10, txBytesPerSecond: value * 20 } }],
   events: [{ type: 'component-state', components: { zfs: { available: true, collectedAt: new Date(at).toISOString(), status: { moduleLoaded: true } } } }]
 })
 const envelope = { schemaVersion: 2, samples: [sample('a', now - 120000, 10), sample('b', now - 60000, 30)] }
@@ -36,6 +36,10 @@ try {
   assert.equal(instanceHistory.summary.txBytesPerSecond?.avg, 400)
   assert.equal(instanceHistory.summary.rxBytes, undefined)
   assert.equal(instanceHistory.summary.txBytes, undefined)
+  assert.equal(instanceHistory.summaryCounters.rxBytes?.delta, 200)
+  assert.equal(instanceHistory.summaryCounters.txBytes?.delta, 400)
+  assert.equal(instanceHistory.summaryCounters.rxBytes?.unit, 'bytes')
+  assert.equal(instanceHistory.summaryCounters.txBytes?.unit, 'bytes')
   assert.equal(instanceHistory.buckets.length, 2)
   assert.deepEqual(readAgentInstanceHistory('fixture', range, 'absent', now).summary, {})
   assert.deepEqual(readAgentInstanceHistory(null, range, 'vm1', now).buckets, [])
@@ -49,6 +53,37 @@ try {
   assert.equal(readAgentInstanceHistory('unknown-interval', range, 'vm1', now).summary.cpuUsagePercent?.coverage, 0)
   assert.equal(isMonitoringInstanceName('vm1'), true)
   assert.equal(isMonitoringInstanceName('vm/name'), false)
+  const idA = '11111111-1111-4111-8111-111111111111'
+  const idB = '22222222-2222-4222-8222-222222222222'
+  assert.equal(isMonitoringInstanceId(idA), true)
+  assert.equal(isMonitoringInstanceId('not-a-uuid'), false)
+  const identityTime = now - 1000
+  const identityPayload = {
+    schemaVersion: 2,
+    samples: [{
+      id: 'e'.repeat(32), sampledAt: new Date(identityTime).toISOString(),
+      instances: [
+        { name: 'same', incusId: idA, sampledAt: new Date(identityTime).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: 10, rxBytes: 1, txBytes: 2 } },
+        { name: 'same', incusId: idB, sampledAt: new Date(identityTime).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: 90, rxBytes: 3, txBytes: 4 } },
+        { name: 'other', incusId: idA, sampledAt: new Date(identityTime).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: 99, rxBytes: 5, txBytes: 6 } },
+        { name: 'legacy', incusId: 'invalid', sampledAt: new Date(identityTime).toISOString(), intervalSeconds: 60, metrics: { cpuUsagePercent: 20, rxBytes: 7, txBytes: 8 } }
+      ]
+    }]
+  }
+  ingestAgentMonitoring('identity-fixture', identityPayload, now)
+  assert.equal(readAgentInstanceHistory('identity-fixture', range, 'same', now, idA).summary.cpuUsagePercent?.avg, 10)
+  assert.equal(readAgentInstanceHistory('identity-fixture', range, 'same', now, idB).summary.cpuUsagePercent?.avg, 90)
+  assert.equal(readAgentInstanceHistory('identity-fixture', range, 'renamed', now, idA).summary.cpuUsagePercent?.avg, 10)
+  const missingId = '33333333-3333-4333-8333-333333333333'
+  assert.deepEqual(readAgentInstanceHistory('identity-fixture', range, 'legacy', now, missingId).summary, {})
+  assert.equal(readAgentInstanceHistory('identity-fixture', range, 'legacy', now).summary.cpuUsagePercent?.avg, 20)
+  assert.equal(readAgentInstanceTop('identity-fixture', range, 'cpuUsagePercent', 'avg', 10, now).items.length, 3)
+  cacheAgentRealtimeInstances('identity-fixture', [
+    { name: 'same', incusId: idA, sampledAt: identityTime, intervalSeconds: 60, metrics: { cpuUsagePercent: 11 } },
+    { name: 'same', incusId: idB, sampledAt: identityTime, intervalSeconds: 60, metrics: { cpuUsagePercent: 91 } }
+  ], now)
+  assert.equal(readAgentInstanceSnapshot('identity-fixture', 'same', now, idA)?.metrics.cpuUsagePercent, 11)
+  assert.equal(readAgentInstanceSnapshot('identity-fixture', 'same', now, idB)?.metrics.cpuUsagePercent, 91)
   assert.equal(readAgentComponentEvents('fixture', range, now).events.length, 1)
   assert.deepEqual(ingestAgentMonitoring('fixture', { schemaVersion: 1, samples: [] }, now), [])
   assert.deepEqual(ingestAgentMonitoring('fixture', { schemaVersion: 2, samples: [sample('c', now + 120000, 1)] }, now), [])
@@ -62,20 +97,21 @@ try {
   const counterKey = 'psi.cpu.some.total'
   const counters = [100, 160, 20, 50].map((value, index) => ({ sampledAt: range.from + index * 30000, intervalSeconds: 30, metrics: { [counterKey]: value } }))
   assert.deepEqual(aggregateMonitoring(counters, range.from, range.to), {})
-  assert.deepEqual(aggregateMonitoringCounters(counters, range.from, range.to)[counterKey], { first: 100, last: 50, delta: 90, resetCount: 1, count: 4, coverage: 1 / 3, unit: 'microseconds' })
+  assert.deepEqual(aggregateMonitoringCounters(counters, range.from, range.to)[counterKey], { first: 100, last: 50, delta: 90, resetCount: 1, count: 4, coverage: 1 / 3, partial: true, unit: 'microseconds' })
   assert.equal(aggregateMonitoringCounters(counters.slice(0, 1), range.from, range.to)[counterKey]?.coverage, 0)
   const reboot = counters.slice(0, 2).map((point, index) => ({ ...point, metrics: { ...point.metrics, uptimeSeconds: index ? 1 : 100 } }))
-  assert.equal(aggregateMonitoringCounters(reboot, range.from, range.to)[counterKey]?.delta, 0)
+  assert.deepEqual(aggregateMonitoringCounters(reboot, range.from, range.to)[counterKey], { first: 100, last: 160, delta: 0, resetCount: 1, count: 2, coverage: 0, partial: true, unit: 'microseconds' })
   const pressureSamples = counters.map((point, index) => ({ id: String(index + 1).repeat(32), sampledAt: new Date(point.sampledAt).toISOString(), resources: point.metrics }))
   ingestAgentMonitoring('pressure', { schemaVersion: 2, samples: pressureSamples }, now)
   const pressureHistory = readAgentMonitoring('pressure', range, now)
   assert.equal(pressureHistory.summary[counterKey], undefined)
   assert.equal(pressureHistory.summaryCounters[counterKey]?.delta, 90)
+  assert.equal(pressureHistory.incomplete, true)
   for (const name of readdirSync(directory)) {
     const journal = JSON.parse(readFileSync(join(directory, name), 'utf8'))
     for (const point of journal.samples ?? []) for (const instance of point.instances ?? []) {
-      assert.equal(instance.metrics.rxBytes, undefined)
-      assert.equal(instance.metrics.txBytes, undefined)
+      assert.equal(typeof instance.metrics.rxBytes, 'number')
+      assert.equal(typeof instance.metrics.txBytes, 'number')
       if (instance.name === 'vm1') {
         assert.equal(typeof instance.metrics.rxBytesPerSecond, 'number')
         assert.equal(typeof instance.metrics.txBytesPerSecond, 'number')
@@ -91,10 +127,10 @@ try {
     if (!request.headers['x-test-user']) return reply.code(401).send({ error: 'Unauthorized' })
     request.user = { id: Number(request.headers['x-test-user']), role: request.headers['x-test-role'] ?? 'user' }
   })
-  new Function('fastify', 'prisma', 'agentModel', 'parsePositiveId', 'instanceMonitoringKeys', 'readAgentInstanceTop', 'readAgentComponentEvents', 'readAgentMonitoring', 'isMonitoringInstanceName', 'readAgentInstanceHistory', compiled)(
+  new Function('fastify', 'prisma', 'agentModel', 'parsePositiveId', 'instanceMonitoringKeys', 'readAgentInstanceTop', 'readAgentComponentEvents', 'readAgentMonitoring', 'isMonitoringInstanceName', 'isMonitoringInstanceId', 'readAgentInstanceHistory', compiled)(
     app, { host: { findUnique: async ({ where }: any) => where.id === 1 ? { userId: 1 } : null } }, { findUnique: async () => ({ agentId: 'fixture' }) },
     (value: string) => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null,
-    instanceMonitoringKeys, readAgentInstanceTop, readAgentComponentEvents, readAgentMonitoring, isMonitoringInstanceName, readAgentInstanceHistory
+    instanceMonitoringKeys, readAgentInstanceTop, readAgentComponentEvents, readAgentMonitoring, isMonitoringInstanceName, isMonitoringInstanceId, readAgentInstanceHistory
   )
   for (const view of ['history', 'instances/top', 'events']) {
     const url = `/hosts/1/monitoring/${view}`

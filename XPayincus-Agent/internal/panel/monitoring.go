@@ -198,7 +198,11 @@ func (client *Client) queueMonitoring(payload map[string]any) ([]map[string]any,
 			continue
 		}
 		performance, _ := item["performance"].(map[string]any)
-		instances = append(instances, map[string]any{"name": name, "sampledAt": sampledAt, "intervalSeconds": performance["intervalSeconds"], "metrics": selectFields(performance, "cpuUsagePercent", "memoryUsedBytes", "diskReadBytesPerSecond", "diskWriteBytesPerSecond", "diskIOBytesPerSecond", "rxBytes", "txBytes", "rxBytesPerSecond", "txBytesPerSecond")})
+		record := map[string]any{"name": name, "sampledAt": sampledAt, "intervalSeconds": performance["intervalSeconds"], "metrics": selectFields(performance, "cpuUsagePercent", "memoryUsedBytes", "diskReadBytesPerSecond", "diskWriteBytesPerSecond", "diskIOBytesPerSecond", "rxBytes", "txBytes", "rxBytesPerSecond", "txBytesPerSecond")}
+		if incusID, ok := item["incusId"].(string); ok && incusUUIDPattern.MatchString(incusID) {
+			record["incusId"] = incusID
+		}
+		instances = append(instances, record)
 	}
 	return client.queueRecord(map[string]any{
 		"resources": payload["resources"], "metrics": payload["metrics"],

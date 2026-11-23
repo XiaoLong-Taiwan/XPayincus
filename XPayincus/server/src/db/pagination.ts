@@ -40,6 +40,8 @@ export interface PaginatedInstancesResponse<T> extends PaginatedResponse<T> {
   availableCountries: string[]
 }
 
+type PaginatedInstance = Omit<Instance, 'root_password'> & Record<string, unknown>
+
 type UserWithQuota = Prisma.UserGetPayload<{
   include: {
     quota: true
@@ -367,7 +369,7 @@ export async function getHostsPaginated(options: PaginationOptions = {}): Promis
 /**
  * 获取实例分页列表
  */
-export async function getInstancesPaginated(options: PaginationOptions = {}): Promise<PaginatedInstancesResponse<Instance>> {
+export async function getInstancesPaginated(options: PaginationOptions = {}): Promise<PaginatedInstancesResponse<PaginatedInstance>> {
   const { page, pageSize } = clampPagination(options.page, options.pageSize)
   const { search = '', userId = null, hostId = null, countryCode = null, status = null, sortBy = null, sortOrder = null } = options
 
@@ -517,7 +519,6 @@ export async function getInstancesPaginated(options: PaginationOptions = {}): Pr
       ipv6: i.ipv6,
       network_mode: i.networkMode,
       ssh_port: i.sshPort,
-      root_password: i.rootPassword,
       port_limit: i.portLimit,
       snapshot_limit: i.snapshotLimit,
       backup_limit: i.backupLimit,

@@ -35,4 +35,42 @@ assert.equal(
   'all Agent host status/history/install/credential route IDs must use strict positive parsing'
 )
 
+const realtimeStart = agentRouteSource.indexOf("fastify.post<{ Body: AgentRealtimeBody }>('/monitoring/realtime'")
+assert.notEqual(realtimeStart, -1, 'Agent realtime route not found')
+const heartbeatStart = agentRouteSource.indexOf("fastify.post<{ Body: AgentHeartbeatBody }>('/heartbeat'")
+assert.notEqual(heartbeatStart, -1, 'Agent heartbeat route not found')
+const realtimeSection = agentRouteSource.slice(realtimeStart, heartbeatStart)
+const heartbeatSection = agentRouteSource.slice(heartbeatStart)
+
+assert.ok(
+  realtimeSection.includes('...(reportedIds.length > 0 ? [{ incusId: { in: reportedIds } }] : [])') &&
+    realtimeSection.includes('...(reportedNames.length > 0 ? [{ name: { in: reportedNames } }] : [])'),
+  'realtime lookup must separate stable IDs from legacy names'
+)
+assert.ok(
+  !realtimeSection.includes('{ incusId: { in: reportedNames } }'),
+  'realtime name-only lookup must not query instance IDs'
+)
+assert.ok(
+  realtimeSection.includes('const byIncusId = new Map(instances.map(instance => [instance.incusId, instance]))') &&
+    realtimeSection.includes('byLegacyName.set(instance.name, instance)') &&
+    !realtimeSection.includes('byLegacyName.set(instance.incusId, instance)'),
+  'realtime mapping must use exact ID matching and name-only legacy fallback'
+)
+assert.ok(
+  realtimeSection.includes('point.incusId ? byIncusId.get(point.incusId) : byLegacyName.get(point.name)'),
+  'realtime payloads with IDs must not fall back to names'
+)
+assert.ok(
+  heartbeatSection.includes('...(reportedIds.length ? [{ incusId: { in: reportedIds } }] : [])') &&
+    heartbeatSection.includes('...(reportedNames.length ? [{ name: { in: reportedNames } }] : [])'),
+  'heartbeat lookup must separate stable IDs from legacy names'
+)
+assert.ok(
+  !heartbeatSection.includes('{ incusId: { in: reportedNames } }') &&
+    heartbeatSection.includes("item.incusId ? item.incusId === instance.incusId : item.name === instance.name") &&
+    !heartbeatSection.includes('item.name === instance.incusId'),
+  'heartbeat mapping must use exact ID matching and name-only legacy fallback'
+)
+
 console.log('agent route ID guard tests passed')

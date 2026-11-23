@@ -25,7 +25,7 @@ function section(sourceText: string, startPattern: string, endPattern: string): 
 const cleanupSection = section(
   source,
   'async function cleanupRecreatedInstanceRecords(',
-  '/**\n * 服务启动时清理僵尸任务'
+  'async function executeChangeHostTask('
 )
 
 assert.ok(
@@ -35,45 +35,70 @@ assert.ok(
   'recreate cleanup must delete port mappings and release host NAT port counters defensively'
 )
 
+const deliveryHelperSection = section(
+  source,
+  'async function ensureRunningAndDeliverRootPassword(',
+  'let workerInterval: ReturnType<typeof setInterval> | null = null'
+)
+
+assert.ok(
+  deliveryHelperSection.includes("state.status !== 'Running'") &&
+    deliveryHelperSection.includes('throw new Error') &&
+    deliveryHelperSection.includes('await changeIncusRootPassword'),
+  'root password delivery must require a confirmed Running guest before changing the password'
+)
+
 const recreateSection = section(
   source,
   'async function executeRecreateTask(',
-  '/**\n * 执行改节点任务'
+  'async function executeChangeHostTask('
 )
 
 assert.ok(
   recreateSection.includes('let oldInstanceDeleted = false') &&
-    recreateSection.includes('let newInstanceCreated = false') &&
+    recreateSection.includes("let replacementState: 'present' | 'absent' | 'unknown' = 'absent'") &&
+    recreateSection.includes('let replacementCleanupConfirmed = false') &&
     recreateSection.includes('let databaseSwitched = false'),
-  'recreate must track old/new/database switch state for failure compensation'
+  'recreate must track old/replacement/database switch state for failure compensation'
 )
 
 const deleteOld = indexOfOrThrow(recreateSection, 'await deleteInstance(client, oldIncusId)', 'old Incus delete')
 const markOldDeleted = indexOfOrThrow(recreateSection, 'oldInstanceDeleted = true', 'old deleted marker')
 const createNew = indexOfOrThrow(recreateSection, 'await createInstance(client, incusConfig)', 'new Incus create')
-const markNewCreated = indexOfOrThrow(recreateSection, 'newInstanceCreated = true', 'new created marker')
+const markReplacementPresent = indexOfOrThrow(recreateSection, "replacementState = 'present'", 'replacement present marker')
+const replacementLookup = indexOfOrThrow(recreateSection, 'await getInstance(client, newIncusId)', 'replacement existence lookup')
 const cleanupRecords = indexOfOrThrow(recreateSection, 'await cleanupRecreatedInstanceRecords(task.instanceId, instance.host_id)', 'recreate DB cleanup')
 const updateDb = indexOfOrThrow(recreateSection, 'await prisma.instance.update({', 'instance DB switch')
 const markDbSwitched = indexOfOrThrow(recreateSection, 'databaseSwitched = true', 'database switched marker')
 
 assert.ok(deleteOld < markOldDeleted, 'recreate must mark old deleted only after strict old Incus delete succeeds')
 assert.ok(markOldDeleted < createNew, 'recreate must create replacement only after old Incus is gone')
-assert.ok(createNew < markNewCreated, 'recreate must mark replacement created only after Incus create succeeds')
-assert.ok(markNewCreated < cleanupRecords, 'recreate must not delete old DB associations before replacement exists')
+assert.ok(createNew < markReplacementPresent, 'recreate must mark replacement present only after Incus create succeeds')
+assert.ok(
+  recreateSection.includes("password: ''"), 'recreate replacement config must not inject a root password during instance creation')
+const createCatchIndex = indexOfOrThrow(recreateSection, '} catch (createErr) {', 'ambiguous create catch')
+const createCatchSection = recreateSection.slice(createCatchIndex)
+assert.ok(createCatchSection.includes('await getInstance(client, newIncusId)'), 'recreate must check replacement existence after an ambiguous create failure')
+assert.ok(createCatchSection.includes("? 'absent' : 'unknown'"), 'recreate must distinguish not-found and other lookup failures')
+assert.ok(markReplacementPresent < cleanupRecords, 'recreate must not delete old DB associations before replacement exists')
 assert.ok(cleanupRecords < updateDb, 'recreate must clean stale associations before switching DB to replacement')
+const deliverPassword = indexOfOrThrow(recreateSection, 'await ensureRunningAndDeliverRootPassword(client, newIncusId, instance.host_id, newPassword)', 'replacement password delivery')
+assert.ok(deliverPassword < updateDb, 'recreate must deliver the root password before switching the instance database record')
 assert.ok(updateDb < markDbSwitched, 'recreate must mark DB switched only after instance update succeeds')
 
 const catchIndex = indexOfOrThrow(recreateSection, '} catch (err) {', 'recreate catch')
 const catchSection = recreateSection.slice(catchIndex)
 
 assert.ok(
-  catchSection.includes('if (!databaseSwitched && newInstanceCreated)') &&
-    catchSection.includes('await deleteInstance(client, newIncusId)'),
-  'recreate failure must clean up replacement Incus instance before DB switch'
+  catchSection.includes("failedReplacementState === 'present' || failedReplacementState === 'unknown'") &&
+    catchSection.includes('await deleteInstance(client, newIncusId)') &&
+    catchSection.includes('replacementCleanupConfirmed = true') &&
+    catchSection.includes('cleanupMessage.includes(\'not found\')'),
+  'recreate failure must clean present or unknown replacements and accept already-absent replacements'
 )
 
 assert.ok(
-  catchSection.includes('if (!databaseSwitched && oldInstanceDeleted)') &&
+  catchSection.includes('!databaseSwitched && oldInstanceDeleted && replacementCleanupConfirmed') &&
     catchSection.includes("status: 'error'") &&
     catchSection.includes('await prisma.ipAddress.deleteMany({ where: { instanceId: task.instanceId } })') &&
     catchSection.includes('await prisma.ipv6Subnet.deleteMany({ where: { instanceId: task.instanceId } })'),
@@ -83,7 +108,7 @@ assert.ok(
 const cloneSection = section(
   source,
   'async function executeCloneTask(',
-  '/**\n * 启动 Worker'
+  'export function startInstanceTaskWorker('
 )
 assert.ok(
   portMappingsSource.includes('excludedPorts: number[] = []') &&
