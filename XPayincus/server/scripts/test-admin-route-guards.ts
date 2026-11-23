@@ -307,6 +307,10 @@ function isAllowedPublicOrTokenRoute(route: RouteInfo): boolean {
   if (file === 'network-probe.ts') return path === '/targets' || path === '/prepare'
   if (file === 'help.ts') return !path.startsWith('/admin')
   if (file === 'agent.ts') {
+    if (path === '/monitoring/realtime') {
+      return route.method === 'POST'
+        && route.handler.includes('authenticateRealtimeAgentRequest(request, reply)')
+    }
     if (path === '/panel-trust/:phase') {
       return route.method === 'POST'
         && /const agent = await authenticateAgentRequest\(request, reply\)\s+if \(!agent\) return/.test(route.handler)

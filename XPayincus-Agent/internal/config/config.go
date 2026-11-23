@@ -58,7 +58,7 @@ func Load(path string) (Config, error) {
 		MinHeartbeatIntervalSeconds,
 		MaxHeartbeatIntervalSeconds,
 	)
-	monitoringSeconds := clampInt(parsePositiveInt(values["monitoring_interval_seconds"], DefaultMonitoringIntervalSeconds), 1, 60)
+	monitoringSeconds := clampInt(parseInt(values["monitoring_interval_seconds"], DefaultMonitoringIntervalSeconds), 1, 60)
 	overlayEnv(values, "state_dir", "INCUDAL_AGENT_STATE_DIR")
 	overlayEnv(values, "spool_max_bytes", "INCUDAL_AGENT_SPOOL_MAX_BYTES")
 	overlayEnv(values, "spool_retention_hours", "INCUDAL_AGENT_SPOOL_RETENTION_HOURS")
@@ -166,6 +166,14 @@ func overlayEnv(values map[string]string, key string, envName string) {
 func parsePositiveInt(value string, fallback int) int {
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func parseInt(value string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
 		return fallback
 	}
 	return parsed
