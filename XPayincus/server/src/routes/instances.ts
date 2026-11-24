@@ -3025,9 +3025,18 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
   })
 
   // 停止实例
-  fastify.post<{ Params: { id: string } }>('/:id/stop', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  fastify.post<{ Params: { id: string }; Body: { force?: boolean } }>('/:id/stop', {
+    onRequest: [fastify.authenticate],
+    preValidation: async (request) => {
+      if (request.body === undefined) request.body = {}
+    },
+    schema: {
+      body: {
+        type: 'object',
+        properties: { force: { type: 'boolean' } }
+      }
+    }
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: { force?: boolean } }>, reply: FastifyReply) => {
     const { id } = request.params
     const instanceId = parsePositiveRouteId(id)
 
@@ -3075,7 +3084,8 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       instanceId,
       hostId: instance.host_id,
       userId: user.id,
-      taskType: 'stop'
+      taskType: 'stop',
+      powerForce: request.body?.force ?? true
     })
     if (!task) return
 
@@ -3089,9 +3099,18 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
   })
 
   // 重启实例
-  fastify.post<{ Params: { id: string } }>('/:id/restart', {
-    onRequest: [fastify.authenticate]
-  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  fastify.post<{ Params: { id: string }; Body: { force?: boolean } }>('/:id/restart', {
+    onRequest: [fastify.authenticate],
+    preValidation: async (request) => {
+      if (request.body === undefined) request.body = {}
+    },
+    schema: {
+      body: {
+        type: 'object',
+        properties: { force: { type: 'boolean' } }
+      }
+    }
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: { force?: boolean } }>, reply: FastifyReply) => {
     const { id } = request.params
     const instanceId = parsePositiveRouteId(id)
 
@@ -3130,7 +3149,8 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       instanceId,
       hostId: instance.host_id,
       userId: user.id,
-      taskType: 'restart'
+      taskType: 'restart',
+      powerForce: request.body?.force ?? true
     })
     if (!task) return
 

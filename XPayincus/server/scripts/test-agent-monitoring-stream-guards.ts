@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { subscribeInstanceMonitoring, getInstanceMonitoringSubscriberCount, publishInstanceMonitoring } from '../src/lib/agent-monitoring-stream.js'
 import { consumeMonitoringStreamAccessTicket, generateMonitoringStreamAccessTicket, inspectMonitoringStreamAccessTicket } from '../src/lib/action-ticket.js'
-import { ingestAgentMonitoring, readAgentInstanceSnapshot, monitoringRetentionMs } from '../src/services/agent-monitoring.js'
+import { ingestAgentMonitoring, matchAgentMonitoringInstances, monitoringInstanceScope, monitoringRetentionMs, publishAgentInstanceMonitoring, readManagedInstanceHistory, readManagedInstanceSnapshot, type InstancePoint } from '../src/services/agent-monitoring.js'
+import { customerHostMetrics } from '../src/services/customer-host-status.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const routeSource = readFileSync(join(root, 'src/routes/agent-monitoring-stream.ts'), 'utf8')
@@ -15,12 +16,30 @@ const previousDirectory = process.env.INCUDAL_AGENT_STATE_DIR
 process.env.INCUDAL_AGENT_STATE_DIR = directory
 
 try {
+  const hostStatus = routeSource.slice(routeSource.indexOf("'/host-status'"), routeSource.indexOf("'/instances/:instanceId/monitoring/history'"))
+  assert.match(hostStatus, /onRequest: \[fastify\.authenticate\]/)
+  assert.match(hostStatus, /OR: \[\{ userId \}, \{ instances: \{ some: ownInstance \} \} \]/)
+  assert.match(hostStatus, /packageHosts: \{ where: \{ package: \{ userId \} \}/)
+  assert.match(hostStatus, /Cache-Control', 'no-store'/)
+  const hostNow = new Date()
+  const hostAgent = {
+    enabled: true, status: 'online', lastSeenAt: hostNow,
+    lastReport: { resources: { cpuUsagePercent: 31, memoryUsagePercent: 50, diskUsagePercent: 101, swapUsagePercent: 0,
+      hostRxBytesPerSecond: 321, hostTxBytesPerSecond: -1, cpuTotal: 8, memoryTotalMb: 16000 } }
+  }
+  assert.deepEqual(customerHostMetrics(hostAgent, hostNow), {
+    sampledAt: hostNow.toISOString(), cpuPercent: 31, ramPercent: 50, diskPercent: null, swapPercent: 0,
+    rxBytesPerSecond: 321, txBytesPerSecond: null
+  })
+  assert.deepEqual(customerHostMetrics(hostAgent, new Date(hostNow.getTime() + 121000)), customerHostMetrics(null, hostNow))
+  assert.deepEqual(customerHostMetrics({ ...hostAgent, enabled: false }, hostNow), customerHostMetrics(null, hostNow))
+
   const history = routeSource.slice(routeSource.indexOf("'/instances/:instanceId/monitoring/history'"), routeSource.indexOf("'/instances/:instanceId/monitoring/stream-ticket'"))
   assert.match(history, /onRequest: \[fastify\.authenticate\]/)
   assert.match(history, /instance\.userId !== request\.user\.id && request\.user\.role !== 'admin'/)
-  assert.ok(history.indexOf('readAgentInstanceHistory(') > history.indexOf('instance.userId !== request.user.id'))
+  assert.ok(history.indexOf('readManagedInstanceHistory(') > history.indexOf('instance.userId !== request.user.id'))
   assert.match(history, /from: now - 7 \* 86400000/)
-  assert.match(history, /instance\.name,[\s\S]*instance\.incusId \?\? undefined/)
+  assert.match(history, /readManagedInstanceHistory\(instance\.host\.agent\?\.agentId \?\? null, range, instance, otherMonitoringIdentifiers\(instance\), now\)/)
   assert.ok(routeSource.includes("'/instances/:instanceId/monitoring/stream'"))
   assert.ok(routeSource.includes("'/instances/:instanceId/monitoring/stream-ticket'"))
   assert.ok(routeSource.includes("text/event-stream"))
@@ -32,8 +51,9 @@ try {
   assert.ok(routeSource.includes('instance.userId !== request.user.id'))
   assert.ok(routeSource.includes("type: 'offline'"))
   assert.ok(routeSource.includes("response.on('close'"))
-  assert.ok(routeSource.includes('incusId: true'))
-  assert.match(routeSource, /readAgentInstanceSnapshot\([\s\S]*instance\.name,[\s\S]*instance\.incusId \?\? undefined/)
+  assert.match(routeSource, /readManagedInstanceSnapshot\(agentId, instance, otherMonitoringIdentifiers\(instance\)\)/)
+  assert.match(routeSource, /subscribeInstanceMonitoring\(scope, onEvent\)/)
+  assert.match(routeSource, /monitoringInstanceScope\(current\.host\.agent\?\.agentId \?\? null, current\) !== scope/)
   assert.ok(appSource.indexOf("fastify.register(agentMonitoringStreamRoutes") < appSource.indexOf("fastify.register(agentRoutes"))
   const agentRouteSource = readFileSync(join(root, 'src/routes/agent.ts'), 'utf8')
   assert.ok(agentRouteSource.includes("code: 'AGENT_HOST_NOT_VERIFIED'"))
@@ -44,37 +64,75 @@ try {
   assert.equal(monitoringRetentionMs, 7 * 86400000)
 
   const now = Date.now()
-  const sampleId = 'a'.repeat(32)
-  ingestAgentMonitoring('stream-fixture', {
+  const agentId = 'stream-fixture'
+  const uuid = '11111111-1111-4111-8111-111111111111'
+  const otherUuid = '22222222-2222-4222-8222-222222222222'
+  const instance = { id: 42, hostId: 1, userId: 7, name: 'shared-label', incusId: 'u7-physical', createdAt: new Date(now - 3600000) }
+  const neighbor = { ...instance, id: 43, userId: 8, incusId: 'u8-physical' }
+  const legacy = { ...instance, id: 44, incusId: uuid }
+  const rebuilt = { ...instance, incusId: 'u7-rebuilt' }
+  const transfer = { ...instance, userId: 8, incusId: 'u8-transferred' }
+  const reused = { ...instance, id: 45, userId: 8, createdAt: new Date(now - 500) }
+  const remote = { ...instance, hostId: 2 }
+  const point: InstancePoint = { name: instance.incusId, incusId: uuid, sampledAt: now - 1000, intervalSeconds: 60, metrics: { cpuUsagePercent: 25, rxBytes: 999, txBytes: 998 } }
+  const nameOnly: InstancePoint = { name: point.name, sampledAt: now - 2000, intervalSeconds: 60, metrics: point.metrics }
+  assert.deepEqual(matchAgentMonitoringInstances(1, [neighbor, remote, instance], [point, nameOnly]), [{ instance, point }])
+  assert.deepEqual(matchAgentMonitoringInstances(1, [instance], [nameOnly]), [{ instance, point: nameOnly }])
+  assert.deepEqual(matchAgentMonitoringInstances(1, [instance, neighbor], [{ ...point, name: instance.name }]), [])
+  assert.deepEqual(matchAgentMonitoringInstances(1, [instance, legacy], [point]), [])
+  assert.deepEqual(matchAgentMonitoringInstances(1, [instance, reused], [point]), [])
+  assert.deepEqual(matchAgentMonitoringInstances(1, [remote, reused, rebuilt], [point]), [])
+  const legacyPoint = { ...point, name: 'legacy-physical' }
+  assert.deepEqual(matchAgentMonitoringInstances(1, [legacy], [legacyPoint]), [{ instance: legacy, point: legacyPoint }])
+  assert.deepEqual(matchAgentMonitoringInstances(1, [legacy], [{ ...point, name: uuid, incusId: otherUuid }]), [])
+
+  const payload = {
     schemaVersion: 2,
     samples: [{
-      id: sampleId,
-      sampledAt: new Date(now - 1000).toISOString(),
-      metrics: { heartbeatIntervalSeconds: 60 },
-      instances: [{
-        name: 'vm1',
-        sampledAt: new Date(now - 1000).toISOString(),
-        intervalSeconds: 60,
-        metrics: { cpuUsagePercent: 25, memoryUsedBytes: 1024, rxBytesPerSecond: 128, txBytesPerSecond: 64, rxBytes: 999, txBytes: 998 }
-      }]
+      id: 'a'.repeat(32), sampledAt: new Date(point.sampledAt).toISOString(),
+      instances: [point, nameOnly, { ...point, name: neighbor.incusId, incusId: otherUuid, metrics: { cpuUsagePercent: 90 } }]
+        .map(value => ({ ...value, sampledAt: new Date(value.sampledAt).toISOString() }))
     }]
-  }, now)
-  assert.deepEqual(readAgentInstanceSnapshot('stream-fixture', 'vm1', now), {
-    sampledAt: new Date(now - 1000).toISOString(),
-    online: true,
-    metrics: { cpuUsagePercent: 25, memoryUsedBytes: 1024, rxBytesPerSecond: 128, txBytesPerSecond: 64, rxBytes: 999, txBytes: 998 }
-  })
-  assert.equal(readAgentInstanceSnapshot('stream-fixture', 'vm1', now + monitoringRetentionMs + 1), null)
+  }
+  const persisted: InstancePoint[][] = []
+  assert.deepEqual(ingestAgentMonitoring(agentId, payload, now, points => persisted.push(points)), ['a'.repeat(32)])
+  assert.deepEqual(ingestAgentMonitoring(agentId, payload, now, points => persisted.push(points)), ['a'.repeat(32)])
+  assert.equal(persisted.length, 1)
+  assert.deepEqual(persisted[0]?.[0], point)
+  const range = { from: now - 3600000, to: now, resolutionSeconds: 60, limit: 60 }
+  const noConflicts = new Set<string>()
+  assert.equal(readManagedInstanceHistory(agentId, range, instance, noConflicts, now).summary.cpuUsagePercent?.count, 2)
+  assert.equal(readManagedInstanceHistory(agentId, range, neighbor, noConflicts, now).summary.cpuUsagePercent?.avg, 90)
+  assert.equal(readManagedInstanceHistory(agentId, range, legacy, noConflicts, now).summary.cpuUsagePercent?.avg, 25)
+  assert.deepEqual(readManagedInstanceHistory(agentId, range, legacy, new Set([instance.incusId]), now).buckets, [])
+  assert.deepEqual(readManagedInstanceHistory(agentId, range, instance, new Set([instance.incusId]), now).buckets, [])
+  assert.equal(readManagedInstanceSnapshot(agentId, legacy, new Set([instance.incusId]), now), null)
+  assert.deepEqual(readManagedInstanceSnapshot(agentId, instance, noConflicts, now), { sampledAt: new Date(point.sampledAt).toISOString(), online: true, metrics: point.metrics })
+  for (const isolated of [rebuilt, transfer, reused]) {
+    assert.deepEqual(readManagedInstanceHistory(agentId, range, isolated, noConflicts, now).buckets, [])
+    assert.equal(readManagedInstanceSnapshot(agentId, isolated, noConflicts, now), null)
+  }
+  assert.equal(readManagedInstanceSnapshot('other-agent', instance, noConflicts, now), null)
+  assert.equal(readManagedInstanceSnapshot(agentId, instance, noConflicts, now + monitoringRetentionMs + 1), null)
 
+  const scope = monitoringInstanceScope(agentId, instance)
   const events: unknown[] = []
-  const unsubscribe = subscribeInstanceMonitoring(42, event => events.push(event))
-  assert.equal(getInstanceMonitoringSubscriberCount(42), 1)
-  publishInstanceMonitoring(42, { sampledAt: new Date(now).toISOString(), online: true, metrics: { cpuUsagePercent: 25 } })
-  publishInstanceMonitoring(42, { type: 'offline', online: false })
+  const unsubscribe = subscribeInstanceMonitoring(scope, event => events.push(event))
+  assert.equal(getInstanceMonitoringSubscriberCount(scope), 1)
+  const live = { ...point, sampledAt: now - 100, metrics: { cpuUsagePercent: 30 } }
+  publishAgentInstanceMonitoring(agentId, instance, live, now)
+  publishAgentInstanceMonitoring(agentId, instance, point, now)
+  assert.equal(readManagedInstanceSnapshot(agentId, instance, noConflicts, now)?.metrics.cpuUsagePercent, 30)
+  assert.equal(readManagedInstanceSnapshot(agentId, instance, new Set([uuid]), now)?.sampledAt, new Date(nameOnly.sampledAt).toISOString())
+  for (const isolated of [neighbor, rebuilt, transfer, reused, { ...instance, userId: 8 }]) {
+    publishAgentInstanceMonitoring(agentId, isolated, { ...live, name: isolated.incusId }, now)
+  }
+  publishAgentInstanceMonitoring('other-agent', remote, live, now)
+  publishInstanceMonitoring(scope, { type: 'offline', online: false })
   assert.equal(events.length, 2)
   assert.deepEqual(events[1], { type: 'offline', online: false })
   unsubscribe()
-  assert.equal(getInstanceMonitoringSubscriberCount(42), 0)
+  assert.equal(getInstanceMonitoringSubscriberCount(scope), 0)
 
   const ticket = generateMonitoringStreamAccessTicket(7, 42, 123, 'session-1')
   assert.deepEqual(consumeMonitoringStreamAccessTicket(ticket, 42), {

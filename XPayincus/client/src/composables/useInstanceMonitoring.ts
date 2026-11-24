@@ -1,9 +1,9 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { getOwnInstanceMonitoringHistory, createInstanceMonitoringStreamTicket, instanceMonitoringStreamUrl, type InstanceHistory, type InstanceMonitoringSample } from '@/api/agent-monitoring'
 
-const MAX_TREND_POINTS = 100
 const MAX_RECONNECT_ATTEMPTS = 5
 const MONITORING_FRESHNESS_MS = 120000
+const MAX_SAMPLE_CLOCK_SKEW_MS = 60000
 
 export function useInstanceMonitoring() {
   const sample = ref<InstanceMonitoringSample | null>(null)
@@ -19,28 +19,28 @@ export function useInstanceMonitoring() {
   let activeInstanceId = 0
   let generation = 0
   let connectionAttempt = 0
-  let points: InstanceMonitoringSample[] = []
 
   const isOffline = computed(() => status.value === 'offline')
 
-  function clearTimers() {
-    if (reconnectTimer) clearTimeout(reconnectTimer)
+  function clearStaleTimer() {
     if (staleTimer) clearTimeout(staleTimer)
-    reconnectTimer = null
     staleTimer = null
   }
 
-  function connect(instanceId: number, onSample?: (value: InstanceMonitoringSample) => void) {
+  function clearSample(nextStatus: 'offline' | 'reconnecting' | 'error') {
+    clearStaleTimer()
+    sample.value = null
+    status.value = nextStatus
+  }
+
+  function connect(instanceId: number) {
     disconnect()
     reconnectAttempt.value = 0
     activeInstanceId = instanceId
     const currentGeneration = ++generation
-    points = []
-    sample.value = null
-    trend.value = null
+    let lastSampledAt = -Infinity
     status.value = 'connecting'
     historyLoading.value = true
-    historyError.value = null
     const request = new AbortController()
     historyRequest = request
     void getOwnInstanceMonitoringHistory(instanceId, request.signal).then((result) => {
@@ -60,74 +60,83 @@ export function useInstanceMonitoring() {
       }
     })
 
+    function scheduleReconnect() {
+      reconnectAttempt.value += 1
+      if (reconnectAttempt.value > MAX_RECONNECT_ATTEMPTS) {
+        clearSample('offline')
+        return
+      }
+      clearSample('reconnecting')
+      reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
+    }
+
     const open = () => {
       if (generation !== currentGeneration || activeInstanceId !== instanceId) return
+      reconnectTimer = null
       const attempt = ++connectionAttempt
+      const isCurrentAttempt = () => generation === currentGeneration && attempt === connectionAttempt
       void createInstanceMonitoringStreamTicket(instanceId).then(({ ticket }) => {
-        if (generation !== currentGeneration || activeInstanceId !== instanceId || attempt !== connectionAttempt) return
+        if (!isCurrentAttempt()) return
         const eventSource = new EventSource(instanceMonitoringStreamUrl(instanceId, ticket), { withCredentials: true })
         source?.close()
         source = eventSource
-        eventSource.onopen = () => {
-          if (generation !== currentGeneration || attempt !== connectionAttempt) return
-          reconnectAttempt.value = 0
-          status.value = 'connected'
-          if (staleTimer) clearTimeout(staleTimer)
+        let receivedSample = false
+        const isCurrentSource = () => isCurrentAttempt() && source === eventSource
+        const scheduleExpiry = (delay: number) => {
+          clearStaleTimer()
           staleTimer = setTimeout(() => {
-            status.value = 'offline'
-          }, MONITORING_FRESHNESS_MS)
+            if (isCurrentSource()) clearSample('offline')
+          }, delay)
+        }
+        eventSource.onopen = () => {
+          if (!isCurrentSource() || sample.value) return
+          scheduleExpiry(MONITORING_FRESHNESS_MS)
         }
         eventSource.onmessage = (event) => {
-          if (generation !== currentGeneration || attempt !== connectionAttempt) return
+          if (!isCurrentSource()) return
           try {
-            const payload = JSON.parse(event.data) as InstanceMonitoringSample | { type: string; sample?: InstanceMonitoringSample; online?: boolean }
-            if ('type' in payload && payload.type === 'offline') {
-              status.value = 'offline'
+            const payload = JSON.parse(event.data) as InstanceMonitoringSample | { type: string; sample?: InstanceMonitoringSample; online?: boolean } | null
+            if (!payload || typeof payload !== 'object') return
+            if (payload.online === false || ('type' in payload && payload.type === 'offline')) {
+              clearSample('offline')
               return
             }
             const next: InstanceMonitoringSample | undefined = 'sampledAt' in payload
               ? payload
               : payload.sample
-            if (!next?.sampledAt || !next.metrics) return
-            if (next.online === false) {
-              status.value = 'offline'
+            if (next?.online === false) {
+              clearSample('offline')
               return
             }
+            if (next?.online !== true || typeof next.sampledAt !== 'string') return
+            const sampledAt = Date.parse(next.sampledAt)
+            const age = Date.now() - sampledAt
+            if (!Number.isFinite(sampledAt) || sampledAt < lastSampledAt || age < -MAX_SAMPLE_CLOCK_SKEW_MS) return
+            if (sampledAt === lastSampledAt && receivedSample) return
+            if (age >= MONITORING_FRESHNESS_MS) {
+              clearSample('offline')
+              return
+            }
+            if (!next.metrics || typeof next.metrics !== 'object' || Array.isArray(next.metrics) ||
+                !Object.values(next.metrics).some(value => Number.isFinite(value))) return
+            lastSampledAt = sampledAt
+            receivedSample = true
             sample.value = next
-            onSample?.(next)
             status.value = 'connected'
-            points.push(next)
-            if (points.length > MAX_TREND_POINTS) points = points.slice(-MAX_TREND_POINTS)
-            if (staleTimer) clearTimeout(staleTimer)
-            staleTimer = setTimeout(() => { status.value = 'offline' }, MONITORING_FRESHNESS_MS)
+            reconnectAttempt.value = 0
+            scheduleExpiry(MONITORING_FRESHNESS_MS - Math.max(0, age))
           } catch {
-            status.value = 'error'
+            clearSample('error')
           }
         }
         eventSource.onerror = () => {
-          if (generation !== currentGeneration || attempt !== connectionAttempt) {
-            eventSource.close()
-            return
-          }
           eventSource.close()
+          if (!isCurrentSource()) return
           source = null
-          reconnectAttempt.value += 1
-          if (reconnectAttempt.value > MAX_RECONNECT_ATTEMPTS) {
-            status.value = 'offline'
-            return
-          }
-          status.value = 'reconnecting'
-          reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
+          scheduleReconnect()
         }
       }).catch(() => {
-        if (generation !== currentGeneration || activeInstanceId !== instanceId || attempt !== connectionAttempt) return
-        reconnectAttempt.value += 1
-        if (reconnectAttempt.value > MAX_RECONNECT_ATTEMPTS) {
-          status.value = 'offline'
-          return
-        }
-        status.value = 'reconnecting'
-        reconnectTimer = setTimeout(open, Math.min(1000 * 2 ** (reconnectAttempt.value - 1), 16000))
+        if (isCurrentAttempt()) scheduleReconnect()
       })
     }
     open()
@@ -142,7 +151,11 @@ export function useInstanceMonitoring() {
     historyLoading.value = false
     source?.close()
     source = null
-    clearTimers()
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    reconnectTimer = null
+    clearSample('offline')
+    trend.value = null
+    historyError.value = null
   }
 
   onBeforeUnmount(disconnect)

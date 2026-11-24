@@ -256,6 +256,7 @@ export default {
         resources: 'Resources',
         support: 'Support',
         myHosts: 'My Hosts',
+        hostStatus: 'Host Status',
         myPackages: 'My Packages',
         myImages: 'My Images',
         logs: 'Logs',
@@ -305,6 +306,10 @@ export default {
         myPackageEdit: 'Edit Package',
         telegramSettings: 'Telegram Settings',
         adminCreateInstance: 'Admin Create Instance',
+    },
+
+    hostStatus: {
+        title: 'Host Status', description: 'Current resource usage for hosts across available plans.', country: 'Country', package: 'Package', allCountries: 'All countries', allPackages: 'All packages', hosts: 'Hosts', sampledAt: 'Updated {time}', cpu: 'CPU', ram: 'Memory', disk: 'Disk', swap: 'Swap', network: 'Network', receive: 'Receive', transmit: 'Transmit', noValue: 'Unavailable', loading: 'Loading host status...', empty: 'No hosts match these filters.', loadFailed: 'Failed to load host status. Please try again.', retry: 'Retry'
     },
 
     // Theme
@@ -1086,6 +1091,9 @@ export default {
             error: 'Error',
             deleted: 'Deleted',
         },
+        running: 'Running',
+        stopped: 'Stopped',
+        unknown: 'Unknown',
         statusFilter: {
             all: 'All Status',
         },
@@ -1500,6 +1508,13 @@ export default {
                 change_host: 'Changing host...',
             },
             actions: {
+                powerMenu: 'Power actions',
+                safeStopUnavailable: 'Graceful shutdown (unavailable)',
+                safeRestartRestricted: 'Graceful restart (node managers only)',
+                forceStop: 'Force shutdown',
+                forceRestart: 'Force restart',
+                confirmForcePower: 'Run “{action}” on “{name}”? Unsaved data may be lost.',
+                restarted: 'Instance restarted',
                 starting: 'Instance is starting',
                 stopped: 'Instance has been stopped',
                 restarting: 'Instance is restarting',
@@ -6462,6 +6477,7 @@ export default {
         searchNext: 'Next',
         searchPrevious: 'Previous',
         restore: 'Restore Terminal',
+        minimize: 'Minimize Terminal',
         exportLog: 'Export Log',
         // Multi-tab
         tab: 'Tab',

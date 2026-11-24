@@ -42,35 +42,24 @@ assert.notEqual(heartbeatStart, -1, 'Agent heartbeat route not found')
 const realtimeSection = agentRouteSource.slice(realtimeStart, heartbeatStart)
 const heartbeatSection = agentRouteSource.slice(heartbeatStart)
 
+const publisher = agentRouteSource.slice(agentRouteSource.indexOf('async function publishReportedInstanceMonitoring'), agentRouteSource.indexOf('export default async function agentRoutes'))
+assert.match(publisher, /point\.incusId \? \[point\.name, point\.incusId\] : \[point\.name\]/)
+assert.match(publisher, /where: \{ hostId: agent\.hostId, status: \{ not: 'deleted' \}, incusId: \{ in: identifiers \} \}/)
+assert.match(publisher, /matchAgentMonitoringInstances\(agent\.hostId, instances, fresh\)/)
+assert.match(realtimeSection, /await publishReportedInstanceMonitoring\(agent, points, now\)/)
+const realtimeNormalizerStart = agentRouteSource.indexOf('function normalizeRealtimeInstances')
+const realtimeNormalizerEnd = agentRouteSource.indexOf('\n}', realtimeNormalizerStart)
+const realtimeNormalizer = agentRouteSource.slice(realtimeNormalizerStart, realtimeNormalizerEnd)
 assert.ok(
-  realtimeSection.includes('...(reportedIds.length > 0 ? [{ incusId: { in: reportedIds } }] : [])') &&
-    realtimeSection.includes('...(reportedNames.length > 0 ? [{ name: { in: reportedNames } }] : [])'),
-  'realtime lookup must separate stable IDs from legacy names'
+  realtimeNormalizer.includes('const legacyInterval = raw.intervalSeconds') &&
+    realtimeNormalizer.includes('body.intervalSeconds') &&
+    realtimeNormalizer.includes(': 60') &&
+    realtimeNormalizer.includes('intervalSeconds: pointInterval, metrics'),
+  'realtime normalization must support legacy per-instance intervals and default missing intervals'
 )
-assert.ok(
-  !realtimeSection.includes('{ incusId: { in: reportedNames } }'),
-  'realtime name-only lookup must not query instance IDs'
-)
-assert.ok(
-  realtimeSection.includes('const byIncusId = new Map(instances.map(instance => [instance.incusId, instance]))') &&
-    realtimeSection.includes('byLegacyName.set(instance.name, instance)') &&
-    !realtimeSection.includes('byLegacyName.set(instance.incusId, instance)'),
-  'realtime mapping must use exact ID matching and name-only legacy fallback'
-)
-assert.ok(
-  realtimeSection.includes('point.incusId ? byIncusId.get(point.incusId) : byLegacyName.get(point.name)'),
-  'realtime payloads with IDs must not fall back to names'
-)
-assert.ok(
-  heartbeatSection.includes('...(reportedIds.length ? [{ incusId: { in: reportedIds } }] : [])') &&
-    heartbeatSection.includes('...(reportedNames.length ? [{ name: { in: reportedNames } }] : [])'),
-  'heartbeat lookup must separate stable IDs from legacy names'
-)
-assert.ok(
-  !heartbeatSection.includes('{ incusId: { in: reportedNames } }') &&
-    heartbeatSection.includes("item.incusId ? item.incusId === instance.incusId : item.name === instance.name") &&
-    !heartbeatSection.includes('item.name === instance.incusId'),
-  'heartbeat mapping must use exact ID matching and name-only legacy fallback'
-)
+assert.match(realtimeNormalizer, /if \(body\.intervalSeconds !== undefined && intervalSeconds === null\) return null/)
+assert.match(realtimeNormalizer, /if \(now - sampledAt > monitoringFreshnessMs\) continue/)
+assert.match(heartbeatSection, /ingestAgentMonitoring\(agent\.agentId, request\.body\.monitoring, now\.getTime\(\), points => \{ persistedMonitoringPoints = points \}\)/)
+assert.match(heartbeatSection, /await publishReportedInstanceMonitoring\(agent, persistedMonitoringPoints, now\.getTime\(\)\)/)
 
 console.log('agent route ID guard tests passed')

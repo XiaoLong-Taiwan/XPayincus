@@ -628,6 +628,10 @@ export interface RenewalForecast {
 }
 
 const api = {
+  hostStatus: {
+    list: (): Promise<{ hosts: Array<{ id: number; countryCode: string | null; packages: Array<{ id: number; name: string }>; sampledAt: string | null; cpuPercent: number | null; ramPercent: number | null; diskPercent: number | null; swapPercent: number | null; rxBytesPerSecond: number | null; txBytesPerSecond: number | null }> }> =>
+      http.get('/host-status')
+  },
   operations: {
     tasks: (params: { page: number; pageSize: number }): Promise<{ items: OperationTask[]; total: number }> =>
       http.get('/operations/tasks', { params }),
@@ -752,10 +756,10 @@ const api = {
     // 实例操作任务（异步模式）
     start: (id: number): Promise<{ message: string; taskId: number; status: string }> =>
       http.post(`/instances/${id}/start`, {}),
-    stop: (id: number): Promise<{ message: string; taskId: number; status: string }> =>
-      http.post(`/instances/${id}/stop`, {}),
-    restart: (id: number): Promise<{ message: string; taskId: number; status: string }> =>
-      http.post(`/instances/${id}/restart`, {}),
+    stop: (id: number, force = true): Promise<{ message: string; taskId: number; status: string }> =>
+      http.post(`/instances/${id}/stop`, { force }),
+    restart: (id: number, force = true): Promise<{ message: string; taskId: number; status: string }> =>
+      http.post(`/instances/${id}/restart`, { force }),
     // 获取实例的活跃任务
     getActiveTask: (id: number): Promise<{
       task: {

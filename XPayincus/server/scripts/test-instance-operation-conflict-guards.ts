@@ -8,6 +8,8 @@ const __dirname = dirname(__filename)
 
 const instancesSource = readFileSync(resolve(__dirname, '../src/routes/instances.ts'), 'utf8')
 const dbInstancesSource = readFileSync(resolve(__dirname, '../src/db/instances.ts'), 'utf8')
+const instanceTasksSource = readFileSync(resolve(__dirname, '../src/db/instance-tasks.ts'), 'utf8')
+const instanceTaskWorkerSource = readFileSync(resolve(__dirname, '../src/workers/instanceTaskWorker.ts'), 'utf8')
 const hostsSource = readFileSync(resolve(__dirname, '../src/routes/hosts.ts'), 'utf8')
 
 function sectionBetween(source: string, startMarker: string, endMarker: string): string {
@@ -53,6 +55,36 @@ for (const [name, startMarker, endMarker] of guardedUserRoutes) {
     `${name} route must reject active restore/upload/instance workflows before queueing an instance task`
   )
 }
+
+for (const [name, startMarker, endMarker, taskType] of [
+  ['stop', '// 停止实例', '// 重启实例', 'stop'],
+  ['restart', '// 重启实例', '// 封停实例', 'restart']
+]) {
+  const routeSection = sectionBetween(instancesSource, startMarker, endMarker)
+  assert.match(
+    routeSection,
+    /preValidation: async \(request\) => \{\s*if \(request\.body === undefined\) request\.body = \{\}\s*\}/,
+    `${name} route must normalize only an absent body before Fastify validates the object schema`
+  )
+  assert.ok(
+    routeSection.includes('Body: { force?: boolean }') &&
+      routeSection.includes("force: { type: 'boolean' }") &&
+      routeSection.includes(`taskType: '${taskType}'`) &&
+      routeSection.includes('powerForce: request.body?.force ?? true') &&
+      routeSection.includes('checkInstanceOperationPermission(user, instance)') &&
+      routeSection.includes('checkTransferLock(instanceId, reply)') &&
+      routeSection.includes('rejectActiveInstanceWorkflowConflict(reply, instanceId)'),
+    `${name} route must validate optional force and retain the existing permission and operation guards`
+  )
+}
+
+assert.ok(
+  instanceTasksSource.includes('powerForce: data.powerForce ?? true') &&
+    instanceTaskWorkerSource.includes('task.powerForce ?? true') &&
+    instanceTaskWorkerSource.includes('stopInstance(client, instance.incus_id, task.powerForce ?? true') &&
+    instanceTaskWorkerSource.includes('restartInstance(client, instance.incus_id, task.powerForce ?? true'),
+  'instance task creation and workers must default missing power force values to true'
+)
 
 const rebuildRoute = sectionBetween(instancesSource, '// 重装系统', '// 重建实例')
 assert.ok(

@@ -851,10 +851,10 @@ const api = {
     // 实例操作任务（异步模式）
     start: (id: number): Promise<{ message: string; taskId: number; status: string }> =>
       http.post(`/instances/${id}/start`, {}),
-    stop: (id: number): Promise<{ message: string; taskId: number; status: string }> =>
-      http.post(`/instances/${id}/stop`, {}),
-    restart: (id: number): Promise<{ message: string; taskId: number; status: string }> =>
-      http.post(`/instances/${id}/restart`, {}),
+    stop: (id: number, force = true): Promise<{ message: string; taskId: number; status: string }> =>
+      http.post(`/instances/${id}/stop`, { force }),
+    restart: (id: number, force = true): Promise<{ message: string; taskId: number; status: string }> =>
+      http.post(`/instances/${id}/restart`, { force }),
     // 获取实例的活跃任务
     getActiveTask: (id: number): Promise<{
       task: {

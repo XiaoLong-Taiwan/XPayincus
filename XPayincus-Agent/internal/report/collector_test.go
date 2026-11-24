@@ -1,12 +1,60 @@
 package report
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestIncusCollectionReportsExpiredContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	report := collectIncusInstanceReportContext(ctx)
+	if report["available"] != false || report["deadlineExceeded"] != true {
+		t.Fatalf("expired collection context was not reported: %#v", report)
+	}
+}
+
+func TestCollectorPublishesCompletedSnapshotAtomically(t *testing.T) {
+	previous := cachedInstances()
+	t.Cleanup(func() { replaceCachedInstances(previous) })
+	want := map[string]any{"available": true, "items": []any{map[string]any{"name": "vm1"}}}
+	publishInstanceReport(want)
+	got := cachedInstances()
+	if got["available"] != true || len(got["items"].([]any)) != 1 {
+		t.Fatalf("collector snapshot was not published: %#v", got)
+	}
+}
+
+func TestCollectorKeepsPreviousSnapshotWithoutUsableInventory(t *testing.T) {
+	previous := cachedInstances()
+	t.Cleanup(func() { replaceCachedInstances(previous) })
+	publishInstanceReport(map[string]any{"available": true, "items": []any{map[string]any{"name": "vm1"}}})
+	tests := []struct {
+		name   string
+		report map[string]any
+	}{
+		{name: "unavailable", report: map[string]any{"available": false, "items": []any{}}},
+		{name: "deadline exceeded", report: map[string]any{"available": true, "deadlineExceeded": true, "items": []any{}}},
+		{name: "invalid item", report: map[string]any{"available": true, "items": []any{"vm1"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			publishInstanceReport(test.report)
+			items := cachedInstances()["items"].([]any)
+			if len(items) != 1 || items[0].(map[string]any)["name"] != "vm1" {
+				t.Fatalf("previous inventory was overwritten: %#v", items)
+			}
+		})
+	}
+	publishInstanceReport(map[string]any{"available": true, "items": []any{}})
+	if items := cachedInstances()["items"].([]any); len(items) != 0 {
+		t.Fatalf("empty inventory did not clear previous instances: %#v", items)
+	}
+}
 
 func TestInstancePagesCoverMoreThanFiveHundred(t *testing.T) {
 	instances := make([]incusInstanceSummary, 1201)

@@ -7,8 +7,10 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +24,19 @@ var hostNetworkInterfaces = net.Interfaces
 var hostInterfaceAddresses = func(iface net.Interface) ([]net.Addr, error) { return iface.Addrs() }
 var hostIpv6DefaultInterface = readIpv6DefaultInterface
 var hostIncusStoragePools = collectIncusStoragePools
+var hostNetworkCounters = readHostNetworkCounters
+
+type hostNetworkSnapshot struct {
+	at time.Time
+	rx uint64
+	tx uint64
+	interfaces string
+}
+
+var hostNetworkRateCache = struct {
+	sync.Mutex
+	value hostNetworkSnapshot
+}{ }
 
 func HeartbeatPayload(version string, heartbeatIntervalSeconds int) map[string]any {
 	instances := cachedInstances()
@@ -227,7 +242,79 @@ func collectResources() map[string]any {
 	for key, value := range collectPressure() {
 		resources[key] = value
 	}
+	for key, value := range hostNetworkRates(time.Now()) {
+		resources[key] = value
+	}
 	return resources
+}
+
+func hostNetworkRates(now time.Time) map[string]any {
+	current, ok := hostNetworkCounters()
+	if !ok {
+		return map[string]any{}
+	}
+	interfaces := make([]string, 0, len(current))
+	var rx uint64
+	var tx uint64
+	for name, counters := range current {
+		interfaces = append(interfaces, name)
+		rx += counters.rx
+		tx += counters.tx
+	}
+	sort.Strings(interfaces)
+	currentSnapshot := hostNetworkSnapshot{at: now, rx: rx, tx: tx, interfaces: strings.Join(interfaces, "\x00")}
+	hostNetworkRateCache.Lock()
+	defer hostNetworkRateCache.Unlock()
+	previous := hostNetworkRateCache.value
+	hostNetworkRateCache.value = currentSnapshot
+	if previous.at.IsZero() || previous.interfaces != currentSnapshot.interfaces {
+		return map[string]any{}
+	}
+	elapsed := now.Sub(previous.at).Seconds()
+	if elapsed <= 0 || elapsed > 3600 || currentSnapshot.rx < previous.rx || currentSnapshot.tx < previous.tx {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"hostRxBytesPerSecond": float64(currentSnapshot.rx-previous.rx) / elapsed,
+		"hostTxBytesPerSecond": float64(currentSnapshot.tx-previous.tx) / elapsed,
+	}
+}
+
+type hostNetworkCounter struct {
+	rx uint64
+	tx uint64
+}
+
+func readHostNetworkCounters() (map[string]hostNetworkCounter, bool) {
+	content, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return nil, false
+	}
+	result := map[string]hostNetworkCounter{}
+	for _, line := range strings.Split(string(content), "\n") {
+		name, raw, ok := strings.Cut(line, ":")
+		if !ok || !isReportableHostInterface(strings.TrimSpace(name)) {
+			continue
+		}
+		fields := strings.Fields(raw)
+		if len(fields) < 9 {
+			continue
+		}
+		rx, rxErr := strconv.ParseUint(fields[0], 10, 64)
+		tx, txErr := strconv.ParseUint(fields[8], 10, 64)
+		if rxErr != nil || txErr != nil {
+			continue
+		}
+		result[strings.TrimSpace(name)] = hostNetworkCounter{rx: rx, tx: tx}
+	}
+	return result, true
+}
+
+func isReportableHostInterface(name string) bool {
+	if name == "" || name == "lo" || strings.HasPrefix(name, "veth") || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "virbr") || strings.HasPrefix(name, "docker") || strings.HasPrefix(name, "incusbr") {
+		return false
+	}
+	return true
 }
 
 func collectMetrics(heartbeatIntervalSeconds int) map[string]any {

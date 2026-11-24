@@ -1,16 +1,61 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { prisma } from '../db/prisma.js'
 import { subscribeInstanceMonitoring, type InstanceMonitoringStreamEvent } from '../lib/agent-monitoring-stream.js'
-import { monitoringFreshnessMs, readAgentInstanceHistory, readAgentInstanceSnapshot } from '../services/agent-monitoring.js'
+import { monitoringFreshnessMs, monitoringInstanceScope, monitoringInstanceSelect, readManagedInstanceHistory, readManagedInstanceSnapshot } from '../services/agent-monitoring.js'
 import { consumeMonitoringStreamAccessTicket, generateMonitoringStreamAccessTicket, inspectMonitoringStreamAccessTicket } from '../lib/action-ticket.js'
 import { isAccessTokenInvalidated } from '../lib/security.js'
+import { customerHostMetrics } from '../services/customer-host-status.js'
 
 const positiveIdPattern = /^[1-9]\d*$/
+const streamInstanceSelect = { ...monitoringInstanceSelect, status: true, host: { select: { agent: { select: { agentId: true } } } } } as const
+const snapshotInstanceSelect = {
+  ...streamInstanceSelect,
+  host: { select: {
+    ...streamInstanceSelect.host.select,
+    instances: { where: { status: { not: 'deleted' } }, select: { id: true, incusId: true } }
+  } }
+} as const
+
+function otherMonitoringIdentifiers(instance: { id: number; host: { instances: { id: number; incusId: string }[] } }): Set<string> {
+  return new Set(instance.host.instances.filter(other => other.id !== instance.id).map(other => other.incusId))
+}
+
 function writeEvent(response: NodeJS.WritableStream, event: InstanceMonitoringStreamEvent): void {
   response.write(`data: ${JSON.stringify(event)}\n\n`)
 }
 
 export default async function agentMonitoringStreamRoutes(fastify: FastifyInstance) {
+  fastify.get('/host-status', {
+    onRequest: [fastify.authenticate],
+    config: { rateLimit: { max: 12, timeWindow: '1 minute' } }
+  }, async (request, reply) => {
+    const userId = request.user.id
+    const ownInstance = { userId, status: { not: 'deleted' as const } }
+    const packageLabel = { id: true, name: true } as const
+    const hosts = await prisma.host.findMany({
+      where: { OR: [{ userId }, { instances: { some: ownInstance } }] },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        countryCode: true,
+        agent: { select: { enabled: true, status: true, lastSeenAt: true, lastReport: true } },
+        instances: { where: ownInstance, distinct: ['packageId'], select: { package: { select: packageLabel } } },
+        packageHosts: { where: { package: { userId } }, select: { package: { select: packageLabel } } }
+      }
+    })
+    const now = new Date()
+    reply.header('Cache-Control', 'no-store')
+    return {
+      hosts: hosts.map(host => {
+        const packages = new Map<number, { id: number; name: string }>()
+        for (const row of [...host.packageHosts, ...host.instances]) {
+          if (row.package) packages.set(row.package.id, row.package)
+        }
+        return { id: host.id, countryCode: host.countryCode, packages: [...packages.values()], ...customerHostMetrics(host.agent, now) }
+      })
+    }
+  })
+
   fastify.get<{ Params: { instanceId: string } }>('/instances/:instanceId/monitoring/history', { onRequest: [fastify.authenticate] }, async (request, reply) => {
     const instanceId = Number(request.params.instanceId)
     if (!positiveIdPattern.test(request.params.instanceId) || !Number.isSafeInteger(instanceId) || instanceId > 2147483647) {
@@ -18,25 +63,18 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
     }
     const instance = await prisma.instance.findUnique({
       where: { id: instanceId },
-      select: { userId: true, hostId: true, incusId: true, name: true, status: true }
+      select: { ...snapshotInstanceSelect, name: true }
     })
     if (!instance || instance.status === 'deleted' || (instance.userId !== request.user.id && request.user.role !== 'admin')) {
       return reply.code(404).send({ error: 'Instance not found', code: 'INSTANCE_NOT_FOUND' })
     }
-    const agent = await prisma.hostAgent.findUnique({ where: { hostId: instance.hostId }, select: { agentId: true } })
     const now = Date.now()
     const range = { from: now - 7 * 86400000, to: now, resolutionSeconds: 3600, limit: 169 }
     reply.header('Cache-Control', 'no-store')
     try {
       return {
         hostId: instance.hostId,
-        ...readAgentInstanceHistory(
-          agent?.agentId ?? null,
-          range,
-          instance.name,
-          now,
-          instance.incusId ?? undefined
-        )
+        ...readManagedInstanceHistory(instance.host.agent?.agentId ?? null, range, instance, otherMonitoringIdentifiers(instance), now)
       }
     } catch (error) {
       request.log.warn({ error, instanceId }, 'Instance monitoring storage unavailable')
@@ -76,26 +114,23 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
     if (!user || user.status !== 'active') return reply.code(401).send({ error: 'Unauthorized', code: 'UNAUTHORIZED' })
     const instance = await prisma.instance.findUnique({
       where: { id: instanceId },
-      select: { id: true, userId: true, hostId: true, name: true, incusId: true, status: true }
+      select: snapshotInstanceSelect
     })
     if (!instance || instance.status === 'deleted') return reply.code(404).send({ error: 'Instance not found', code: 'INSTANCE_NOT_FOUND' })
     if (instance.userId !== inspected.userId && user.role !== 'admin') return reply.code(403).send({ error: 'Forbidden', code: 'FORBIDDEN' })
     const authResult = consumeMonitoringStreamAccessTicket(ticket, instanceId)
     if (!authResult.valid || !authResult.userId || !authResult.issuedAt) return reply.code(401).send({ error: authResult.error || 'Authentication failed', code: 'UNAUTHORIZED' })
 
-    const agent = await prisma.hostAgent.findUnique({ where: { hostId: instance.hostId }, select: { agentId: true } })
-    const snapshot = readAgentInstanceSnapshot(
-      agent?.agentId ?? null,
-      instance.name,
-      Date.now(),
-      instance.incusId ?? undefined
-    )
+    const agentId = instance.host.agent?.agentId ?? null
+    const scope = monitoringInstanceScope(agentId, instance)
+    const snapshot = readManagedInstanceSnapshot(agentId, instance, otherMonitoringIdentifiers(instance))
     const response = reply.raw
     reply.hijack()
     response.statusCode = 200
     response.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
     response.setHeader('Cache-Control', 'no-cache, no-store')
     response.setHeader('Connection', 'keep-alive')
+    response.setHeader('X-Accel-Buffering', 'no')
     response.flushHeaders?.()
 
     let closed = false
@@ -113,9 +148,29 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
       writeEvent(response, event)
       if ('sampledAt' in event) scheduleFreshness(event.sampledAt)
     }
-    const unsubscribe = subscribeInstanceMonitoring(instanceId, onEvent)
-    const heartbeat = setInterval(() => {
-      if (!closed) response.write(': heartbeat\n\n')
+    const unsubscribe = subscribeInstanceMonitoring(scope, onEvent)
+    let checkingScope = false
+    const heartbeat = setInterval(async () => {
+      if (closed || checkingScope) return
+      checkingScope = true
+      try {
+        const current = await prisma.instance.findUnique({ where: { id: instanceId }, select: streamInstanceSelect })
+        if (closed) return
+        if (!current || current.status === 'deleted' || monitoringInstanceScope(current.host.agent?.agentId ?? null, current) !== scope) {
+          cleanup()
+          response.end()
+          return
+        }
+        response.write(': heartbeat\n\n')
+      } catch (error) {
+        request.log.warn({ error, instanceId }, 'Instance monitoring stream scope unavailable')
+        if (!closed) {
+          cleanup()
+          response.end()
+        }
+      } finally {
+        checkingScope = false
+      }
     }, 15000)
     const cleanup = () => {
       if (closed) return

@@ -76,7 +76,9 @@ const mappedSshPort = computed(() => {
   const mapping = (props.instance as any).port_mappings?.find((item: any) => item.protocol === 'tcp' && (item.privatePort ?? item.private_port) === 22)
   return mapping?.publicPort ?? mapping?.public_port ?? props.instance.ssh_port ?? null
 })
-const monitoringMetrics = computed(() => props.monitoringSample?.metrics ?? {})
+const isRunning = computed(() => props.instance.status?.toLowerCase() === 'running')
+const hasLiveMonitoring = computed(() => isRunning.value && props.monitoringStatus === 'connected' && props.monitoringSample?.online === true)
+const monitoringMetrics = computed(() => hasLiveMonitoring.value ? props.monitoringSample?.metrics ?? {} : {})
 const monitoringTrendRows = computed(() => props.monitoringTrend?.buckets ?? [])
 const historyMetrics = [
   { key: 'cpuUsagePercent', label: 'instance.detail.info.cpu', suffix: '%' },
@@ -87,19 +89,14 @@ const historyMetrics = [
 ]
 const memoryUsageMb = computed(() => {
   const bytes = monitoringMetrics.value.memoryUsedBytes
-  if (props.monitoringStatus === 'connected' && typeof bytes === 'number' && Number.isFinite(bytes)) return bytes / 1024 / 1024
-  return props.stats.memory.usage
+  return typeof bytes === 'number' && Number.isFinite(bytes) ? bytes / 1024 / 1024 : null
 })
 const memoryLimitMb = computed(() => props.stats.memory.limit > 0 ? props.stats.memory.limit : props.instance.memory)
 const memoryUsagePercent = computed(() => {
-  if (memoryLimitMb.value <= 0) return 0
+  if (memoryUsageMb.value === null || memoryLimitMb.value <= 0) return 0
   return clampPercent(memoryUsageMb.value / memoryLimitMb.value * 100)
 })
-
-const isRunning = computed<boolean>(() => {
-  const s = props.instance?.status?.toLowerCase()
-  return s === 'running'
-})
+const diskUsagePercent = computed(() => hasLiveMonitoring.value ? props.stats.disk.usagePercent : 0)
 
 // 是否可以编辑配置（只有 running 或 stopped 状态才能编辑，且需要权限）
 const canEditConfig = computed<boolean>(() => {
@@ -493,9 +490,10 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               <span class="text-xs text-themed-secondary ml-1">({{ t('instance.detail.info.includesCache') }})</span>
             </span>
             <span class="text-themed font-medium">
-              <template v-if="memoryUsageMb > 0">
+              <template v-if="memoryUsageMb !== null">
                 {{ formatMemory(memoryUsageMb) }} /
               </template>
+              <template v-else>— / </template>
               {{ formatMemory(memoryLimitMb) }}
               <span v-if="memoryUsagePercent > 0" class="text-xs text-themed-muted ml-1">
                 ({{ Math.round(memoryUsagePercent) }}%)
@@ -519,20 +517,20 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               {{ t('instance.detail.info.disk') }}
             </span>
             <span class="text-themed font-medium">
-              <template v-if="stats.disk.usage > 0">
+              <template v-if="hasLiveMonitoring && stats.disk.usage > 0">
                 {{ formatDisk(stats.disk.usage) }} /
               </template>
               {{ formatDisk(stats.disk.limit > 0 ? stats.disk.limit : instance.disk) }}
-              <span v-if="stats.disk.usagePercent > 0" class="text-xs text-themed-muted ml-1">
-                ({{ stats.disk.usagePercent }}%)
+              <span v-if="diskUsagePercent > 0" class="text-xs text-themed-muted ml-1">
+                ({{ diskUsagePercent }}%)
               </span>
             </span>
           </div>
           <div class="h-2 rounded-full overflow-hidden bg-themed/20">
             <div
               class="h-full rounded-full transition-all duration-500"
-              :class="stats.disk.usagePercent > 80 ? 'bg-red-500' : stats.disk.usagePercent > 60 ? 'bg-yellow-500' : 'bg-purple-500'"
-              :style="{ width: clampPercent(stats.disk.usagePercent) + '%' }"
+              :class="diskUsagePercent > 80 ? 'bg-red-500' : diskUsagePercent > 60 ? 'bg-yellow-500' : 'bg-purple-500'"
+              :style="{ width: clampPercent(diskUsagePercent) + '%' }"
             ></div>
           </div>
         </div>

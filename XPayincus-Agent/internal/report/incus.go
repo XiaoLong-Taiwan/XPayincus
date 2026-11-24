@@ -57,12 +57,13 @@ type trafficCounters struct {
 	tx uint64
 }
 
-func collectIncusInstanceReport() map[string]any {
+func collectIncusInstanceReportContext(ctx context.Context) map[string]any {
 	instanceCollectionMu.Lock()
 	defer instanceCollectionMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 	reportedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := ctx.Err(); err != nil {
+		return map[string]any{"available": false, "reportedAt": reportedAt, "total": 0, "items": []any{}, "deadlineExceeded": true, "error": truncateReportError(err)}
+	}
 	socketPath, ok := detectIncusSocket()
 	if !ok {
 		return map[string]any{
@@ -84,6 +85,7 @@ func collectIncusInstanceReport() map[string]any {
 			"total":      0,
 			"items":      []any{},
 			"error":      truncateReportError(err),
+			"deadlineExceeded": ctx.Err() != nil,
 		}
 	}
 
@@ -227,7 +229,6 @@ func buildIncusInstanceReportItem(client *http.Client, instance incusInstanceSum
 		"status":     instance.Status,
 		"statusCode": instance.StatusCode,
 		"type":       instance.Type,
-		"sampledAt":  time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	incusID := ""
 	if candidate := strings.TrimSpace(instance.Config["volatile.uuid"]); incusUUIDPattern.MatchString(candidate) {

@@ -8,6 +8,7 @@ import { isStaleAssetLoadError, scheduleStaleAssetReload } from '@/utils/staleAs
 let oauthProcessing = false
 let oauthProcessed = false
 const hiddenHostingRouteNames = new Set([
+  'host-status',
   'my-hosts',
   'my-host-create',
   'my-host-detail',
@@ -191,6 +192,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.transfers', title: '转移' }
   },
   // 用户资源管理路由（开放给满足条件的用户）
+  {
+    path: '/host-status',
+    name: 'host-status',
+    component: () => import('@/views/HostStatusView.vue'),
+    meta: { requiresAuth: true, requiresUser: true, titleKey: 'nav.hostStatus', title: '主機狀態' }
+  },
   {
     path: '/hosting-application',
     name: 'hosting-application',

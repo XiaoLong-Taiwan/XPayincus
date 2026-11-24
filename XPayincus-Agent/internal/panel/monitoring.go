@@ -183,6 +183,10 @@ func (client *Client) queueComponentChange(components map[string]any) error {
 }
 
 func (client *Client) queueMonitoring(payload map[string]any) ([]map[string]any, error) {
+	return client.queueMonitoringAt(payload, time.Now())
+}
+
+func (client *Client) queueMonitoringAt(payload map[string]any, now time.Time) ([]map[string]any, error) {
 	components, _ := payload["components"].(map[string]any)
 	if err := client.queueComponentChange(components); err != nil {
 		return nil, err
@@ -197,7 +201,8 @@ func (client *Client) queueMonitoring(payload map[string]any) ([]map[string]any,
 		}
 		name, nameOK := item["name"].(string)
 		sampledAt, sampledAtOK := item["sampledAt"].(string)
-		if !nameOK || name == "" || !sampledAtOK || sampledAt == "" {
+		sampledTime, timeErr := time.Parse(time.RFC3339Nano, sampledAt)
+		if !nameOK || name == "" || !sampledAtOK || timeErr != nil || sampledTime.After(now.Add(time.Minute)) || now.Sub(sampledTime) > 2*time.Minute {
 			continue
 		}
 		performance, _ := item["performance"].(map[string]any)

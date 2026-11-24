@@ -119,9 +119,6 @@ const searchInputRef = ref<HTMLInputElement | null>(null)
 const showSearch = ref(false)
 const searchText = ref('')
 
-// 帮助弹窗状态
-const showHelp = ref(false)
-
 // 设置弹窗状态
 const showSettings = ref(false)
 const showSavedCommandsMobile = ref(false)
@@ -1307,17 +1304,6 @@ function handleVisibilityChange() {
             </svg>
           </button>
 
-          <!-- 帮助（移动端隐藏） -->
-          <button
-            class="hidden rounded-lg p-1.5 text-themed-muted transition-colors hover:bg-themed-hover hover:text-themed sm:block"
-            :title="t('terminal.help')"
-            @click="showHelp = true"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </button>
-
           <!-- 重连 -->
           <button
             v-if="activeTab && (activeTab.status === 'disconnected' || activeTab.status === 'error')"
@@ -1797,64 +1783,6 @@ function handleVisibilityChange() {
                   {{ t('terminalPage.connect') }}
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
-    <!-- 帮助弹窗 -->
-    <Teleport to="body">
-      <Transition name="fade">
-        <div
-          v-if="showHelp"
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-          @click.self="showHelp = false"
-        >
-          <div class="w-full max-w-md rounded-2xl border border-themed bg-themed-surface p-6 shadow-xl">
-            <div class="mb-5 flex items-center justify-between">
-              <h3 class="text-lg font-semibold tracking-tight text-themed">{{ t('terminal.helpTitle') }}</h3>
-              <button
-                class="rounded-lg p-1.5 text-themed-muted transition-colors hover:bg-themed-hover hover:text-themed"
-                @click="showHelp = false"
-              >
-                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <!-- 快捷键 -->
-            <div class="mb-4">
-              <h4 class="text-sm font-medium text-themed mb-2">{{ t('terminal.helpShortcuts') }}</h4>
-              <div class="space-y-1.5 text-sm">
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutSearch') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl+Shift+F</kbd></div>
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutCopy') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl+Shift+C</kbd></div>
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutPaste') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl+Shift+V</kbd></div>
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutFontIncrease') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl++</kbd></div>
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutFontDecrease') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl+-</kbd></div>
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutFontReset') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl+0</kbd></div>
-                <div class="flex justify-between"><span class="text-themed-muted">{{ t('terminal.helpShortcutExport') }}</span><kbd class="rounded-md border border-themed bg-themed-secondary px-1.5 py-0.5 font-mono text-xs text-themed-secondary">Ctrl+Shift+S</kbd></div>
-              </div>
-            </div>
-
-            <!-- 鼠标操作 -->
-            <div class="mb-4">
-              <h4 class="text-sm font-medium text-themed mb-2">{{ t('terminal.helpMouseOps') }}</h4>
-              <ul class="space-y-1 text-sm text-themed-muted">
-                <li>• {{ t('terminal.helpMouseSelect') }}</li>
-                <li>• {{ t('terminal.helpMouseCopy') }}</li>
-                <li>• {{ t('terminal.helpMouseScroll') }}</li>
-              </ul>
-            </div>
-
-            <!-- 触控操作 -->
-            <div class="mb-4">
-              <h4 class="text-sm font-medium text-themed mb-2">{{ t('terminal.helpTouchOps') }}</h4>
-              <ul class="space-y-1 text-sm text-themed-muted">
-                <li>• {{ t('terminal.helpTouchPinchZoom') }}</li>
-                <li>• {{ t('terminal.helpTouchSwipeScroll') }}</li>
-              </ul>
             </div>
           </div>
         </div>

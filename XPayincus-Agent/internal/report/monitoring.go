@@ -3,6 +3,7 @@ package report
 import (
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,7 +82,11 @@ func performanceMetrics(name string, identity string, state incusInstanceState, 
 	}
 	metrics := map[string]any{}
 	cpu, cpuErr := strconv.ParseUint(state.CPU.Usage.String(), 10, 64)
-	current := performanceSnapshot{at: now, pid: state.PID, startedAt: state.StartedAt, cpu: cpu, validCPU: cpuErr == nil}
+	startedAt := state.StartedAt
+	if startedAt == "" && state.PID > 0 {
+		startedAt = processStartIdentity(state.PID)
+	}
+	current := performanceSnapshot{at: now, pid: state.PID, startedAt: startedAt, cpu: cpu, validCPU: cpuErr == nil}
 	if memory, err := strconv.ParseUint(state.Memory.Usage.String(), 10, 64); err == nil {
 		metrics["memoryUsedBytes"] = memory
 	}
@@ -147,4 +152,27 @@ func performanceMetrics(name string, identity string, state incusInstanceState, 
 		performanceCache.items[identity] = current
 	}
 	return metrics
+}
+
+func processStartIdentity(pid int64) string {
+	content, err := os.ReadFile(filepath.Join("/proc", strconv.FormatInt(pid, 10), "stat"))
+	if err != nil {
+		return ""
+	}
+	return processStartIdentityFromStat(string(content))
+}
+
+func processStartIdentityFromStat(stat string) string {
+	closingCommand := strings.LastIndex(stat, ")")
+	if closingCommand < 0 || closingCommand+1 >= len(stat) {
+		return ""
+	}
+	fields := strings.Fields(stat[closingCommand+1:])
+	if len(fields) <= 19 || fields[19] == "" {
+		return ""
+	}
+	if _, err := strconv.ParseUint(fields[19], 10, 64); err != nil {
+		return ""
+	}
+	return fields[19]
 }

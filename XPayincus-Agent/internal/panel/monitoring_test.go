@@ -15,33 +15,74 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/config"
 )
 
+func TestRetryablePanelFailuresAndTimeouts(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		status        int
+		wantAttempts  int32
+		wantRetryable bool
+	}{
+		{name: "bad request is not retried", status: http.StatusBadRequest, wantAttempts: 1},
+		{name: "bad gateway is retried", status: http.StatusBadGateway, wantAttempts: 3, wantRetryable: true},
+		{name: "cloudflare 530 is retried", status: 530, wantAttempts: 3, wantRetryable: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				attempts.Add(1)
+				writer.WriteHeader(test.status)
+			}))
+			defer server.Close()
+			client := New(config.Config{StateDir: t.TempDir(), PanelURL: server.URL, AgentID: "fixture", AgentSecret: "fixture", RequestTimeout: time.Second})
+			_, err := client.Heartbeat(context.Background(), map[string]any{})
+			if err == nil || attempts.Load() != test.wantAttempts || isRetryableStatus(test.status) != test.wantRetryable {
+				t.Fatalf("unexpected retry behavior: err=%v attempts=%d retryable=%t", err, attempts.Load(), isRetryableStatus(test.status))
+			}
+		})
+	}
+	t.Run("timeout retries", func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				attempts.Add(1)
+				time.Sleep(100 * time.Millisecond)
+			}))
+			defer server.Close()
+			client := New(config.Config{StateDir: t.TempDir(), PanelURL: server.URL, AgentID: "fixture", AgentSecret: "fixture", RequestTimeout: 20 * time.Millisecond})
+			if _, err := client.Heartbeat(context.Background(), map[string]any{}); err == nil || attempts.Load() != 3 {
+				t.Fatalf("timeout attempts mismatch: err=%v attempts=%d", err, attempts.Load())
+			}
+		})
+}
+
 func TestMonitoringSpoolRestartSemanticDiffAndBillingIsolation(t *testing.T) {
 	directory := t.TempDir()
 	client := &Client{spoolDir: directory, spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	base := time.Now().UTC()
 	payload := func(at string, loaded bool) map[string]any {
 		return map[string]any{
 			"instances":  map[string]any{"items": []any{map[string]any{"name": "vm1", "sampledAt": at, "performance": map[string]any{"cpuUsagePercent": 5}, "traffic": map[string]any{"rxBytes": "999"}}}},
 			"components": map[string]any{"zfs": map[string]any{"available": true, "observedAt": at, "status": map[string]any{"collectedAt": at, "moduleLoaded": loaded}}},
 		}
 	}
-	first, err := client.queueMonitoring(payload("2026-11-11T00:00:00Z", true))
+	formatAt := func(offset time.Duration) string { return base.Add(offset).Format(time.RFC3339Nano) }
+	first, err := client.queueMonitoring(payload(formatAt(0), true))
 	if err != nil || len(first) != 2 {
 		t.Fatalf("first queue: %v %#v", err, first)
 	}
 	restarted := &Client{spoolDir: directory, spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
-	second, err := restarted.queueMonitoring(payload("2026-11-11T00:01:00Z", true))
+	second, err := restarted.queueMonitoring(payload(formatAt(30*time.Second), true))
 	if err != nil || len(second) != 3 || second[0]["id"] != first[0]["id"] {
 		t.Fatalf("restart lost sample: %v %#v", err, second)
 	}
 	if _, exists := second[2]["events"]; exists {
 		t.Fatal("timestamps generated semantic event")
 	}
-	third, err := restarted.queueMonitoring(payload("2026-11-11T00:02:00Z", false))
+	third, err := restarted.queueMonitoring(payload(formatAt(time.Minute), false))
 	if err != nil || len(third) != 5 || len(third[3]["events"].([]any)) != 1 {
 		t.Fatal("semantic change not queued")
 	}
 	restarted = &Client{spoolDir: directory, spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
-	fourth, err := restarted.queueMonitoring(payload("2026-11-11T00:03:00Z", true))
+	fourth, err := restarted.queueMonitoring(payload(formatAt(90*time.Second), true))
 	if err != nil || len(fourth) != 7 {
 		t.Fatalf("offline A-B-A lost: %v %#v", err, fourth)
 	}
@@ -53,7 +94,7 @@ func TestMonitoringSpoolRestartSemanticDiffAndBillingIsolation(t *testing.T) {
 			t.Fatal("event contains metrics sample")
 		}
 	}
-	if fourth[1]["instances"].([]any)[0].(map[string]any)["sampledAt"] != "2026-11-11T00:00:00Z" {
+	if fourth[1]["instances"].([]any)[0].(map[string]any)["sampledAt"] != formatAt(0) {
 		t.Fatal("instance timestamp replaced by heartbeat")
 	}
 	encoded, _ := json.Marshal(third)
@@ -72,9 +113,10 @@ func TestMonitoringSpoolRestartSemanticDiffAndBillingIsolation(t *testing.T) {
 
 func TestMonitoringPayloadIncludesNetworkCountersAndRates(t *testing.T) {
 	client := &Client{spoolDir: t.TempDir(), spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	sampledAt := time.Now().UTC().Format(time.RFC3339Nano)
 	payload := map[string]any{
 		"instances": map[string]any{"items": []any{map[string]any{
-			"name": "vm1", "sampledAt": "2026-11-11T00:00:00Z",
+			"name": "vm1", "sampledAt": sampledAt,
 			"performance": map[string]any{"intervalSeconds": 60, "rxBytes": uint64(1000), "txBytes": uint64(2000), "rxBytesPerSecond": 10.5, "txBytesPerSecond": 20.5},
 		}}},
 	}
@@ -93,9 +135,10 @@ func TestMonitoringPayloadIncludesNetworkCountersAndRates(t *testing.T) {
 
 func TestMonitoringPayloadKeepsInstancesWithoutPerformanceData(t *testing.T) {
 	client := &Client{spoolDir: t.TempDir(), spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	sampledAt := time.Now().UTC().Format(time.RFC3339Nano)
 	samples, err := client.queueMonitoring(map[string]any{
 		"instances": map[string]any{"items": []any{map[string]any{
-			"name": "stopped-vm", "sampledAt": "2026-11-11T00:00:00Z", "status": "Stopped",
+			"name": "stopped-vm", "sampledAt": sampledAt, "status": "Stopped",
 		}}},
 	})
 	if err != nil {
@@ -105,6 +148,52 @@ func TestMonitoringPayloadKeepsInstancesWithoutPerformanceData(t *testing.T) {
 	if len(instances) != 1 || instances[0].(map[string]any)["name"] != "stopped-vm" {
 		t.Fatalf("instance without performance data was dropped: %#v", instances)
 	}
+}
+
+func TestMonitoringPayloadSkipsExpiredAndInvalidSamples(t *testing.T) {
+	client := &Client{spoolDir: t.TempDir(), spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	now := time.Now()
+	samples, err := client.queueMonitoringAt(map[string]any{
+		"instances": map[string]any{"items": []any{
+			map[string]any{"name": "fresh", "sampledAt": now.Add(-time.Minute).UTC().Format(time.RFC3339Nano), "performance": map[string]any{"cpuUsagePercent": 5}},
+			map[string]any{"name": "expired", "sampledAt": now.Add(-3 * time.Minute).UTC().Format(time.RFC3339Nano), "performance": map[string]any{"cpuUsagePercent": 6}},
+			map[string]any{"name": "invalid", "sampledAt": "invalid", "performance": map[string]any{"cpuUsagePercent": 7}},
+		}},
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances := samples[len(samples)-1]["instances"].([]any)
+	if len(instances) != 1 || instances[0].(map[string]any)["name"] != "fresh" {
+		t.Fatalf("stale monitoring points were queued: %#v", instances)
+	}
+}
+
+func TestMonitoringSpoolReplaysPersistedInstanceSamplesOlderThanTwoMinutes(t *testing.T) {
+	client := &Client{spoolDir: t.TempDir(), spoolMaxBytes: 1024 * 1024, spoolRetention: time.Hour}
+	now := time.Now()
+	historical := map[string]any{
+		"sampledAt": now.Add(-3 * time.Minute).UTC().Format(time.RFC3339Nano),
+		"instances": []any{map[string]any{"name": "offline-vm"}},
+	}
+	if _, err := client.queueRecord(historical, 256*1024, 384*1024); err != nil {
+		t.Fatal(err)
+	}
+	id := historical["id"].(string)
+	path := client.pendingSamples[id]
+	samples, err := client.queueMonitoringAt(map[string]any{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range samples {
+		if sample["id"] == id && sample["sampledAt"] == historical["sampledAt"] {
+			return
+		}
+	}
+	t.Fatalf("persisted monitoring sample %s was not replayed: %#v", id, samples)
 }
 
 func TestMonitoringAckIsIndependentAndExplicit(t *testing.T) {

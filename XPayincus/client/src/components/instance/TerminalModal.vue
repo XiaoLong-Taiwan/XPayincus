@@ -86,9 +86,10 @@ const searchText = ref('')
 
 // 全屏状态
 const isFullscreen = ref(false)
-
-// 帮助弹窗状态
-const showHelp = ref(false)
+const viewportWidth = ref(window.innerWidth)
+const viewportHeight = ref<number>()
+const viewportTop = ref(0)
+const showTerminalActions = ref(false)
 
 // 设置弹窗状态
 const showSettings = ref(false)
@@ -134,7 +135,7 @@ const touchState = reactive({
 
 // 移动端检测（用于禁用 WebGL 和显示快捷工具栏）
 // 综合检测：UA + 触摸能力 + 屏幕宽度
-const isMobileDevice = (() => {
+const isMobileDevice = computed(() => {
     const ua = navigator.userAgent
     // 传统移动端 UA 检测
     if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)) {
@@ -145,15 +146,15 @@ const isMobileDevice = (() => {
         return true
     }
     // 小屏幕 + 触摸能力 = 移动设备（覆盖 Windows 平板等情况）
-    if (navigator.maxTouchPoints > 0 && window.innerWidth <= 1024) {
+    if (navigator.maxTouchPoints > 0 && viewportWidth.value <= 1024) {
         return true
     }
     // 纯小屏幕检测（如开发者工具模拟移动端）
-    if (window.innerWidth <= 768) {
+    if (viewportWidth.value < 768) {
         return true
     }
     return false
-})()
+})
 
 // Cloud-init 状态检查
 const cloudInitStatus = ref<'idle' | 'checking' | 'not_ready' | 'ready' | 'skipped'>('idle')
@@ -325,7 +326,7 @@ function printWelcomeBanner(terminal: Terminal, instanceName: string) {
     banner.forEach(line => terminal.writeln(line))
     
     // 移动端提示使用英文键盘
-    if (isMobileDevice) {
+    if (isMobileDevice.value) {
         terminal.writeln(`\x1b[38;5;214m  ⚠ ${t('terminal.mobileKeyboardHint')}\x1b[0m`)
         terminal.writeln('')
     }
@@ -383,7 +384,7 @@ function initTabTerminal(tabId: string) {
         fontSize: fontSize.value,
         fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
         theme: terminalStore.currentTheme,
-        isMobileDevice,
+        isMobileDevice: isMobileDevice.value,
         enableWebgl: false,
         onBell: () => terminalStore.playBell(),
         onSelectionCopy: (selection) => {
@@ -663,12 +664,23 @@ function sendResize(tabId: string, cols: number, rows: number) {
 }
 
 // 关闭模态框
-function closeModal() {
+function minimizeModal() {
     showSavedCommandsMobile.value = false
     emit('update:visible', false)
-    emit('close')
     emit('update:connected', hasConnectedTab.value)
     emit('update:sessionActive', tabs.value.length > 0)
+}
+
+function closeModal() {
+    disconnectAll()
+    isFullscreen.value = false
+    showSearch.value = false
+    searchText.value = ''
+    showSettings.value = false
+    showTerminalActions.value = false
+    closeContextMenu()
+    minimizeModal()
+    emit('close')
 }
 
 // 断开所有连接
@@ -712,11 +724,9 @@ function toggleFullscreen() {
 
 // 处理窗口大小变化
 function handleResize() {
+    viewportWidth.value = window.innerWidth
     if (props.visible) {
-        const tab = activeTab.value
-        if (tab?.fitAddon) {
-            tab.fitAddon.fit()
-        }
+        handleViewportResize()
     }
 }
 
@@ -754,6 +764,11 @@ function focusTerminal() {
 }
 
 // 搜索功能
+function openSearch() {
+    showSearch.value = true
+    nextTick(() => searchInputRef.value?.focus())
+}
+
 function handleSearch() {
     if (searchText.value && activeTab.value?.searchAddon) {
         activeTab.value.searchAddon.findNext(searchText.value)
@@ -960,8 +975,7 @@ function handleKeydown(e: KeyboardEvent) {
     // Ctrl+Shift+F 打开搜索
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault()
-        showSearch.value = true
-        nextTick(() => searchInputRef.value?.focus())
+        openSearch()
         return
     }
     
@@ -1029,6 +1043,12 @@ function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
         if (contextMenu.visible) {
             closeContextMenu()
+        } else if (showTerminalActions.value) {
+            showTerminalActions.value = false
+        } else if (showSettings.value) {
+            showSettings.value = false
+        } else if (showSavedCommandsMobile.value) {
+            showSavedCommandsMobile.value = false
         } else if (showSearch.value) {
             closeSearch()
         } else if (isFullscreen.value) {
@@ -1050,6 +1070,7 @@ function setContainerRef(tabId: string, el: HTMLElement | null) {
 // 监听 visible 变化
 watch(() => props.visible, async (visible) => {
     if (visible && props.instanceId) {
+        updateViewport()
         // 重置 Cloud-init 状态（每次打开模态框时重新检查）
         cloudInitStatus.value = 'idle'
         cloudInitState.value = null
@@ -1057,6 +1078,7 @@ watch(() => props.visible, async (visible) => {
         cloudInitManualCompleting.value = false
         
         await nextTick()
+        if (!props.visible) return
         
         // 如果没有标签，创建第一个
         if (tabs.value.length === 0) {
@@ -1083,6 +1105,15 @@ watch(() => props.visible, async (visible) => {
     }
 }, { immediate: true })
 
+watch(() => props.visible && isMobileDevice.value, (active, _, onCleanup) => {
+    if (!active) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    onCleanup(() => { document.body.style.overflow = previousOverflow })
+}, { immediate: true })
+
+watch(showTerminalActions, handleViewportResize)
+
 // 监听连接状态变化
 watch(() => hasConnectedTab.value, (connected) => {
     emit('update:connected', connected)
@@ -1102,9 +1133,8 @@ onMounted(() => {
     document.addEventListener('visibilitychange', handleVisibilityChange)
     
     // 移动端：监听 visualViewport 变化（软键盘弹出/收起）
-    if (isMobileDevice && window.visualViewport) {
-        window.visualViewport.addEventListener('resize', handleViewportResize)
-    }
+    window.visualViewport?.addEventListener('resize', handleViewportResize)
+    window.visualViewport?.addEventListener('scroll', updateViewport)
 })
 
 onUnmounted(() => {
@@ -1113,26 +1143,28 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', handleVisibilityChange)
     
     // 移动端：移除 visualViewport 监听
-    if (isMobileDevice && window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', handleViewportResize)
-    }
+    window.visualViewport?.removeEventListener('resize', handleViewportResize)
+    window.visualViewport?.removeEventListener('scroll', updateViewport)
     
     disconnectAll()
 })
 
 // 移动端 visualViewport 变化处理（软键盘弹出/收起）
+function updateViewport() {
+    if (!props.visible || !isMobileDevice.value) return
+    viewportHeight.value = window.visualViewport?.height
+    viewportTop.value = window.visualViewport?.offsetTop ?? 0
+}
+
 function handleViewportResize() {
-    if (props.visible) {
-        // 延迟执行 fit，等待视口稳定
-        setTimeout(() => {
-            const tab = activeTab.value
-            if (tab?.fitAddon && tab.terminal) {
-                tab.fitAddon.fit()
-                // 刷新终端显示，确保光标正确渲染
-                tab.terminal.refresh(0, tab.terminal.rows - 1)
-            }
-        }, 100)
-    }
+    if (!props.visible) return
+    updateViewport()
+    nextTick(() => {
+        const tab = activeTab.value
+        if (!props.visible || !tab?.fitAddon || !tab.terminal) return
+        tab.fitAddon.fit()
+        tab.terminal.refresh(0, tab.terminal.rows - 1)
+    })
 }
 
 // 页面可见性变化时自动重连
@@ -1154,10 +1186,15 @@ function handleVisibilityChange() {
     <div
       v-show="visible"
       class="fixed inset-0 z-50 flex items-center justify-center"
-      :class="isFullscreen ? '' : 'p-4'"
+      :class="isMobileDevice || isFullscreen ? '' : 'p-4'"
+      :style="isMobileDevice ? { height: viewportHeight ? `${viewportHeight}px` : '100dvh', top: `${viewportTop}px` } : undefined"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="t('terminal.title')"
     >
       <!-- 背景遮罩 -->
       <div
+        v-if="!isMobileDevice"
         class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
         :class="visible ? 'opacity-100' : 'opacity-0'"
         @click="closeModal"
@@ -1167,23 +1204,24 @@ function handleVisibilityChange() {
       <div
         class="terminal-window group/terminal-workspace relative flex flex-col overflow-hidden"
         :class="[
-          isFullscreen ? 'w-full h-full' : 'w-full max-w-7xl h-[85vh] rounded-lg',
+          isMobileDevice || isFullscreen ? 'w-full h-full' : 'w-full max-w-7xl h-[85vh] rounded-lg',
+          isMobileDevice ? 'terminal-window-mobile' : '',
           'bg-[#0a0a0a] border border-neutral-800 shadow-2xl'
         ]"
       >
         <!-- 标题栏 -->
-        <div class="flex items-center justify-between h-10 px-3 bg-[#0a0a0a] border-b border-neutral-800">
+        <div class="flex shrink-0 items-center justify-between min-h-10 px-3 bg-[#0a0a0a] border-b border-neutral-800">
           <!-- 标签栏 -->
           <div class="flex items-center gap-1 overflow-x-auto flex-1 min-w-0">
-            <button
+            <div
               v-for="tab in tabs"
               :key="tab.id"
-              class="group flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap"
-              :class="activeTabId === tab.id 
-                ? 'bg-neutral-800 text-white' 
+              class="group flex shrink-0 items-center pr-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap"
+              :class="activeTabId === tab.id
+                ? 'bg-neutral-800 text-white'
                 : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50'"
-              @click="switchTab(tab.id)"
             >
+              <button type="button" class="flex items-center gap-1.5 px-2 py-2" @click="switchTab(tab.id)">
               <!-- 状态指示点 -->
               <span
                 class="w-1.5 h-1.5 rounded-full flex-shrink-0"
@@ -1195,17 +1233,20 @@ function handleVisibilityChange() {
                 }"
               />
               <span class="truncate max-w-[80px]">{{ tab.label }}</span>
+              </button>
               <!-- 关闭按钮 -->
               <button
                 v-if="tabs.length > 1"
-                class="ml-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-neutral-700 transition-opacity"
-                @click.stop="closeTab(tab.id)"
+                type="button"
+                class="p-1.5 rounded hover:bg-neutral-700 transition-colors"
+                :aria-label="`${t('common.close')} ${tab.label}`"
+                @click="closeTab(tab.id)"
               >
                 <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-            </button>
+            </div>
             
             <!-- 新建标签按钮 -->
             <button
@@ -1221,7 +1262,8 @@ function handleVisibilityChange() {
           </div>
 
           <!-- 右侧工具按钮 -->
-          <div class="flex items-center gap-1.5 ml-2">
+          <div class="flex shrink-0 items-center gap-1.5 ml-2">
+            <div v-if="!isMobileDevice" class="flex items-center gap-1.5">
             <!-- 状态 -->
             <span
               v-if="activeTab"
@@ -1289,17 +1331,6 @@ function handleVisibilityChange() {
               </svg>
             </button>
 
-            <!-- 帮助 -->
-            <button
-              class="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
-              :title="t('terminal.help')"
-              @click="showHelp = true"
-            >
-              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-
             <!-- 全屏 -->
             <button
               class="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
@@ -1326,10 +1357,37 @@ function handleVisibilityChange() {
               </svg>
             </button>
 
+            </div>
+            <button
+              v-if="isMobileDevice"
+              type="button"
+              class="min-h-11 rounded px-2 text-sm text-neutral-300 hover:bg-neutral-800 hover:text-white"
+              :aria-expanded="showTerminalActions"
+              aria-controls="container-terminal-actions"
+              @click="showTerminalActions = !showTerminalActions"
+            >
+              {{ t('common.actions') }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
+              :title="t('terminal.minimize')"
+              :aria-label="t('terminal.minimize')"
+              @click="minimizeModal"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path stroke-linecap="round" stroke-width="2" d="M5 12h14" />
+              </svg>
+            </button>
+
             <!-- 关闭 -->
             <button
+              type="button"
               class="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
+              :class="isMobileDevice ? 'min-h-11 min-w-11 grid place-items-center' : ''"
               :title="t('common.close')"
+              :aria-label="t('common.close')"
               @click="closeModal"
             >
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1339,8 +1397,35 @@ function handleVisibilityChange() {
           </div>
         </div>
 
+        <div
+          v-if="isMobileDevice && showTerminalActions"
+          id="container-terminal-actions"
+          class="terminal-mobile-actions flex shrink-0 flex-wrap gap-1 overflow-y-auto border-b border-neutral-800 bg-neutral-900 p-2 text-sm text-neutral-200"
+        >
+          <button type="button" @click="showTerminalActions = false; openSearch()">{{ t('common.search') }}</button>
+          <button type="button" @click="showTerminalActions = false; clearTerminal()">{{ t('terminal.clear') }}</button>
+          <button type="button" @click="showTerminalActions = false; exportTerminalLog()">{{ t('terminal.exportLog') }}</button>
+          <button type="button" @click="showTerminalActions = false; showSettings = true">{{ t('terminal.settings') }}</button>
+          <button type="button" @click="showTerminalActions = false; showSavedCommandsMobile = true">{{ t('terminal.savedCommands.title') }}</button>
+          <select
+            :value="fontSize"
+            :aria-label="t('terminal.fontSize')"
+            class="min-h-11 rounded-lg bg-neutral-800 px-2"
+            @change="updateFontSize(Number(($event.target as HTMLSelectElement).value))"
+          >
+            <option v-for="size in fontSizeOptions" :key="size" :value="size">{{ size }}px</option>
+          </select>
+          <button
+            v-if="activeTab && (activeTab.status === 'disconnected' || activeTab.status === 'error')"
+            type="button"
+            @click="showTerminalActions = false; reconnectTab(activeTabId)"
+          >
+            {{ t('terminal.reconnect') }}
+          </button>
+        </div>
+
         <!-- 终端区域 -->
-        <div class="terminal-body group/terminal-workspace flex flex-1 overflow-hidden">
+        <div class="terminal-body group/terminal-workspace flex min-h-0 flex-1 overflow-hidden">
           <div class="relative min-w-0 flex-1 overflow-hidden">
             <!-- 搜索框 -->
             <Transition name="fade">
@@ -1542,72 +1627,14 @@ function handleVisibilityChange() {
         </Transition>
       </Teleport>
 
-      <!-- 帮助弹窗 -->
-      <Transition name="fade">
-        <div
-          v-if="showHelp"
-          class="absolute inset-0 z-50 flex items-center justify-center bg-black/80"
-          @click.self="showHelp = false"
-        >
-          <div class="bg-neutral-900 border border-neutral-700 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-medium text-white">{{ t('terminal.helpTitle') }}</h3>
-              <button
-                class="p-1 text-neutral-400 hover:text-white rounded transition-colors"
-                @click="showHelp = false"
-              >
-                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <!-- 快捷键 -->
-            <div class="mb-4">
-              <h4 class="text-sm font-medium text-neutral-300 mb-2">{{ t('terminal.helpShortcuts') }}</h4>
-              <div class="space-y-1.5 text-sm">
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutSearch') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+Shift+F</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutCopy') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+Shift+C</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutPaste') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+Shift+V</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutFontIncrease') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl++</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutFontDecrease') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+-</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutFontReset') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+0</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutExport') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+Shift+S</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutNewTab') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+Shift+T</kbd></div>
-                <div class="flex justify-between"><span class="text-neutral-400">{{ t('terminal.helpShortcutCloseTab') }}</span><kbd class="px-1.5 py-0.5 bg-neutral-800 rounded text-neutral-300 text-xs">Ctrl+Shift+W</kbd></div>
-              </div>
-            </div>
-
-            <!-- 鼠标操作 -->
-            <div class="mb-4">
-              <h4 class="text-sm font-medium text-neutral-300 mb-2">{{ t('terminal.helpMouseOps') }}</h4>
-              <ul class="space-y-1 text-sm text-neutral-400">
-                <li>• {{ t('terminal.helpMouseSelect') }}</li>
-                <li>• {{ t('terminal.helpMouseCopy') }}</li>
-                <li>• {{ t('terminal.helpMouseScroll') }}</li>
-              </ul>
-            </div>
-
-            <!-- 触控操作 -->
-            <div class="mb-4">
-              <h4 class="text-sm font-medium text-neutral-300 mb-2">{{ t('terminal.helpTouchOps') }}</h4>
-              <ul class="space-y-1 text-sm text-neutral-400">
-                <li>• {{ t('terminal.helpTouchPinchZoom') }}</li>
-                <li>• {{ t('terminal.helpTouchSwipeScroll') }}</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </Transition>
-
       <!-- 设置弹窗 -->
       <Transition name="fade">
         <div
           v-if="showSettings"
-          class="absolute inset-0 z-50 flex items-center justify-center bg-black/80"
+          class="absolute inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/80"
           @click.self="showSettings = false"
         >
-          <div class="bg-neutral-900 border border-neutral-700 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
+          <div class="bg-neutral-900 border border-neutral-700 rounded-xl p-6 max-w-md w-full mx-4 max-h-full overflow-y-auto shadow-2xl">
             <div class="flex items-center justify-between mb-4">
               <h3 class="text-lg font-medium text-white">{{ t('terminal.settings') }}</h3>
               <button
@@ -1732,6 +1759,22 @@ function handleVisibilityChange() {
 </template>
 
 <style scoped>
+.terminal-window-mobile {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overscroll-behavior: contain;
+}
+
+.terminal-mobile-actions {
+  max-height: 35%;
+}
+
+.terminal-mobile-actions button {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: #262626;
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.1s ease;

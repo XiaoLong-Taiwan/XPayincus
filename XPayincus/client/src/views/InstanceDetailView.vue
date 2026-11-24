@@ -23,7 +23,7 @@ import SnapshotManager from '@/components/SnapshotManager.vue'
 import TrafficStats from '@/components/instance/TrafficStats.vue'
 import AddPortModal from '@/components/instance/modals/AddPortModal.vue'
 import PortConflictModal from '@/components/instance/modals/PortConflictModal.vue'
-import { helpPath, hostDetailPath, instancesPath, isAdminEntry, terminalPath } from '@/utils/app-paths'
+import { hostDetailPath, instancesPath, isAdminEntry } from '@/utils/app-paths'
 import RebuildModal from '@/components/instance/modals/RebuildModal.vue'
 import RecreateModal from '@/components/instance/modals/RecreateModal.vue'
 import TransferModal from '@/components/instance/modals/TransferModal.vue'
@@ -314,6 +314,7 @@ const canDeleteInstance = computed<boolean>(() => {
 
 // 终端模态框
 const showTerminalModal = ref<boolean>(false)
+const showInstanceActions = ref(false)
 const terminalConnected = ref<boolean>(false)
 const terminalSessionActive = ref<boolean>(false)  // 终端会话是否存在（无论连接状态）
 const terminalForceDisconnect = ref<boolean>(false)
@@ -389,30 +390,13 @@ function connectInstanceMonitoring(): void {
   const binding = `${instance.value.id}:${hostId}:${monitoringName}`
   if (binding === monitoringBinding) return
   monitoringBinding = binding
-  instanceMonitoring.connect(instance.value.id, (sample) => {
-    const metrics = sample.metrics
-    const memoryUsageMb = typeof metrics.memoryUsedBytes === 'number' && Number.isFinite(metrics.memoryUsedBytes)
-      ? metrics.memoryUsedBytes / 1024 / 1024
-      : 0
-    stats.value = {
-      memory: {
-        usage: memoryUsageMb,
-        limit: stats.value.memory.limit,
-        usagePercent: stats.value.memory.limit ? memoryUsageMb / stats.value.memory.limit * 100 : 0
-      },
-      disk: stats.value.disk,
-      network: stats.value.network
-    }
-  })
+  instanceMonitoring.connect(instance.value.id)
 }
 
-function openFullScreenTerminal(): void {
-  if (!instance.value) return
-  if (isAdminEntry) {
-    showTerminalModal.value = true
-    return
-  }
-  void router.push(`${terminalPath()}?instanceId=${instance.value.id}`)
+function openTerminal(): void {
+  if (!instance.value || !isRunning.value) return
+  showInstanceActions.value = false
+  showTerminalModal.value = true
 }
 
 async function changeRootPassword(): Promise<void> {
@@ -586,20 +570,20 @@ const instanceHostName = computed<string>(() => {
 // 监听路由参数变化，重新加载实例数据
 watch(() => route.params.id, async (newId, oldId) => {
   if (newId !== oldId) {
+    instanceMonitoring.disconnect()
+    monitoringBinding = ''
     // 如果路由参数从有效变为无效，或者路由名称变化，清除定时器
     if (!newId || !isInstanceDetailRouteName(route.name)) {
       if (refreshInterval) {
         clearInterval(refreshInterval)
         refreshInterval = null
       }
-      instanceMonitoring.disconnect()
     } else {
       // 切换到新实例，先清除所有定时器
       if (refreshInterval) {
         clearInterval(refreshInterval)
         refreshInterval = null
       }
-      instanceMonitoring.disconnect()
       if (taskPollingInterval) {
         clearInterval(taskPollingInterval)
         taskPollingInterval = null
@@ -645,6 +629,7 @@ watch(() => route.params.id, async (newId, oldId) => {
       terminalConnected.value = false
       terminalSessionActive.value = false
       terminalTabCount.value = 0
+      showInstanceActions.value = false
 
       // 关闭所有弹窗
       showAddPortModal.value = false
@@ -921,6 +906,7 @@ async function loadInstance(): Promise<void> {
     if (!instance.value) loading.value = true
 
     const response = await api.instances.get(instanceId)
+    if (!isComponentMounted.value || !isInstanceDetailRouteName(route.name) || Number(route.params.id) !== instanceId) return
     instance.value = (response as { instance?: Instance }).instance || null
     if (instance.value) {
       connectInstanceMonitoring()
@@ -1016,6 +1002,7 @@ async function loadStats(): Promise<void> {
 
   try {
     const response = await api.instances.getStats(instanceId)
+    if (!isComponentMounted.value || instance.value?.id !== instanceId || Number(route.params.id) !== instanceId) return
     const newStats = (response as { stats?: ResourceStats; status?: string }).stats
     const newStatus = (response as { stats?: ResourceStats; status?: string }).status
 
@@ -1382,6 +1369,41 @@ const isOperationDisabled = computed<boolean>(() => {
 
 // 操作
 type InstanceAction = 'start' | 'stop' | 'restart' | 'delete' | 'clone'
+
+type PowerAction = '' | 'start' | 'stop' | 'restart' | 'forceStop' | 'forceRestart'
+const powerAction = ref<PowerAction>('')
+const canUsePowerOperations = computed(() => Boolean(
+  isAdminEntry || instance.value?.isInstanceOwner === true || instance.value?.isHostOwner === true
+))
+
+const powerStatus = computed(() => getStatusInfo(instance.value?.status ?? '', t))
+
+async function handlePowerAction(): Promise<void> {
+  const action = powerAction.value
+  powerAction.value = ''
+  if (!instance.value || isOperationDisabled.value) return
+  if (action === 'start' && isStopped.value) {
+    await handleAction('start')
+  } else if (isRunning.value && canUsePowerOperations.value) {
+    if (action === 'stop' || action === 'restart' || action === 'forceStop' || action === 'forceRestart') {
+      const force = action === 'forceStop' || action === 'forceRestart'
+      if (!force || confirm(t('instance.detail.actions.confirmForcePower', {
+        action: t(action === 'forceStop' ? 'instance.detail.actions.forceStop' : 'instance.detail.actions.forceRestart'),
+        name: instance.value.name
+      }))) {
+        if (action === 'stop' || action === 'forceStop') {
+          const response = await api.instances.stop(instance.value.id, force)
+          toast.success(t('instance.detail.actions.taskQueued'))
+          startTaskPolling(response.taskId)
+          return
+        }
+        const response = await api.instances.restart(instance.value.id, force)
+        toast.success(t('instance.detail.actions.taskQueued'))
+        startTaskPolling(response.taskId)
+      }
+    }
+  }
+}
 
 // 开始任务轮询
 // 注：_taskId 参数保留用于未来扩展（如按 taskId 指定轮询）
@@ -2459,10 +2481,6 @@ function formatShortDate(dateStr: string | null | undefined): string {
           <div class="min-w-0">
             <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
               <h1 class="page-title max-w-full truncate">{{ instance.name }}</h1>
-              <span :class="['badge nimbus-status-pill gap-1.5 font-mono tabular-nums', getStatusInfo(instance.status, t).class]">
-                <span :class="['nimbus-status-dot', getStatusInfo(instance.status, t).dot]"></span>
-                {{ getStatusInfo(instance.status, t).label }}
-              </span>
             </div>
             <p class="page-description mt-0.5 font-mono tabular-nums">{{ formatImageName(instance.image, (instance as any).imageName) }} · <span class="uppercase">{{ (instance as any).host?.name || (instance as any).host || '-' }}</span></p>
           </div>
@@ -2549,64 +2567,55 @@ function formatShortDate(dateStr: string | null | undefined): string {
               <span class="hidden sm:inline">{{ $t('instance.detail.cloudInit.manualComplete') }}</span>
             </button>
           </div>
-          <!-- Rename Button -->
-          <button
-            :disabled="isOperationDisabled"
-            class="btn-ghost btn-sm sm:btn inline-flex"
-            :title="$t('instance.actions.rename')"
-            @click="openRenameModal"
-          >
-            <svg class="w-4 h-4 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            <span class="hidden sm:inline">{{ $t('instance.actions.rename') }}</span>
-          </button>
           <!-- Terminal Button -->
           <button
-            v-if="isRunning"
-            class="btn-sm sm:btn inline-flex rounded-lg"
-            :class="themeStore.isDark ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-green-500 hover:bg-green-600 text-white'"
-            :title="$t('terminal.title')"
-            @click="openFullScreenTerminal"
+            v-if="isRunning || isStopped"
+            type="button"
+            class="btn-secondary btn-sm sm:btn gap-1.5"
+            :disabled="!isRunning"
+            :title="isRunning ? $t('terminal.title') : $t('terminal.requiresRunning')"
+            @click="openTerminal"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-            <span class="hidden sm:inline ml-1">{{ $t('terminal.title') }}</span>
+            <span>{{ $t('terminal.title') }}</span>
           </button>
-          <!-- Terminal Button (Disabled when not running) -->
+          <select
+            v-model="powerAction"
+            :class="['btn-secondary btn-sm sm:btn max-w-full', powerStatus.class]"
+            :aria-label="$t('instance.detail.actions.powerMenu')"
+            :disabled="isOperationDisabled || (!isRunning && !isStopped)"
+            @change="handlePowerAction"
+          >
+            <option value="" disabled>{{ powerStatus.label }}</option>
+            <option value="start" :disabled="!isStopped">{{ $t('instance.actions.start') }}</option>
+            <option v-if="canUsePowerOperations" value="stop" :disabled="!isRunning">{{ $t('instance.actions.stop') }}</option>
+            <option v-if="canUsePowerOperations" value="restart" :disabled="!isRunning">{{ $t('instance.actions.restart') }}</option>
+            <option v-if="canUsePowerOperations" value="forceStop" :disabled="!isRunning">{{ $t('instance.detail.actions.forceStop') }}</option>
+            <option v-if="canUsePowerOperations" value="forceRestart" :disabled="!isRunning">{{ $t('instance.detail.actions.forceRestart') }}</option>
+          </select>
           <button
-            v-if="isStopped"
-            disabled
-            class="btn-sm sm:btn inline-flex rounded-lg opacity-50 cursor-not-allowed"
-            :class="themeStore.isDark ? 'bg-green-600/50 text-white' : 'bg-green-500/50 text-white'"
-            :title="$t('terminal.requiresRunning')"
+            type="button"
+            class="btn-secondary btn-sm sm:hidden"
+            :aria-expanded="showInstanceActions"
+            aria-controls="instance-secondary-actions"
+            @click="showInstanceActions = !showInstanceActions"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <span class="hidden sm:inline ml-1">{{ $t('terminal.title') }}</span>
+            {{ $t('common.actions') }}
           </button>
-          <button v-if="isStopped" :disabled="isOperationDisabled" class="btn-secondary btn-sm sm:btn" @click="handleAction('start')">
-            <svg v-if="actionLoading === 'start'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-            <span v-else>{{ $t('instance.actions.start') }}</span>
-          </button>
-          <button v-if="isRunning" :disabled="isOperationDisabled" class="btn-secondary btn-sm sm:btn" @click="handleAction('stop')">
-            <svg v-if="actionLoading === 'stop'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-            <span v-else>{{ $t('instance.actions.stop') }}</span>
-          </button>
-          <button v-if="isRunning" :disabled="isOperationDisabled" class="btn-secondary btn-sm sm:btn" @click="handleAction('restart')">
-            <svg v-if="actionLoading === 'restart'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-            <span v-else>{{ $t('instance.actions.restart') }}</span>
+          <div
+            id="instance-secondary-actions"
+            class="instance-secondary-actions w-full flex-wrap gap-2 sm:contents"
+            :class="showInstanceActions ? 'flex' : 'hidden'"
+            @keydown.esc="showInstanceActions = false"
+          >
+          <button
+            :disabled="isOperationDisabled"
+            class="btn-secondary btn-sm sm:btn"
+            @click="openRenameModal"
+          >
+            {{ $t('instance.actions.rename') }}
           </button>
           <!-- 复制按钮（特殊颜色标记，只在停机时可用） -->
           <button
@@ -2624,7 +2633,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            <span v-if="actionLoading !== 'clone'" class="hidden sm:inline ml-1">{{ $t('instance.actions.clone') }}</span>
+            <span v-if="actionLoading !== 'clone'" class="ml-1">{{ $t('instance.actions.clone') }}</span>
           </button>
           <!-- 复制按钮（运行时显示但禁用，hover 提示） -->
           <button
@@ -2637,7 +2646,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
-            <span class="hidden sm:inline ml-1">{{ $t('instance.actions.clone') }}</span>
+            <span class="ml-1">{{ $t('instance.actions.clone') }}</span>
           </button>
           <!-- 重建按钮（始终可点击，运行时提示需要先关机） -->
           <button
@@ -2675,17 +2684,6 @@ function formatShortDate(dateStr: string | null | undefined): string {
             <span class="sm:hidden">{{ $t('transfer.actions.transfer') }}</span>
             <span class="hidden sm:inline">{{ $t('transfer.actions.transfer') }}</span>
           </button>
-          <!-- 帮助按钮 -->
-          <RouterLink
-            :to="helpPath()"
-            class="btn-secondary btn-sm sm:btn inline-flex items-center"
-            :title="$t('instance.detail.actions.help')"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span class="hidden sm:inline ml-1">{{ $t('instance.detail.actions.help') }}</span>
-          </RouterLink>
           <!-- 封停按钮（仅宿主机所有者可见，实例未封停时） -->
           <button
             v-if="canSuspend && !isSuspended"
@@ -2702,7 +2700,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
             </svg>
-            <span class="hidden sm:inline ml-1">{{ $t('instance.actions.suspend') }}</span>
+            <span class="ml-1">{{ $t('instance.actions.suspend') }}</span>
           </button>
           <!-- 解封按钮（仅宿主机所有者可见，实例已封停时） -->
           <button
@@ -2720,7 +2718,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span class="hidden sm:inline ml-1">{{ $t('instance.actions.unsuspend') }}</span>
+            <span class="ml-1">{{ $t('instance.actions.unsuspend') }}</span>
           </button>
           <button v-if="canDeleteInstance" :disabled="isOperationDisabled" class="btn-danger btn-sm sm:btn" @click="handleAction('delete')">
             <svg v-if="actionLoading === 'delete'" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -2729,6 +2727,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             </svg>
             <span v-else>{{ $t('common.delete') }}</span>
           </button>
+          </div>
         </div>
       </div>
 
@@ -3549,6 +3548,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
 
     <!-- Terminal Modal -->
     <TerminalModal
+      :key="instance?.id"
       v-model:visible="showTerminalModal"
       v-model:force-disconnect="terminalForceDisconnect"
       :instance-id="instance?.id || null"
@@ -3865,9 +3865,10 @@ function formatShortDate(dateStr: string | null | undefined): string {
 }
 
 @media (max-width: 639px) {
-  .instance-detail-actions > button {
+  .instance-detail-actions > :is(button, select),
+  .instance-secondary-actions > button {
     min-height: 2.75rem;
-    flex: 1 1 calc(33.333% - 0.5rem);
+    flex: 1 1 auto;
     justify-content: center;
   }
 }

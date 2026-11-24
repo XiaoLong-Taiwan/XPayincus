@@ -12,22 +12,22 @@ export interface InstanceMonitoringOfflineEvent {
 export type InstanceMonitoringStreamEvent = InstanceMonitoringSample | InstanceMonitoringOfflineEvent
 type Subscriber = (event: InstanceMonitoringStreamEvent) => void
 
-const subscribers = new Map<number, Set<Subscriber>>()
+const subscribers = new Map<string, Set<Subscriber>>()
 
-export function publishInstanceMonitoring(instanceId: number, event: InstanceMonitoringStreamEvent): void {
-  for (const subscriber of subscribers.get(instanceId) ?? []) subscriber(event)
+export function publishInstanceMonitoring(scope: string, event: InstanceMonitoringStreamEvent): void {
+  for (const subscriber of subscribers.get(scope) ?? []) subscriber(event)
 }
 
-export function subscribeInstanceMonitoring(instanceId: number, subscriber: Subscriber): () => void {
-  const current = subscribers.get(instanceId) ?? new Set<Subscriber>()
+export function subscribeInstanceMonitoring(scope: string, subscriber: Subscriber): () => void {
+  const current = subscribers.get(scope) ?? new Set<Subscriber>()
   current.add(subscriber)
-  subscribers.set(instanceId, current)
+  subscribers.set(scope, current)
   return () => {
     current.delete(subscriber)
-    if (current.size === 0) subscribers.delete(instanceId)
+    if (current.size === 0 && subscribers.get(scope) === current) subscribers.delete(scope)
   }
 }
 
-export function getInstanceMonitoringSubscriberCount(instanceId: number): number {
-  return subscribers.get(instanceId)?.size ?? 0
+export function getInstanceMonitoringSubscriberCount(scope: string): number {
+  return subscribers.get(scope)?.size ?? 0
 }

@@ -279,6 +279,7 @@ model InstanceTask {
   status     InstanceTaskStatus @default(PENDING)
   progress   String? // 当前执行步骤
   retryCount Int                @default(0) @map("retry_count")
+  powerForce Boolean?           @map("power_force")
 
   // 重装/克隆操作特有字段
   imageAlias           String? @map("image_alias") // 重装使用的镜像别名

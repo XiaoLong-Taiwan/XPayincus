@@ -14,13 +14,21 @@ var collector struct {
 	instances map[string]any
 }
 
+const instanceCollectionTimeout = 15 * time.Second
+
 func StartCollector(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
 	go func() {
 		for {
-			value := collectIncusInstanceReport()
-			collector.Lock()
-			collector.instances = value
-			collector.Unlock()
+			collectCtx, cancel := context.WithTimeout(ctx, instanceCollectionTimeout)
+			value := collectIncusInstanceReportContext(collectCtx)
+			cancel()
+			if ctx.Err() != nil {
+				return
+			}
+			publishInstanceReport(value)
 			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():
@@ -30,6 +38,28 @@ func StartCollector(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}()
+}
+
+func publishInstanceReport(value map[string]any) {
+	if value["available"] != true {
+		return
+	}
+	items, ok := value["items"].([]any)
+	if !ok || (len(items) == 0 && value["deadlineExceeded"] == true) {
+		return
+	}
+	for _, raw := range items {
+		if _, ok := raw.(map[string]any); !ok {
+			return
+		}
+	}
+	replaceCachedInstances(value)
+}
+
+func replaceCachedInstances(value map[string]any) {
+	collector.Lock()
+	collector.instances = value
+	collector.Unlock()
 }
 
 func cachedInstances() map[string]any {

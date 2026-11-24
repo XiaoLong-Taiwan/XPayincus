@@ -21,6 +21,8 @@ export interface MonitoringCounterStats {
 
 export const instanceMetrics = ['cpuUsagePercent', 'memoryUsedBytes', 'diskReadBytesPerSecond', 'diskWriteBytesPerSecond', 'diskIOBytesPerSecond', 'rxBytesPerSecond', 'txBytesPerSecond'] as const
 export type InstanceMetric = typeof instanceMetrics[number]
+export const hostStatusMetrics = ['cpuUsagePercent', 'memoryUsagePercent', 'diskUsagePercent', 'swapUsagePercent', 'hostRxBytesPerSecond', 'hostTxBytesPerSecond'] as const
+export type HostStatusMetric = typeof hostStatusMetrics[number]
 export interface MonitoringQuery {
   from: string
   to: string
@@ -45,12 +47,13 @@ export interface MonitoringHistory extends MonitoringResponse {
 }
 export interface InstanceHistory extends MonitoringHistory {
   name: string
+  incusId?: string
 }
 export interface InstanceTop extends MonitoringResponse {
   metric: InstanceMetric
   orderBy: 'avg' | 'max'
   top: number
-  items: Array<MonitoringStats & { name: string }>
+  items: Array<MonitoringStats & { name: string; incusId?: string }>
 }
 export interface ComponentEvent {
   id: string
@@ -74,7 +77,7 @@ export interface InstanceMonitoringSnapshot extends MonitoringResponse {
   sample?: InstanceMonitoringSample
 }
 
-async function get<T>(hostId: number, view: string, params: MonitoringQuery & { name?: string; metric?: InstanceMetric; orderBy?: 'avg' | 'max'; top?: number }, signal?: AbortSignal): Promise<T> {
+async function get<T>(hostId: number, view: string, params: MonitoringQuery & { name?: string; incusId?: string; metric?: InstanceMetric; orderBy?: 'avg' | 'max'; top?: number }, signal?: AbortSignal): Promise<T> {
   return http.get<T, T>(`/agent/hosts/${hostId}/monitoring/${view}`, {
     params,
     signal,
@@ -84,7 +87,7 @@ async function get<T>(hostId: number, view: string, params: MonitoringQuery & { 
 
 export const agentMonitoringApi = {
   history: (hostId: number, query: MonitoringQuery, signal?: AbortSignal) => get<MonitoringHistory>(hostId, 'history', query, signal),
-  instanceHistory: (hostId: number, query: MonitoringQuery, name: string, signal?: AbortSignal) => get<InstanceHistory>(hostId, 'instances/history', { ...query, name }, signal),
+  instanceHistory: (hostId: number, query: MonitoringQuery, name: string, signal?: AbortSignal, incusId?: string) => get<InstanceHistory>(hostId, 'instances/history', { ...query, name, ...(incusId ? { incusId } : {}) }, signal),
   top: (hostId: number, query: MonitoringQuery, metric: InstanceMetric, orderBy: 'avg' | 'max', top: number, signal?: AbortSignal) => get<InstanceTop>(hostId, 'instances/top', { ...query, metric, orderBy, top }, signal),
   events: (hostId: number, query: MonitoringQuery, signal?: AbortSignal) => get<ComponentEvents>(hostId, 'events', query, signal)
 }

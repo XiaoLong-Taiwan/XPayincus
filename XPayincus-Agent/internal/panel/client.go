@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -116,24 +118,7 @@ func (client *Client) RealtimeMonitoring(ctx context.Context, payload map[string
 	if len(body) > 400*1024 {
 		return fmt.Errorf("realtime monitoring payload exceeds limit")
 	}
-	timestamp := protocol.NewTimestamp()
-	nonce, err := protocol.NewNonce()
-	if err != nil {
-		return err
-	}
-	bodyHash := protocol.BodySHA256(body)
-	signature := protocol.Signature(client.agentSecret, protocol.SigningPayload(http.MethodPost, realtimePath, timestamp, nonce, bodyHash))
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.panelURL+realtimePath, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("x-incudal-agent-id", client.agentID)
-	request.Header.Set("x-incudal-timestamp", timestamp)
-	request.Header.Set("x-incudal-nonce", nonce)
-	request.Header.Set("x-incudal-body-sha256", bodyHash)
-	request.Header.Set("x-incudal-signature", signature)
-	response, err := client.httpClient.Do(request)
+	response, err := client.doSignedRequest(ctx, realtimePath, body)
 	if err != nil {
 		return err
 	}
@@ -143,7 +128,7 @@ func (client *Client) RealtimeMonitoring(ctx context.Context, payload map[string
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("realtime monitoring failed: status=%d", response.StatusCode)
+		return fmt.Errorf("realtime monitoring failed: status=%d retryable=%t", response.StatusCode, isRetryableStatus(response.StatusCode))
 	}
 	return nil
 }
@@ -167,28 +152,8 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 		return HeartbeatResult{}, err
 	}
 
-	timestamp := protocol.NewTimestamp()
-	nonce, err := protocol.NewNonce()
-	if err != nil {
-		return HeartbeatResult{}, err
-	}
-	bodyHash := protocol.BodySHA256(body)
-	signingPayload := protocol.SigningPayload(http.MethodPost, heartbeatPath, timestamp, nonce, bodyHash)
-	signature := protocol.Signature(client.agentSecret, signingPayload)
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.panelURL+heartbeatPath, bytes.NewReader(body))
-	if err != nil {
-		return HeartbeatResult{}, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("x-incudal-agent-id", client.agentID)
-	request.Header.Set("x-incudal-timestamp", timestamp)
-	request.Header.Set("x-incudal-nonce", nonce)
-	request.Header.Set("x-incudal-body-sha256", bodyHash)
-	request.Header.Set("x-incudal-signature", signature)
-
 	startedAt := time.Now()
-	response, err := client.httpClient.Do(request)
+	response, err := client.doSignedRequest(ctx, heartbeatPath, body)
 	if err != nil {
 		return HeartbeatResult{}, err
 	}
@@ -206,7 +171,7 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 		LatencyMs:  time.Since(startedAt).Milliseconds(),
 	}
 	if !result.OK {
-		return result, fmt.Errorf("heartbeat failed: status=%d body=%s", response.StatusCode, result.Body)
+		return result, fmt.Errorf("heartbeat failed: status=%d retryable=%t body=%s", response.StatusCode, isRetryableStatus(response.StatusCode), result.Body)
 	}
 
 	var parsedResponse heartbeatResponse
@@ -235,4 +200,59 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 		}
 	}
 	return result, nil
+}
+
+func isRetryableStatus(status int) bool {
+	return status == http.StatusBadGateway || status == 530 || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func (client *Client) doSignedRequest(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		timestamp := protocol.NewTimestamp()
+		nonce, err := protocol.NewNonce()
+		if err != nil {
+			return nil, err
+		}
+		bodyHash := protocol.BodySHA256(body)
+		signature := protocol.Signature(client.agentSecret, protocol.SigningPayload(http.MethodPost, path, timestamp, nonce, bodyHash))
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.panelURL+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("x-incudal-agent-id", client.agentID)
+		request.Header.Set("x-incudal-timestamp", timestamp)
+		request.Header.Set("x-incudal-nonce", nonce)
+		request.Header.Set("x-incudal-body-sha256", bodyHash)
+		request.Header.Set("x-incudal-signature", signature)
+		response, requestErr := client.httpClient.Do(request)
+		if requestErr != nil {
+			lastErr = requestErr
+			if ctx.Err() != nil || !isRetryableRequestError(requestErr) || attempt+1 == maxAttempts {
+				return nil, requestErr
+			}
+		} else {
+			if !isRetryableStatus(response.StatusCode) || attempt+1 == maxAttempts {
+				return response, nil
+			}
+			response.Body.Close()
+			lastErr = fmt.Errorf("request failed: status=%d", response.StatusCode)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 250 * time.Millisecond):
+		}
+	}
+	return nil, lastErr
+}
+
+func isRetryableRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var networkError net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout())
 }

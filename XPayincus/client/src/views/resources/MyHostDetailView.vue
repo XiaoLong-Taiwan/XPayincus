@@ -8,6 +8,7 @@ import { useToast } from '@/stores/toast'
 import { useAuthStore } from '@/stores/auth'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
 import HostInfoTab from '@/components/host/HostInfoTab.vue'
+import AgentMonitoringPanel from '@/components/host/AgentMonitoringPanel.vue'
 import HostImagesTab from '@/components/host/HostImagesTab.vue'
 import MyHostConfigTab from '@/components/host/MyHostConfigTab.vue'
 import HostInstancesTab from '@/components/host/HostInstancesTab.vue'
@@ -491,7 +492,10 @@ const visibleTabs = computed(() => tabs)
 
       <!-- Tab Content -->
       <div>
-        <HostInfoTab v-if="activeTab === 'info'" :host="host" @refresh="loadHost" />
+        <template v-if="activeTab === 'info'">
+          <HostInfoTab :host="host" @refresh="loadHost" />
+          <AgentMonitoringPanel :host-id="host.id" />
+        </template>
         <MyHostConfigTab v-if="activeTab === 'config'" :host="host" @saved="onConfigSaved" />
         <HostImagesTab v-if="activeTab === 'images'" :host-id="host.id" :host-name="host.name" />
         <HostStorageTab v-if="activeTab === 'storage'" :host-id="host.id" />

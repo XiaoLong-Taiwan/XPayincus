@@ -790,7 +790,7 @@ async function executeStartTask(
  * 执行停止任务
  */
 async function executeStopTask(
-  task: { id: number; userId: number; instanceId: number },
+  task: { id: number; userId: number; instanceId: number; powerForce?: boolean | null },
   instance: { incus_id: string; name: string; image?: string | null },
   host: { name: string },
   client: Awaited<ReturnType<typeof getIncusClient>>
@@ -810,7 +810,7 @@ async function executeStopTask(
 
   try {
     const allowCancelBusyUpdate = isAlpineImageAlias(instance.image)
-    await stopInstance(client, instance.incus_id, true, {
+    await stopInstance(client, instance.incus_id, task.powerForce ?? true, {
       allowCancelBusyUpdate,
       busyUpdateCancelAfterMs: allowCancelBusyUpdate ? ALPINE_BUSY_UPDATE_CANCEL_AFTER_MS : undefined
     })
@@ -845,7 +845,7 @@ async function executeStopTask(
  * 执行重启任务
  */
 async function executeRestartTask(
-  task: { id: number; userId: number; instanceId: number },
+  task: { id: number; userId: number; instanceId: number; powerForce?: boolean | null },
   instance: { incus_id: string; name: string; network_mode: string },
   host: { name: string },
   client: Awaited<ReturnType<typeof getIncusClient>>
@@ -864,7 +864,7 @@ async function executeRestartTask(
   }
 
   try {
-    await restartInstance(client, instance.incus_id, true)
+    await restartInstance(client, instance.incus_id, task.powerForce ?? true)
   } catch (err) {
     // 重启失败时，检查当前状态
     // 如果实例是停止状态，则执行启动；如果是运行状态，继续重启流程

@@ -50,6 +50,11 @@ const instancesViewSource = readRepoFile('client/src/views/InstancesView.vue')
 const instanceCreateViewSource = readRepoFile('client/src/views/InstanceCreateView.vue')
 const publicPackagesRouteSource = readRepoFile('server/src/routes/packages.ts')
 const instanceDetailViewSource = readRepoFile('client/src/views/InstanceDetailView.vue')
+const instancesApiSource = readRepoFile('client/src/api/index.ts')
+const adminInstancesApiSource = readRepoFile('client/src/api/admin.ts')
+const agentMonitoringPanelSource = readRepoFile('client/src/components/host/AgentMonitoringPanel.vue')
+const containerTerminalSource = readRepoFile('client/src/components/instance/TerminalModal.vue')
+const terminalPageSource = readRepoFile('client/src/views/TerminalView.vue')
 const trafficStatsSource = readRepoFile('client/src/components/instance/TrafficStats.vue')
 const packageFormViewSource = readRepoFile('client/src/views/resources/PackageFormView.vue')
 const ticketsViewSource = readRepoFile('client/src/views/TicketsView.vue')
@@ -808,7 +813,6 @@ assert.ok(
 assert.ok(
   instancesViewSource.includes('walletPath()') &&
     !instancesViewSource.includes('to="/wallet"') &&
-    instanceDetailViewSource.includes('helpPath()') &&
     !instanceDetailViewSource.includes('to="/help"') &&
     instanceCreateViewSource.includes('profilePath()') &&
     !instanceCreateViewSource.includes('to="/profile"') &&
@@ -828,6 +832,61 @@ assert.ok(
     !walletViewSource.includes("router.replace({ path: '/wallet' })") &&
     !walletViewSource.includes('router.push(`/instances/${log.instanceId}`)'),
   'admin-reachable shared pages must not hardcode customer-only wallet/help/ticket routes'
+)
+assert.ok(
+  !instanceDetailViewSource.includes('helpPath') &&
+    !instanceDetailViewSource.includes('instance.detail.actions.help') &&
+    [containerTerminalSource, terminalPageSource].every(source => !source.includes('showHelp') && !source.includes('terminal.help')),
+  'instance detail and terminal surfaces must not expose the removed container help controls'
+)
+assert.ok(
+  instanceDetailViewSource.includes('@click="openTerminal"') &&
+    instanceDetailViewSource.includes('v-model:visible="showTerminalModal"') &&
+    !instanceDetailViewSource.includes('terminalPath()') &&
+    userRouterSource.includes("name: 'terminal'") &&
+    !adminRouterSource.includes('@/views/TerminalView.vue') &&
+    containerTerminalSource.includes('terminal-window-mobile') &&
+    containerTerminalSource.includes('window.visualViewport?.height') &&
+    containerTerminalSource.includes('aria-controls="container-terminal-actions"') &&
+    containerTerminalSource.includes('@click="closeModal"'),
+  'instance terminal must stay on the shared detail route, with a full-viewport mobile layout and a closable desktop dialog'
+)
+const instancePowerMenu = sectionBetween(instanceDetailViewSource, 'v-model="powerAction"', '</select>')
+assert.ok(
+  instancePowerMenu.includes('{{ powerStatus.label }}') &&
+    ['start', 'stop', 'restart', 'forceStop', 'forceRestart'].every(action => instancePowerMenu.includes(`value="${action}"`)) &&
+    instancePowerMenu.includes('value="stop" :disabled="!isRunning"') &&
+    instancePowerMenu.includes('value="restart" :disabled="!isRunning"') &&
+    instancePowerMenu.includes('v-if="canUsePowerOperations"') &&
+    instanceDetailViewSource.includes('isInstanceOwner === true') &&
+    instanceDetailViewSource.includes('isHostOwner === true') &&
+    instanceDetailViewSource.includes('api.instances.stop(instance.value.id, force)') &&
+    instanceDetailViewSource.includes('api.instances.restart(instance.value.id, force)') &&
+    instanceDetailViewSource.includes('const force = action === \'forceStop\' || action === \'forceRestart\'') &&
+    instanceDetailViewSource.includes('if (!force || confirm(') &&
+    instanceDetailViewSource.includes('aria-controls="instance-secondary-actions"'),
+  'instance power menu must show status and all five actions without treating a forced stop as a graceful shutdown'
+)
+for (const [entry, source] of [['user', instancesApiSource], ['admin', adminInstancesApiSource]]) {
+  for (const action of ['stop', 'restart']) {
+    const method = sectionBetween(source, `${action}: (id: number, force = true)`, '\n    ')
+    assert.match(method, /=>\s*$/, `${entry} ${action} API must accept an optional force flag`)
+    assert.ok(
+      source.includes(`${method}\n      http.post(\`/instances/\${id}/${action}\`, { force })`),
+      `${entry} ${action} API must forward force unchanged, including false`
+    )
+  }
+}
+assert.ok(
+  agentMonitoringPanelSource.includes('return incusId ? `uuid:${incusId}` : `name:${name}`') &&
+    agentMonitoringPanelSource.includes('instanceIdentityKey(selectedInstance.value)') &&
+    agentMonitoringPanelSource.includes('watch(selectedInstanceKey, () => { void loadInstanceHistory() })') &&
+    agentMonitoringPanelSource.includes(':key="instanceIdentityKey(item)"') &&
+    agentMonitoringPanelSource.includes(':aria-pressed="selectedInstanceKey === instanceIdentityKey(item)"') &&
+    agentMonitoringPanelSource.includes('@click="selectedInstance = item"') &&
+    agentMonitoringPanelSource.includes('const { name, incusId } = selection') &&
+    agentMonitoringPanelSource.includes('agentMonitoringApi.instanceHistory(hostId, query, name, current.signal, incusId)'),
+  'monitoring must distinguish same-name rows by Incus ID and reload history for the selected identity'
 )
 assert.ok(
   myHostsViewSource.includes('class="grid gap-3 lg:hidden"') &&

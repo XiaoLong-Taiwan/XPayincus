@@ -11,6 +11,7 @@ export interface CreateInstanceTaskData {
   hostId: number
   userId: number
   taskType: InstanceTaskType
+  powerForce?: boolean
   imageAlias?: string       // 重装使用的镜像别名
   sshKeyId?: number         // 重装使用的 SSH 密钥 ID
   customInitCommandIds?: number[]  // 重装使用的自定义初始化命令 ID 列表
@@ -125,6 +126,7 @@ export async function createInstanceTask(data: CreateInstanceTaskData): Promise<
         hostId: data.hostId,
         userId: data.userId,
         taskType: data.taskType,
+        powerForce: data.powerForce ?? true,
         imageAlias: data.imageAlias || null,
         sshKeyId: data.sshKeyId || null,
         customInitCommandIds: data.customInitCommandIds ? JSON.stringify(data.customInitCommandIds) : null,

@@ -865,6 +865,7 @@ export interface Instance {
 
 export interface InstanceWithDetails extends Omit<Instance, 'host'> {
   user?: Pick<User, 'id' | 'username' | 'email'>
+  hostId?: number
   // 实例详情页面的宿主机信息（比列表更详细）
   host?: {
     id?: number

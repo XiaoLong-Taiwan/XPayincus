@@ -27,6 +27,7 @@ export const navMenuItems: MenuItem[] = [
   { name: 'help', path: '/help', icon: 'help', label: 'nav.help' },
   { name: 'logs', path: '/logs', icon: 'logs', label: 'nav.logs' },
   { divider: true, label: 'nav.resources' },
+  { name: 'host-status', path: '/host-status', icon: 'pulse', label: 'nav.hostStatus' },
   { name: 'hosting-application', path: '/hosting-application', icon: 'clipboard', labelText: '托管上架申请' },
   { divider: true, label: 'nav.system' },
   { name: 'extensions', path: '/extensions', icon: 'puzzle', label: 'nav.extensions' },

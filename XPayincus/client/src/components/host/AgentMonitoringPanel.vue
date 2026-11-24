@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { agentMonitoringApi, instanceMetrics, type ComponentEvents, type InstanceHistory, type InstanceMetric, type InstanceTop, type MonitoringCounterStats, type MonitoringHistory, type MonitoringQuery, type MonitoringStats } from '@/api/agent-monitoring'
+import { agentMonitoringApi, hostStatusMetrics, instanceMetrics, type ComponentEvents, type HostStatusMetric, type InstanceHistory, type InstanceMetric, type InstanceTop, type MonitoringCounterStats, type MonitoringHistory, type MonitoringQuery, type MonitoringStats } from '@/api/agent-monitoring'
 import { agentMonitoringCopy, type MonitoringCopyKey } from './agent-monitoring-copy'
 
 const props = defineProps<{ hostId: number }>()
@@ -12,13 +12,15 @@ const resolutionSeconds = ref(3600)
 const metric = ref<InstanceMetric>('cpuUsagePercent')
 const orderBy = ref<'avg' | 'max'>('avg')
 const top = ref(10)
-const hostMetric = ref('cpuUsagePercent')
+const hostMetric = ref<HostStatusMetric>('cpuUsagePercent')
 const history = ref<MonitoringHistory | null>(null)
 const ranking = ref<InstanceTop | null>(null)
 const events = ref<ComponentEvents | null>(null)
 const loading = ref(false)
 const failed = ref(false)
-const selectedInstance = ref('')
+type InstanceIdentity = Pick<InstanceTop['items'][number], 'name' | 'incusId'>
+const selectedInstance = ref<InstanceIdentity | null>(null)
+const selectedInstanceKey = computed(() => selectedInstance.value ? instanceIdentityKey(selectedInstance.value) : null)
 const instanceLoading = ref(false)
 const instanceFailed = ref(false)
 const instanceHistory = ref<InstanceHistory | null>(null)
@@ -27,7 +29,7 @@ let controller: AbortController | null = null
 let instanceController: AbortController | null = null
 const statsKeys = ['min', 'max', 'avg', 'count', 'coverage'] as const
 const counterKeys = ['first', 'last', 'delta', 'resetCount', 'count', 'coverage'] as const
-const hostMetricKeys = computed(() => [...new Set([...Object.keys(history.value?.summary ?? {}), ...Object.keys(history.value?.summaryCounters ?? {})])].sort())
+const hostMetricKeys = hostStatusMetrics
 const selectedSummary = computed(() => history.value?.summary[hostMetric.value])
 const selectedCounter = computed(() => history.value?.summaryCounters[hostMetric.value])
 const instanceSummary = computed(() => instanceHistory.value?.summary[metric.value])
@@ -52,6 +54,10 @@ function counterStat(stats: MonitoringCounterStats, key: typeof counterKeys[numb
 
 function time(value: string): string {
   return new Date(value).toLocaleString(locale.value)
+}
+
+function instanceIdentityKey({ name, incusId }: InstanceIdentity): string {
+  return incusId ? `uuid:${incusId}` : `name:${name}`
 }
 
 async function load() {
@@ -84,7 +90,7 @@ async function load() {
     ranking.value = instances
     events.value = changes
     activeQuery.value = query
-    if (!host.summary[hostMetric.value] && !host.summaryCounters[hostMetric.value]) hostMetric.value = hostMetricKeys.value[0] ?? 'cpuUsagePercent'
+    if (!host.summary[hostMetric.value] && !host.summaryCounters[hostMetric.value]) hostMetric.value = 'cpuUsagePercent'
     if (selectedInstance.value) void loadInstanceHistory()
   } catch {
     if (!current.signal.aborted) failed.value = true
@@ -98,15 +104,16 @@ async function loadInstanceHistory() {
   instanceHistory.value = null
   instanceFailed.value = false
   instanceLoading.value = false
-  if (!activeQuery.value || !selectedInstance.value) return
+  const selection = selectedInstance.value
+  if (!activeQuery.value || !selection) return
   const current = new AbortController()
   instanceController = current
   instanceLoading.value = true
   const query = { ...activeQuery.value }
-  const name = selectedInstance.value
+  const { name, incusId } = selection
   const hostId = props.hostId
   try {
-    const result = await agentMonitoringApi.instanceHistory(hostId, query, name, current.signal)
+    const result = await agentMonitoringApi.instanceHistory(hostId, query, name, current.signal, incusId)
     if (!current.signal.aborted) instanceHistory.value = result
   } catch {
     if (!current.signal.aborted) instanceFailed.value = true
@@ -150,9 +157,9 @@ const eventRows = computed(() => {
   }).reverse()
 })
 
-watch(() => props.hostId, () => { selectedInstance.value = ''; void load() }, { immediate: true })
+watch(() => props.hostId, () => { selectedInstance.value = null; void load() }, { immediate: true })
 watch([windowSeconds, resolutionSeconds, metric, orderBy, top], () => { void load() })
-watch(selectedInstance, () => { void loadInstanceHistory() })
+watch(selectedInstanceKey, () => { void loadInstanceHistory() })
 onBeforeUnmount(() => { controller?.abort(); instanceController?.abort() })
 </script>
 
@@ -183,8 +190,9 @@ onBeforeUnmount(() => { controller?.abort(); instanceController?.abort() })
     <template v-if="history && ranking && events">
       <p class="text-xs text-themed-muted">{{ time(history.from) }} — {{ time(history.to) }}</p>
       <section class="space-y-3 border-t border-themed pt-4">
-        <h3 class="text-sm font-semibold">{{ copy.host }} · {{ copy.psi }}</h3>
-        <p class="text-xs text-themed-muted">{{ copy.psiHint }}</p>
+        <h3 class="text-sm font-semibold">{{ copy.hostStatus }}</h3>
+        <p class="text-xs text-themed-muted">{{ copy.hostStatusHint }}</p>
+        <p v-if="history.incomplete" class="text-xs text-amber-600">{{ copy.incomplete }}</p>
         <p v-if="!hostMetricKeys.length" class="text-sm text-themed-muted">{{ copy.empty }}</p>
         <template v-else>
           <label class="block text-xs">{{ copy.metric }}
@@ -222,14 +230,14 @@ onBeforeUnmount(() => { controller?.abort(); instanceController?.abort() })
         </div>
         <p v-if="!ranking.items.length" class="text-sm text-themed-muted">{{ copy.empty }}</p>
         <div class="max-h-80 space-y-2 overflow-y-auto">
-          <article v-for="(item, index) in ranking.items" :key="item.name" class="space-y-2 rounded border border-themed p-3">
-            <button type="button" class="btn btn-secondary max-w-full break-all text-xs" :aria-pressed="selectedInstance === item.name" @click="selectedInstance = item.name">#{{ index + 1 }} · {{ item.name }} · {{ copy.select }}</button>
+          <article v-for="(item, index) in ranking.items" :key="instanceIdentityKey(item)" class="space-y-2 rounded border border-themed p-3">
+            <button type="button" class="btn btn-secondary max-w-full break-all text-xs" :aria-pressed="selectedInstanceKey === instanceIdentityKey(item)" @click="selectedInstance = item">#{{ index + 1 }} · {{ item.name }} · {{ copy.select }}</button>
             <dl class="grid grid-cols-2 gap-2 sm:grid-cols-5"><div v-for="key in statsKeys" :key="key"><dt class="text-xs text-themed-muted">{{ copy[key] }}</dt><dd class="break-words text-xs">{{ stat(item, key) }}</dd></div></dl>
           </article>
         </div>
       </section>
       <section class="space-y-3 border-t border-themed pt-4" :aria-busy="instanceLoading">
-        <h3 class="break-all text-sm font-semibold">{{ copy.instanceHistory }}<span v-if="selectedInstance"> · {{ selectedInstance }} · {{ label(metric) }}</span></h3>
+        <h3 class="break-all text-sm font-semibold">{{ copy.instanceHistory }}<span v-if="selectedInstance"> · {{ selectedInstance.name }} · {{ label(metric) }}</span></h3>
         <p class="text-xs text-themed-muted">{{ copy.historyHint }}</p>
         <p v-if="!selectedInstance" class="text-sm text-themed-muted">{{ copy.choose }}</p>
         <p v-if="instanceLoading" role="status" class="text-sm text-themed-muted">{{ copy.loading }}</p>

@@ -2,9 +2,76 @@ package report
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestOneInstanceStateFailureDoesNotDiscardSuccessfulMonitoringPoints(t *testing.T) {
+	previous := cachedInstances()
+	t.Cleanup(func() { replaceCachedInstances(previous) })
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.Contains(request.URL.Path, "/failed/") {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"type":"sync","metadata":{"status":"Running","pid":42,"started_at":"2026-11-25T00:00:00Z","cpu":{"usage":1000000000},"memory":{"usage":1024}}}`))
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Transport = rewriteIncusTestTransport{base: client.Transport, target: server.URL}
+	failed := buildIncusInstanceReportItem(client, incusInstanceSummary{Name: "failed", Status: "Running"})
+	succeeded := buildIncusInstanceReportItem(client, incusInstanceSummary{Name: "succeeded", Status: "Running"})
+	if _, exists := failed["sampledAt"]; exists {
+		t.Fatalf("failed state query produced a monitoring timestamp: %#v", failed)
+	}
+	if succeeded["sampledAt"] == nil || succeeded["performance"] == nil {
+		t.Fatalf("successful state query did not produce monitoring data: %#v", succeeded)
+	}
+	for _, test := range []struct {
+		name             string
+		deadlineExceeded bool
+	}{
+		{name: "state failure"},
+		{name: "deadline with completed items", deadlineExceeded: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			replaceCachedInstances(nil)
+			publishInstanceReport(map[string]any{
+				"available": true, "deadlineExceeded": test.deadlineExceeded,
+				"items": []any{failed, succeeded},
+			})
+			items := cachedInstances()["items"].([]any)
+			if len(items) != 2 || items[0].(map[string]any)["error"] == nil {
+				t.Fatalf("partial inventory was not published: %#v", items)
+			}
+			points := RealtimeInstancePayload(3)["instances"].([]any)
+			if len(points) != 1 {
+				t.Fatalf("expected one monitoring point: %#v", points)
+			}
+			point := points[0].(map[string]any)
+			if point["name"] != "succeeded" || point["sampledAt"] != succeeded["sampledAt"] {
+				t.Fatalf("successful monitoring point was lost or restamped: %#v", point)
+			}
+		})
+	}
+}
+
+type rewriteIncusTestTransport struct {
+	base   http.RoundTripper
+	target string
+}
+
+func (transport rewriteIncusTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	copy := request.Clone(request.Context())
+	copy.URL.Scheme = "http"
+	copy.URL.Host = strings.TrimPrefix(transport.target, "http://")
+	return transport.base.RoundTrip(copy)
+}
 
 func TestPressureMissingAndMalformedAreNotZero(t *testing.T) {
 	values := parsePressure("some avg10=1.25 avg60=2.50 avg300=0.00 total=12345\nfull avg10=NaN avg60=0 avg300=0 total=1\n")
@@ -81,6 +148,35 @@ func TestPerformanceRatesResetAndIncusDiskContract(t *testing.T) {
 	}
 }
 
+func TestPerformanceRatesUseProcStartIdentityWhenIncusOmitsStartedAt(t *testing.T) {
+	identity := t.Name()
+	defer func() { performanceCache.Lock(); delete(performanceCache.items, identity); performanceCache.Unlock() }()
+	state := func(cpu int) incusInstanceState {
+		body, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "cpu": map[string]any{"usage": cpu}, "memory": map[string]any{"usage": 1024}})
+		var value incusInstanceState
+		if err := json.Unmarshal(body, &value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	at := time.Now()
+	performanceMetrics("vm", identity, state(1000000000), at)
+	metrics := performanceMetrics("vm", identity, state(2000000000), at.Add(time.Second))
+	if metrics["cpuUsagePercent"] != float64(100) {
+		t.Fatalf("missing Incus started_at did not use safe process identity: %#v", metrics)
+	}
+}
+
+func TestProcessStartIdentityParsesStatCommandWithParentheses(t *testing.T) {
+	stat := "123 (worker (incus)) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 20"
+	if got := processStartIdentityFromStat(stat); got != "987654" {
+		t.Fatalf("unexpected process start identity: %q", got)
+	}
+	if got := processStartIdentityFromStat("123 (worker) S 1 2"); got != "" {
+		t.Fatalf("malformed proc stat returned identity: %q", got)
+	}
+}
+
 func TestRealtimeInstancePayloadPlacesIntervalAtTopLevel(t *testing.T) {
 	previous := collector.instances
 	collector.Lock()
@@ -102,5 +198,24 @@ func TestRealtimeInstancePayloadPlacesIntervalAtTopLevel(t *testing.T) {
 	}
 	if _, exists := instance["intervalSeconds"]; exists {
 		t.Fatal("monitoring interval must not be repeated on each instance")
+	}
+}
+
+func TestRealtimeInstancePayloadSkipsExpiredAndInvalidSamples(t *testing.T) {
+	previous := collector.instances
+	now := time.Now()
+	collector.Lock()
+	collector.instances = map[string]any{"items": []any{
+		map[string]any{"name": "fresh", "sampledAt": now.Add(-time.Minute).UTC().Format(time.RFC3339Nano), "performance": map[string]any{"cpuUsagePercent": 1}},
+		map[string]any{"name": "expired", "sampledAt": now.Add(-3 * time.Minute).UTC().Format(time.RFC3339Nano), "performance": map[string]any{"cpuUsagePercent": 2}},
+		map[string]any{"name": "invalid", "sampledAt": "invalid", "performance": map[string]any{"cpuUsagePercent": 3}},
+	}}
+	collector.Unlock()
+	defer func() { collector.Lock(); collector.instances = previous; collector.Unlock() }()
+
+	payload := realtimeInstancePayload(15, now)
+	instances := payload["instances"].([]any)
+	if len(instances) != 1 || instances[0].(map[string]any)["name"] != "fresh" {
+		t.Fatalf("stale realtime samples were not omitted: %#v", instances)
 	}
 }

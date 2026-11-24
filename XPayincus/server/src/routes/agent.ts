@@ -37,8 +37,7 @@ import { compareReleaseTags, fetchRelease, isValidReleaseTag, readReleaseJson } 
 import { agentVersionStatus } from '../lib/agent-upgrade.js'
 import { DurableAgentUpgradeRequests, ingestAgentHistory, readAgentHistory, serializeAgentHeartbeat } from '../services/agent-durable-state.js'
 import { readPanelCertificatePair } from '../lib/incus/panel-certificate.js'
-import { cacheAgentRealtimeInstances, ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceId, isMonitoringInstanceName, publishAgentInstanceMonitoring, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric, type InstancePoint } from '../services/agent-monitoring.js'
-import { publishInstanceMonitoring } from '../lib/agent-monitoring-stream.js'
+import { ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceId, isMonitoringInstanceName, matchAgentMonitoringInstances, monitoringFreshnessMs, monitoringInstanceSelect, monitoringPointIdentity, publishAgentInstanceMonitoring, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceTop, readAgentMonitoring, type InstanceMonitoringMetric, type InstancePoint } from '../services/agent-monitoring.js'
 
 interface AgentCredentialsParams {
   hostId: string
@@ -1096,7 +1095,10 @@ async function authenticateRealtimeAgentRequest(
 
 function normalizeRealtimeInstances(body: AgentRealtimeBody, now: number): InstancePoint[] | null {
   if (body.schemaVersion !== 1 || !Array.isArray(body.instances) || body.instances.length > 500) return null
-  if (typeof body.intervalSeconds !== 'number' || !Number.isInteger(body.intervalSeconds) || body.intervalSeconds < 1 || body.intervalSeconds > 60) return null
+  const intervalSeconds = typeof body.intervalSeconds === 'number' && Number.isInteger(body.intervalSeconds) && body.intervalSeconds >= 1 && body.intervalSeconds <= 3600
+    ? body.intervalSeconds
+    : null
+  if (body.intervalSeconds !== undefined && intervalSeconds === null) return null
   const envelopeTime = typeof body.sampledAt === 'string' ? Date.parse(body.sampledAt) : NaN
   if (!Number.isFinite(envelopeTime) || envelopeTime > now + 60000 || envelopeTime < now - 120000) return null
   const points: InstancePoint[] = []
@@ -1106,10 +1108,11 @@ function normalizeRealtimeInstances(body: AgentRealtimeBody, now: number): Insta
     if (!isMonitoringInstanceName(raw.name)) return null
     if (raw.incusId !== undefined && !isMonitoringInstanceId(raw.incusId)) return null
     const incusId = isMonitoringInstanceId(raw.incusId) ? raw.incusId : undefined
-    const identity = incusId || raw.name
+    const identity = monitoringPointIdentity({ name: raw.name, ...(incusId ? { incusId } : {}) })
     if (identities.has(identity)) return null
     const sampledAt = typeof raw.sampledAt === 'string' ? Date.parse(raw.sampledAt) : NaN
-    if (!Number.isFinite(sampledAt) || sampledAt > now + 60000 || sampledAt < now - 120000) return null
+    if (!Number.isFinite(sampledAt) || sampledAt > now + 60000) return null
+    if (now - sampledAt > monitoringFreshnessMs) continue
     const metricsRaw = isRecord(raw.metrics) ? raw.metrics : null
     if (!metricsRaw) return null
     const metrics: Record<string, number> = {}
@@ -1121,9 +1124,24 @@ function normalizeRealtimeInstances(body: AgentRealtimeBody, now: number): Insta
       }
     }
     identities.add(identity)
-    points.push({ name: raw.name as string, ...(incusId ? { incusId } : {}), sampledAt, intervalSeconds: body.intervalSeconds, metrics })
+    const legacyInterval = raw.intervalSeconds
+    const pointInterval = intervalSeconds ?? (typeof legacyInterval === 'number' && Number.isInteger(legacyInterval) && legacyInterval >= 1 && legacyInterval <= 3600 ? legacyInterval : 60)
+    points.push({ name: raw.name as string, ...(incusId ? { incusId } : {}), sampledAt, intervalSeconds: pointInterval, metrics })
   }
   return points
+}
+
+async function publishReportedInstanceMonitoring(agent: { agentId: string; hostId: number }, points: InstancePoint[], now: number): Promise<number> {
+  const fresh = points.filter(point => now - point.sampledAt <= monitoringFreshnessMs)
+  if (fresh.length === 0) return 0
+  const identifiers = [...new Set(fresh.flatMap(point => point.incusId ? [point.name, point.incusId] : [point.name]))]
+  const instances = await prisma.instance.findMany({
+    where: { hostId: agent.hostId, status: { not: 'deleted' }, incusId: { in: identifiers } },
+    select: monitoringInstanceSelect
+  })
+  const matched = matchAgentMonitoringInstances(agent.hostId, instances, fresh)
+  for (const { instance, point } of matched) publishAgentInstanceMonitoring(agent.agentId, instance, point, now)
+  return matched.length
 }
 
 export default async function agentRoutes(fastify: FastifyInstance) {
@@ -1765,41 +1783,8 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     if (bodyBytes > 400 * 1024) return reply.code(413).send({ error: 'Realtime monitoring payload is too large', code: 'AGENT_MONITORING_TOO_LARGE' })
     const points = normalizeRealtimeInstances(request.body, now)
     if (!points) return reply.code(400).send({ error: 'Invalid realtime monitoring payload', code: 'AGENT_MONITORING_INVALID' })
-    const reportedIds = [...new Set(points.flatMap(point => point.incusId ? [point.incusId] : []))]
-    const reportedNames = [...new Set(points.flatMap(point => point.incusId ? [] : [point.name]))]
-    const instances = reportedIds.length + reportedNames.length === 0 ? [] : await prisma.instance.findMany({
-      where: {
-        hostId: agent.hostId,
-        status: { not: 'deleted' },
-        OR: [
-          ...(reportedIds.length > 0 ? [{ incusId: { in: reportedIds } }] : []),
-          ...(reportedNames.length > 0 ? [{ name: { in: reportedNames } }] : [])
-        ]
-      },
-      select: { id: true, name: true, incusId: true }
-    })
-    const byIncusId = new Map(instances.map(instance => [instance.incusId, instance]))
-    const byLegacyName = new Map<string, typeof instances[number]>()
-    for (const instance of instances) {
-      byLegacyName.set(instance.name, instance)
-    }
-    const accepted: InstancePoint[] = []
-    const cached: InstancePoint[] = []
-    for (const point of points) {
-      const instance = point.incusId ? byIncusId.get(point.incusId) : byLegacyName.get(point.name)
-      if (!instance) continue
-      const canonicalPoint = { ...point, name: instance.name, ...(point.incusId ? { incusId: instance.incusId } : {}) }
-      accepted.push(canonicalPoint)
-      cached.push(canonicalPoint)
-      const snapshot = {
-        sampledAt: new Date(point.sampledAt).toISOString(),
-        online: true,
-        metrics: point.metrics
-      }
-      publishInstanceMonitoring(instance.id, snapshot)
-    }
-    cacheAgentRealtimeInstances(agent.agentId, cached, now)
-    return { ok: true, acceptedInstances: accepted.length, serverTime: new Date(now).toISOString() }
+    const acceptedInstances = await publishReportedInstanceMonitoring(agent, points, now)
+    return { ok: true, acceptedInstances, serverTime: new Date(now).toISOString() }
   })
 
   fastify.post<{ Body: AgentHeartbeatBody }>('/heartbeat', {
@@ -1944,41 +1929,16 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     }
     let upgrade: AgentUpgradeInstruction = { available: false }
     let acceptedMonitoringSampleIds: string[] = []
+    let persistedMonitoringPoints: InstancePoint[] = []
     try {
-      acceptedMonitoringSampleIds = ingestAgentMonitoring(agent.agentId, request.body.monitoring, now.getTime())
-      if (acceptedMonitoringSampleIds.length > 0) {
-        const monitoring = request.body.monitoring as Record<string, unknown> | undefined
-        const reported = Array.isArray(monitoring?.samples)
-          ? monitoring.samples.flatMap(sample => {
-            const value = sample as Record<string, unknown>
-            return Array.isArray(value.instances) ? value.instances.flatMap(instance => {
-              if (typeof instance !== 'object' || instance === null) return []
-              const item = instance as Record<string, unknown>
-              return typeof item.name === 'string' ? [{ name: item.name, incusId: isMonitoringInstanceId(item.incusId) ? item.incusId : undefined }] : []
-            }) : []
-          })
-          : []
-        const reportedIds = [...new Set(reported.flatMap(item => item.incusId ? [item.incusId] : []))]
-        const reportedNames = [...new Set(reported.flatMap(item => item.incusId ? [] : [item.name]))]
-        const instances = await prisma.instance.findMany({
-          where: {
-            hostId: agent.hostId,
-            status: { not: 'deleted' },
-            OR: [
-              ...(reportedIds.length ? [{ incusId: { in: reportedIds } }] : []),
-              ...(reportedNames.length ? [{ name: { in: reportedNames } }] : [])
-            ]
-          },
-          select: { id: true, name: true, incusId: true }
-        })
-        for (const instance of instances) {
-          if (reported.some(item => item.incusId ? item.incusId === instance.incusId : item.name === instance.name)) {
-            publishAgentInstanceMonitoring(agent.agentId, instance.id, instance.name, now.getTime(), instance.incusId)
-          }
-        }
-      }
+      acceptedMonitoringSampleIds = ingestAgentMonitoring(agent.agentId, request.body.monitoring, now.getTime(), points => { persistedMonitoringPoints = points })
     } catch (error) {
       request.log.warn({ error, agentId: agent.agentId }, 'Agent monitoring persistence unavailable; samples retained by Agent')
+    }
+    try {
+      await publishReportedInstanceMonitoring(agent, persistedMonitoringPoints, now.getTime())
+    } catch (error) {
+      request.log.warn({ error, agentId: agent.agentId }, 'Agent monitoring stream publishing unavailable')
     }
     try {
       upgrade = agentUpgradeRequests.heartbeat(agent.agentId, request.body.version, request.body.runtime ?? {}, now.getTime(), request.body.upgradeStatus, normalizeCapabilities(request.body.capabilities))
