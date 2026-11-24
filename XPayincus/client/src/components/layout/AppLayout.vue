@@ -117,7 +117,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="kawaii-app-shell h-[100dvh] min-h-0 flex overflow-hidden" :class="routeThemeClass">
+  <div class="kawaii-app-shell flex min-h-0 overflow-hidden" :class="routeThemeClass">
     <!-- 侧边导航 -->
     <SideNav 
       :collapsed="sidebarCollapsed" 
@@ -134,6 +134,8 @@ onUnmounted(() => {
           <button 
             class="kawaii-header-icon md:!hidden p-1.5 rounded transition-colors touch-target"
             :aria-label="t('nav.openMenu')"
+            :aria-expanded="mobileMenuOpen"
+            aria-controls="console-side-nav"
             @click="toggleMobileMenu"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -336,7 +338,7 @@ onUnmounted(() => {
       </header>
 
       <!-- 页面内容 -->
-      <main class="kawaii-workspace nimbus-workspace min-h-0 flex-1 px-3 sm:px-4 md:px-6 xl:px-10 py-4 md:py-6" :class="isSplitPane ? 'overflow-auto lg:overflow-hidden' : 'overflow-auto'">
+      <main class="kawaii-workspace nimbus-workspace min-h-0 flex-1 px-3 sm:px-4 md:px-6 xl:px-10 py-4 md:py-6" :class="[isSplitPane ? 'overflow-auto lg:overflow-hidden' : 'overflow-auto', mobileMenuOpen && 'max-md:!overflow-hidden']">
         <div class="w-full mx-auto" :class="isSplitPane ? 'lg:h-full' : 'max-w-[1680px]'">
           <slot />
         </div>
@@ -346,6 +348,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.kawaii-app-shell {
+  height: 100vh;
+  height: 100dvh;
+}
+
+@media (max-width: 767px) {
+  .nimbus-workspace {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* ============================================================
    Nimbus topbar — translucent blurred console header + clean
    34px icon buttons with indigo hover. Colors from CSS tokens.

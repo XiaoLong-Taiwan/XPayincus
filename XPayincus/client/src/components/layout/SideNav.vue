@@ -168,13 +168,14 @@ function handleLinkClick() {
 
   <!-- Sidebar -->
   <aside
+    id="console-side-nav"
     :class="[
-      'kawaii-sidebar nimbus-sidebar flex flex-col min-h-full transition-all duration-200 border-r z-50',
+      'kawaii-sidebar nimbus-sidebar flex min-h-0 flex-col transition-all duration-200 border-r z-50',
       // 移动端：mobileOpen 为 true 时显示，否则隐藏；桌面端始终显示 (md:flex)
       mobileOpen ? 'flex' : 'hidden md:flex',
       // 宽度：展开 240px / 折叠 64px / 移动端全宽
       collapsed ? 'md:w-16' : 'md:w-60',
-      'w-64',
+      'w-64 max-md:max-w-[calc(100%-3rem)]',
       // 位置
       'md:relative fixed inset-y-0 left-0',
       // 滑动动画的 transform
@@ -201,7 +202,7 @@ function handleLinkClick() {
     </div>
 
     <!-- 导航菜单 -->
-    <nav class="nimbus-nav flex-1 overflow-y-auto">
+    <nav class="nimbus-nav min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <template v-for="item in visibleMenuItems" :key="item.name || item.label">
         <!-- 分组标签 / 分隔线 -->
         <div v-if="item.divider" class="nimbus-group-row">

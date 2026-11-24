@@ -39,12 +39,12 @@ func RealtimeInstancePayload(intervalSeconds int) map[string]any {
 		}
 		projectedItem := map[string]any{
 			"name": name, "sampledAt": sampledAt,
-			"intervalSeconds": intervalSeconds, "metrics": metrics,
+			"metrics": metrics,
 		}
 		if incusID, ok := item["incusId"].(string); ok && incusUUIDPattern.MatchString(incusID) {
 			projectedItem["incusId"] = incusID
 		}
 		projected = append(projected, projectedItem)
 	}
-	return map[string]any{"schemaVersion": 1, "sampledAt": time.Now().UTC().Format(time.RFC3339Nano), "instances": projected}
+	return map[string]any{"schemaVersion": 1, "sampledAt": time.Now().UTC().Format(time.RFC3339Nano), "intervalSeconds": intervalSeconds, "instances": projected}
 }

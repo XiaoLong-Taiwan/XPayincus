@@ -154,9 +154,9 @@ onUnmounted(() => {
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
       <div class="flex h-16 items-center justify-between gap-3 sm:gap-4">
         <div class="flex min-w-0 items-center gap-3 sm:gap-6">
-          <RouterLink to="/" class="flex items-center gap-2 sm:gap-3">
+          <RouterLink to="/" class="flex min-w-0 items-center gap-2 sm:gap-3">
             <div
-              class="kawaii-brand-mark flex h-10 w-10 items-center justify-center rounded-xl"
+              class="kawaii-brand-mark flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
             >
               <img :src="brand.brandLogoUrl" :alt="brand.brandName" class="h-6 w-6 rounded-xl object-contain" />
             </div>
@@ -239,7 +239,7 @@ onUnmounted(() => {
           </div>
 
           <button
-            class="kawaii-header-cta inline-flex h-10 min-w-0 shrink-0 items-center gap-1.5 rounded-full px-5 text-sm font-medium tracking-[0.01em] transition-[background-color,box-shadow] duration-150 sm:gap-2"
+            class="kawaii-header-cta inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-sm font-medium tracking-[0.01em] transition-[background-color,box-shadow] duration-150 sm:gap-2 sm:px-5"
             @click="handlePrimaryAction"
           >
             <span class="sm:hidden">{{ primaryActionCompactLabel }}</span>

@@ -80,3 +80,27 @@ func TestPerformanceRatesResetAndIncusDiskContract(t *testing.T) {
 		}
 	}
 }
+
+func TestRealtimeInstancePayloadPlacesIntervalAtTopLevel(t *testing.T) {
+	previous := collector.instances
+	collector.Lock()
+	collector.instances = map[string]any{"items": []any{map[string]any{"name": "instance-1", "sampledAt": time.Now().UTC().Format(time.RFC3339Nano), "performance": map[string]any{"cpuUsagePercent": 1.5}}}}
+	collector.Unlock()
+	defer func() { collector.Lock(); collector.instances = previous; collector.Unlock() }()
+
+	payload := RealtimeInstancePayload(15)
+	if payload["intervalSeconds"] != 15 {
+		t.Fatalf("unexpected top-level monitoring interval: %#v", payload["intervalSeconds"])
+	}
+	instances, ok := payload["instances"].([]any)
+	if !ok || len(instances) != 1 {
+		t.Fatalf("unexpected realtime instances: %#v", payload["instances"])
+	}
+	instance, ok := instances[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected realtime instance: %#v", instances[0])
+	}
+	if _, exists := instance["intervalSeconds"]; exists {
+		t.Fatal("monitoring interval must not be repeated on each instance")
+	}
+}
