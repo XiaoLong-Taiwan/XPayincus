@@ -54,6 +54,13 @@ for (const [name, startMarker, endMarker] of guardedUserRoutes) {
   )
 }
 
+const rebuildRoute = sectionBetween(instancesSource, '// 重装系统', '// 重建实例')
+assert.ok(
+  rebuildRoute.includes("instance.user_id !== user.id && user.role !== 'admin'") &&
+    rebuildRoute.includes("return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))"),
+  'rebuild route must allow only the instance owner or an administrator'
+)
+
 const hostConflictGuard = sectionBetween(
   hostsSource,
   'async function rejectActiveHostInstanceWorkflowConflict(',

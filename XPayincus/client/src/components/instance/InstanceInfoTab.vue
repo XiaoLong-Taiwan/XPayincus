@@ -49,6 +49,7 @@ interface Props {
 
 interface Emits {
   (e: 'toggle-password', instanceId: number): void
+  (e: 'change-password'): void
   (e: 'copy', text: string): void
   (e: 'edit-config'): void
   (e: 'redeem'): void
@@ -364,6 +365,12 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               {{ showPassword[instance.id] ? t('instance.detail.info.hide') : t('instance.detail.info.show') }}
             </button>
             <button
+              class="text-xs text-themed-muted hover:text-themed transition-colors"
+              @click="emit('change-password')"
+            >
+              {{ t('instance.detail.password.change', 'Change password') }}
+            </button>
+            <button
               v-if="showPassword[instance.id] && instancePassword?.[instance.id]"
               class="text-xs text-themed-muted hover:text-themed transition-colors"
               @click="emit('copy', instancePassword[instance.id] || '')"
@@ -469,10 +476,10 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               </svg>
               {{ t('instance.detail.info.cpu') }}
             </span>
-            <span class="text-themed font-medium">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent ?? instance.cpu, '%') }}</span>
+            <span class="text-themed font-medium">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent, '%') }}<span v-if="typeof monitoringMetrics.cpuUsagePercent === 'number'"> ({{ Math.round(clampPercent(monitoringMetrics.cpuUsagePercent)) }}%)</span></span>
           </div>
           <div class="h-2 rounded-full overflow-hidden bg-themed/20">
-            <div class="h-full rounded-full bg-green-500 transition-all duration-500" :style="{ width: clampPercent(monitoringMetrics.cpuUsagePercent ?? instance.cpu) + '%' }"></div>
+            <div class="h-full rounded-full bg-green-500 transition-all duration-500" :style="{ width: clampPercent(monitoringMetrics.cpuUsagePercent) + '%' }"></div>
           </div>
         </div>
         <!-- Memory -->

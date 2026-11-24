@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -25,6 +26,7 @@ import {
 } from '@/lib/terminal-core'
 import api from '@/api'
 import type { InstanceWithDetails } from '@/types/api'
+import { instanceDetailPath } from '@/utils/app-paths'
 import '@xterm/xterm/css/xterm.css'
 
 const MAX_TABS = 5  // 集中式终端页面允许更多标签
@@ -63,6 +65,8 @@ interface TerminalTab {
 }
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
 const terminalStore = useTerminalStore()
@@ -74,6 +78,7 @@ const loadingInstances = ref(false)
 // 标签管理
 const tabs = ref<TerminalTab[]>([])
 const activeTabId = ref<string>('')
+const sourceInstanceId = ref<number | null>(null)
 const containerRefs = ref<Map<string, HTMLElement>>(new Map())
 
 // 实例选择器弹窗
@@ -222,6 +227,18 @@ async function loadInstances() {
             hostName: i.host?.name,
             packageName: i.package?.name
         }))
+        const requestedInstanceId = route.query.instanceId
+        const requestedId = typeof requestedInstanceId === 'string' && /^\d+$/.test(requestedInstanceId) ? Number(requestedInstanceId) : NaN
+        if (Number.isInteger(requestedId) && requestedId > 0) {
+            const requested = instances.value.find(instance => instance.id === requestedId)
+            if (requested?.status.toLowerCase() === 'running') {
+                sourceInstanceId.value = requested.id
+                addInstanceTab(requested.id, requested.name)
+                const query = { ...route.query }
+                delete query.instanceId
+                void router.replace({ query })
+            }
+        }
     } catch (err) {
         console.error('Failed to load instances:', err)
     } finally {
@@ -1130,7 +1147,7 @@ function handleVisibilityChange() {
 </script>
 
 <template>
-  <div class="kawaii-page space-y-6 animate-fade-in">
+  <div class="terminal-page kawaii-page space-y-6 animate-fade-in">
     <!-- 页面头部 -->
     <header class="flex flex-col gap-4 border-b border-themed pb-5 sm:flex-row sm:items-end sm:justify-between">
       <div class="min-w-0">
@@ -1160,6 +1177,13 @@ function handleVisibilityChange() {
         </button>
       </div>
     </header>
+
+    <div v-if="sourceInstanceId && activeTab" class="flex items-center justify-between gap-3 rounded-lg border border-themed bg-themed-surface px-3 py-2 text-sm">
+      <span class="truncate text-themed-muted">{{ activeTab.instanceName }}</span>
+      <button class="btn-secondary btn-sm shrink-0" @click="router.push(instanceDetailPath(sourceInstanceId))">
+        {{ t('common.back', 'Back') }}
+      </button>
+    </div>
 
     <!-- 终端窗口 -->
     <div class="overflow-hidden rounded-xl border border-themed shadow-sm">
@@ -1981,6 +2005,28 @@ function handleVisibilityChange() {
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.terminal-page {
+  min-height: calc(100dvh - 2rem);
+}
+
+@media (max-width: 767px) {
+  .terminal-page {
+    min-height: 100dvh;
+    margin: -1rem;
+    padding: 1rem 0.75rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .terminal-page > header {
+    flex-shrink: 0;
+  }
+
+  .terminal-page > div:last-of-type {
+    min-height: 0;
+  }
+}
+</style>
 
 <style scoped>
 .fade-enter-active,

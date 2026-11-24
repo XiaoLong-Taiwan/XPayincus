@@ -38,7 +38,7 @@ export function cacheAgentRealtimeInstances(agentId: string, points: InstancePoi
   while (realtimeSnapshots.size > realtimeSnapshotLimit) realtimeSnapshots.delete(realtimeSnapshots.keys().next().value!)
 }
 interface ComponentEvent { id: string; sampledAt: string; type: 'component-state'; components: Record<string, unknown> }
-interface Journal { samples: Sample[]; events: ComponentEvent[]; receipts: Record<string, number>; truncated: boolean }
+interface Journal { schemaVersion: 2; samples: Sample[]; events: ComponentEvent[]; receipts: Record<string, number>; truncated: boolean }
 export interface MonitoringRange { from: number; to: number; resolutionSeconds: number; limit: number }
 
 function record(value: unknown): Record<string, unknown> {
@@ -63,7 +63,14 @@ function semantic(value: unknown, depth = 0): unknown {
 }
 
 function load(agentId: string, now: number): Journal {
-  const state = readAgentMonitoringJournal<Journal>(agentId) ?? { samples: [], events: [], receipts: {}, truncated: false }
+  const stored = readAgentMonitoringJournal<Partial<Journal>>(agentId)
+  const state: Journal = {
+    schemaVersion: 2,
+    samples: Array.isArray(stored?.samples) ? stored.samples : [],
+    events: Array.isArray(stored?.events) ? stored.events : [],
+    receipts: stored?.receipts && typeof stored.receipts === 'object' && !Array.isArray(stored.receipts) ? stored.receipts : {},
+    truncated: stored?.truncated === true
+  }
   state.samples = state.samples.filter(item => item.sampledAt >= now - monitoringRetentionMs)
   state.events = state.events.filter(item => Date.parse(item.sampledAt) >= now - monitoringRetentionMs)
   state.receipts = Object.fromEntries(Object.entries(state.receipts).filter(([, at]) => at >= now - replayWindowMs))

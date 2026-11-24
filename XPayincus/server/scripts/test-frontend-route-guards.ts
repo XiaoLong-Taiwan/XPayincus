@@ -991,7 +991,7 @@ assert.ok(
   'HostingWalletView must keep mobile wallet cards until lg and render fixed-layout desktop log/withdrawal tables without PC horizontal overflow'
 )
 assert.ok(
-  instanceDetailViewSource.includes("import { helpPath, hostDetailPath, instancesPath, isAdminEntry } from '@/utils/app-paths'") &&
+  instanceDetailViewSource.includes('isAdminEntry') &&
     instanceDetailViewSource.includes('interface CustomerSelfServiceApi') &&
     instanceDetailViewSource.includes('const customerSelfServiceApi = api as typeof api & CustomerSelfServiceApi') &&
     instanceDetailViewSource.includes('isAdminEntry ? Promise.resolve() : checkPendingTransfer()') &&

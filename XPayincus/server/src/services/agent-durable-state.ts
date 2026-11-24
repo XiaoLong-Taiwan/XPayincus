@@ -28,7 +28,14 @@ function read<T>(key: string): T | null {
   const path = filename(key)
   if (!existsSync(path)) return null
   if (statSync(path).size > 4 * 1024 * 1024) throw new Error('Agent journal exceeds file limit')
-  return JSON.parse(readFileSync(path, 'utf8')) as T
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    const corruptPath = `${path}.corrupt-${Date.now()}-${randomUUID()}`
+    renameSync(path, corruptPath)
+    return null
+  }
 }
 
 export function readAgentMonitoringJournal<T>(agentId: string): T | null {

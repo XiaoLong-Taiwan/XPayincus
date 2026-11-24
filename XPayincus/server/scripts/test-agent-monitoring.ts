@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
 import ts from 'typescript'
 import { testAgentMonitoringClient } from './test-agent-monitoring-client.js'
+import { createHash } from 'node:crypto'
 import { aggregateMonitoring, aggregateMonitoringCounters, cacheAgentRealtimeInstances, ingestAgentMonitoring, instanceMonitoringKeys, isMonitoringInstanceId, isMonitoringInstanceName, readAgentComponentEvents, readAgentInstanceHistory, readAgentInstanceSnapshot, readAgentInstanceTop, readAgentMonitoring } from '../src/services/agent-monitoring.js'
+import { readAgentMonitoringJournal, writeAgentMonitoringJournal } from '../src/services/agent-durable-state.js'
 
 const directory = mkdtempSync(join(tmpdir(), 'agent-monitoring-'))
 const previousDirectory = process.env.INCUDAL_AGENT_STATE_DIR
@@ -23,6 +25,17 @@ const envelope = { schemaVersion: 2, samples: [sample('a', now - 120000, 10), sa
 const app = Fastify()
 try {
   await testAgentMonitoringClient()
+  const legacyJournalKey = 'monitoring-v2:legacy-format'
+  const legacyJournalPath = join(directory, `${createHash('sha256').update(legacyJournalKey).digest('hex')}.json`)
+  writeFileSync(legacyJournalPath, JSON.stringify({ samples: [], events: [] }))
+  assert.deepEqual(ingestAgentMonitoring('legacy-format', { schemaVersion: 2, samples: [] }, now), [])
+  assert.equal(readAgentMonitoringJournal<Record<string, unknown>>('legacy-format')?.schemaVersion, 2)
+  const corruptJournalKey = 'monitoring-v2:corrupt-format'
+  const corruptJournalPath = join(directory, `${createHash('sha256').update(corruptJournalKey).digest('hex')}.json`)
+  writeFileSync(corruptJournalPath, '{broken')
+  assert.deepEqual(ingestAgentMonitoring('corrupt-format', { schemaVersion: 2, samples: [] }, now), [])
+  assert.ok(readdirSync(directory).some(name => name.startsWith(`${createHash('sha256').update(corruptJournalKey).digest('hex')}.json.corrupt-`)))
+  assert.deepEqual(readAgentMonitoringJournal('corrupt-format'), { schemaVersion: 2, samples: [], events: [], receipts: {}, truncated: false })
   assert.deepEqual(ingestAgentMonitoring('fixture', envelope, now), ['a'.repeat(32), 'b'.repeat(32)])
   assert.deepEqual(ingestAgentMonitoring('fixture', envelope, now), ['a'.repeat(32), 'b'.repeat(32)])
   const history = readAgentMonitoring('fixture', range, now)
@@ -108,6 +121,7 @@ try {
   assert.equal(pressureHistory.summaryCounters[counterKey]?.delta, 90)
   assert.equal(pressureHistory.incomplete, true)
   for (const name of readdirSync(directory)) {
+    if (!name.endsWith('.json')) continue
     const journal = JSON.parse(readFileSync(join(directory, name), 'utf8'))
     for (const point of journal.samples ?? []) for (const instance of point.instances ?? []) {
       assert.equal(typeof instance.metrics.rxBytes, 'number')

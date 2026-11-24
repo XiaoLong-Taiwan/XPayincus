@@ -3651,9 +3651,7 @@ export default async function instanceRoutes(fastify: FastifyInstance) {
       return reply.code(404).send(apiError(ErrorCode.INSTANCE_NOT_FOUND))
     }
 
-    // AUTH004: 重装系统仅限实例所有者，管理员和宿主机所有者禁止
-    // 原因：重装会清除实例数据，影响用户资产安全
-    if (instance.user_id !== user.id) {
+    if (instance.user_id !== user.id && user.role !== 'admin') {
       return reply.code(403).send(apiError(ErrorCode.FORBIDDEN))
     }
 

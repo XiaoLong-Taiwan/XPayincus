@@ -2213,7 +2213,7 @@ async function confirmBatchDestroy(): Promise<void> {
             </div>
 
             <div
-              class="flex items-center justify-center gap-2 px-4 py-3 border-t"
+              class="grid grid-cols-2 items-stretch gap-2 px-4 py-3 border-t sm:flex sm:items-center sm:justify-center"
               :class="'border-themed bg-themed-secondary'"
             >
               <InstanceOrderMenu
@@ -2230,7 +2230,7 @@ async function confirmBatchDestroy(): Promise<void> {
               <button
                 v-if="canStartInstance(instance)"
                 :disabled="!!actionLoading[instance.id]"
-                class="btn-ghost btn-sm flex-1"
+                class="btn-ghost btn-sm min-w-0"
                 @click.stop="handleAction(instance, 'start')"
               >
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2242,7 +2242,7 @@ async function confirmBatchDestroy(): Promise<void> {
               <button
                 v-if="instance.status?.toLowerCase() === 'running'"
                 :disabled="!!actionLoading[instance.id]"
-                class="btn-ghost btn-sm flex-1"
+                class="btn-ghost btn-sm min-w-0"
                 @click.stop="handleAction(instance, 'stop')"
               >
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2254,7 +2254,7 @@ async function confirmBatchDestroy(): Promise<void> {
               <button
                 v-if="instance.status?.toLowerCase() === 'running'"
                 :disabled="!!actionLoading[instance.id]"
-                class="btn-ghost btn-sm flex-1"
+                class="btn-ghost btn-sm min-w-0"
                 @click.stop="handleAction(instance, 'restart')"
               >
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2265,7 +2265,7 @@ async function confirmBatchDestroy(): Promise<void> {
               <button
                 v-if="canResetInstanceTraffic(instance)"
                 :disabled="!!actionLoading[instance.id]"
-                class="btn-ghost btn-sm flex-1"
+                class="btn-ghost btn-sm min-w-0"
                 @click.stop="openResetTrafficModal(instance)"
               >
                 <span class="text-xs">{{ actionLoading[instance.id] === 'resetTraffic' ? '...' : $t('admin.hosts.resetTraffic') }}</span>
@@ -2273,7 +2273,7 @@ async function confirmBatchDestroy(): Promise<void> {
               <button
                 v-if="canDeleteInstance(instance)"
                 :disabled="!!actionLoading[instance.id]"
-                class="btn-ghost btn-sm flex-1 text-red-500 hover:text-red-400"
+                class="btn-ghost btn-sm min-w-0 text-red-500 hover:text-red-400"
                 @click.stop="handleAction(instance, 'delete')"
               >
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

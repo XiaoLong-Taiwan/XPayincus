@@ -733,6 +733,8 @@ const api = {
       http.get('/instances', { params }),
     get: (id: number): Promise<InstanceWithDetails> => http.get(`/instances/${id}`),
     getPassword: (id: number): Promise<{ rootPassword: string | null }> => http.get(`/instances/${id}/password`),
+    changePassword: (id: number, data: { newPassword: string }): Promise<{ message: string }> =>
+      http.put(`/instances/${id}/password`, data),
     getStats: (id: number): Promise<InstanceStats & { status?: string }> => http.get(`/instances/${id}/stats`),
     create: (data: CreateInstanceRequest): Promise<CreateInstanceResponse> => http.post('/instances', data),
     getAvailableHosts: (params: Record<string, unknown> = {}): Promise<AvailableHost[]> =>

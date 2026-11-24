@@ -45,22 +45,6 @@ function goToStep(step: Step): void {
 
 <template>
   <div class="purchase-stepper" data-instance-purchase-stepper>
-    <nav aria-label="購買步驟" class="mb-5 grid grid-cols-4 gap-2 border-b border-themed pb-2">
-      <button
-        v-for="step in props.steps"
-        :key="step.id"
-        type="button"
-        class="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 border-b-2 px-1 py-2 text-center text-xs transition-colors sm:flex-row sm:justify-start sm:px-2 sm:text-left sm:text-sm"
-        :class="step.id === props.activeStep ? 'border-themed font-semibold text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
-        :disabled="isCreating || step.id > props.activeStep"
-        :aria-current="step.id === props.activeStep ? 'step' : undefined"
-        :aria-label="`${step.label}${step.id < props.activeStep ? '，已完成' : step.id === props.activeStep ? '，目前步驟' : '，尚未完成'}`"
-        @click="goToStep(step)"
-      >
-        <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
-      </button>
-    </nav>
-
     <div v-if="isCreating" class="mb-4 rounded-lg border border-themed bg-themed-tertiary p-4 text-sm text-themed-secondary" data-state="creating">
       <div class="flex items-center gap-2">
         <span class="h-4 w-4 animate-spin rounded-full border-2 border-themed border-t-transparent" />
@@ -76,13 +60,52 @@ function goToStep(step: Step): void {
 
     <slot />
 
-    <div v-if="!isCreating && !isComplete" class="mt-4 flex flex-col-reverse gap-2 border-t border-themed pt-4 sm:flex-row sm:justify-between">
-      <button v-if="props.activeStep > 1" type="button" class="btn btn-secondary" :disabled="isCreating" @click="emit('previous')">上一步</button>
-      <span v-else />
-      <button v-if="props.activeStep < props.steps.length" type="button" class="btn-primary" :disabled="!props.canContinue || isCreating" @click="emit('next')">下一步</button>
-      <button v-else type="button" class="btn-primary" data-action="submit" :disabled="!props.canSubmit || isCreating" @click="emit('submit')">
-        {{ props.submitting ? '建立中…' : '確認付款並建立' }}
-      </button>
+    <div v-if="!isCreating && !isComplete" class="purchase-stepper-footer mt-4 border-t border-themed pt-3 sm:pt-4">
+      <nav aria-label="購買步驟" class="grid grid-cols-4 gap-2 pb-3">
+        <button
+          v-for="step in props.steps"
+          :key="step.id"
+          type="button"
+          class="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 border-b-2 px-1 py-2 text-center text-xs transition-colors sm:flex-row sm:justify-start sm:px-2 sm:text-left sm:text-sm"
+          :class="step.id === props.activeStep ? 'border-themed font-semibold text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
+          :disabled="isCreating || step.id > props.activeStep"
+          :aria-current="step.id === props.activeStep ? 'step' : undefined"
+          :aria-label="`${step.label}${step.id < props.activeStep ? '，已完成' : step.id === props.activeStep ? '，目前步驟' : '，尚未完成'}`"
+          @click="goToStep(step)"
+        >
+          <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
+        </button>
+      </nav>
+      <div class="flex gap-2">
+        <button v-if="props.activeStep > 1" type="button" class="btn btn-secondary" :disabled="isCreating" @click="emit('previous')">上一步</button>
+        <span v-else />
+        <button v-if="props.activeStep < props.steps.length" type="button" class="btn-primary" :disabled="!props.canContinue || isCreating" @click="emit('next')">下一步</button>
+        <button v-else type="button" class="btn-primary" data-action="submit" :disabled="!props.canSubmit || isCreating" @click="emit('submit')">
+          {{ props.submitting ? '建立中…' : '確認付款並建立' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.purchase-stepper-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  background: var(--theme-surface, #fff);
+}
+
+.purchase-stepper-footer button.btn-primary {
+  margin-left: auto;
+}
+
+@media (max-width: 639px) {
+  .purchase-stepper-footer > button {
+    min-height: 2.75rem;
+    flex: 1;
+    justify-content: center;
+  }
+}
+</style>

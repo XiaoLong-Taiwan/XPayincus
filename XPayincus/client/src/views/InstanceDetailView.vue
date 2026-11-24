@@ -23,7 +23,7 @@ import SnapshotManager from '@/components/SnapshotManager.vue'
 import TrafficStats from '@/components/instance/TrafficStats.vue'
 import AddPortModal from '@/components/instance/modals/AddPortModal.vue'
 import PortConflictModal from '@/components/instance/modals/PortConflictModal.vue'
-import { helpPath, hostDetailPath, instancesPath, isAdminEntry } from '@/utils/app-paths'
+import { helpPath, hostDetailPath, instancesPath, isAdminEntry, terminalPath } from '@/utils/app-paths'
 import RebuildModal from '@/components/instance/modals/RebuildModal.vue'
 import RecreateModal from '@/components/instance/modals/RecreateModal.vue'
 import TransferModal from '@/components/instance/modals/TransferModal.vue'
@@ -135,6 +135,10 @@ const actionLoading = ref<string>('')
 const copied = ref<string>('')
 const showPassword = ref<Record<string, boolean>>({})  // 用于控制密码显示/隐藏
 const instancePassword = ref<Record<string, string | null>>({})  // 存储实例密码
+const showChangePassword = ref(false)
+const newRootPassword = ref('')
+const confirmRootPassword = ref('')
+const changePasswordLoading = ref(false)
 
 // 资源统计
 interface ResourceStats {
@@ -400,6 +404,36 @@ function connectInstanceMonitoring(): void {
       network: stats.value.network
     }
   })
+}
+
+function openFullScreenTerminal(): void {
+  if (!instance.value) return
+  if (isAdminEntry) {
+    showTerminalModal.value = true
+    return
+  }
+  void router.push(`${terminalPath()}?instanceId=${instance.value.id}`)
+}
+
+async function changeRootPassword(): Promise<void> {
+  if (!instance.value || changePasswordLoading.value) return
+  if (newRootPassword.value !== confirmRootPassword.value) {
+    toast.error(t('instance.detail.password.mismatch', 'Passwords do not match'))
+    return
+  }
+  changePasswordLoading.value = true
+  try {
+    await api.instances.changePassword(instance.value.id, { newPassword: newRootPassword.value })
+    clearInstancePassword()
+    newRootPassword.value = ''
+    confirmRootPassword.value = ''
+    showChangePassword.value = false
+    toast.success(t('instance.detail.password.changed', 'Password changed'))
+  } catch (error) {
+    toast.error(translateError(error))
+  } finally {
+    changePasswordLoading.value = false
+  }
 }
 
 onMounted(async (): Promise<void> => {
@@ -1475,16 +1509,16 @@ async function loadSshKeys(): Promise<void> {
   }
 }
 
-async function doRebuild(data: { image: string; sshKeyId: number; customInitCommandIds?: number[] }): Promise<void> {
-  if (!data.image || !data.sshKeyId || !instance.value) {
-    toast.error(t('instance.detail.actions.selectImageAndKey'))
+async function doRebuild(data: { image: string; sshKeyId?: number; customInitCommandIds?: number[] }): Promise<void> {
+  if (!data.image || !instance.value) {
+    toast.error(t('instance.detail.actions.selectImage'))
     return
   }
   rebuildLoading.value = true
   try {
     const response = await api.instances.rebuild(instance.value.id, {
       image: data.image,
-      sshKeyId: data.sshKeyId,
+      ...(data.sshKeyId ? { sshKeyId: data.sshKeyId } : {}),
       customInitCommandIds: data.customInitCommandIds
     })
     toast.success(t('instance.detail.actions.taskQueued'))
@@ -2434,7 +2468,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
           </div>
         </div>
 
-        <div class="flex items-center gap-2 flex-wrap">
+        <div class="instance-detail-actions flex items-center gap-2 flex-wrap">
           <!-- Active Task Indicator -->
           <div
             v-if="activeTask"
@@ -2533,7 +2567,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             class="btn-sm sm:btn inline-flex rounded-lg"
             :class="themeStore.isDark ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-green-500 hover:bg-green-600 text-white'"
             :title="$t('terminal.title')"
-            @click="showTerminalModal = true"
+            @click="openFullScreenTerminal"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -3064,6 +3098,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
               :monitoring-history-loading="instanceMonitoring.historyLoading.value"
               :monitoring-history-error="instanceMonitoring.historyError.value"
               @toggle-password="togglePasswordVisibility"
+              @change-password="showChangePassword = true"
               @copy="copyToClipboard"
               @edit-config="openConfigEditModal"
               @redeem="openRedeemModal"
@@ -3351,6 +3386,48 @@ function formatShortDate(dateStr: string | null | undefined): string {
           </div>
         </div>
       </Transition>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="showChangePassword" class="modal-overlay">
+        <div class="modal-backdrop" @click="showChangePassword = false"></div>
+        <form class="modal-content max-w-md" @submit.prevent="changeRootPassword">
+          <div class="modal-header">
+            <h3 class="modal-title">{{ $t('instance.detail.password.change', 'Change password') }}</h3>
+            <button type="button" class="text-themed-muted hover:text-themed" @click="showChangePassword = false">
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+          <div class="modal-body space-y-3">
+            <input
+              v-model="newRootPassword"
+              class="input w-full"
+              type="password"
+              minlength="12"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+              :placeholder="$t('instance.detail.password.new', 'New password')"
+            />
+            <input
+              v-model="confirmRootPassword"
+              class="input w-full"
+              type="password"
+              minlength="12"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+              :placeholder="$t('instance.detail.password.confirm', 'Confirm password')"
+            />
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn-secondary" @click="showChangePassword = false">{{ $t('common.cancel') }}</button>
+            <button type="submit" class="btn-primary" :disabled="changePasswordLoading">
+              {{ changePasswordLoading ? $t('common.loading') : $t('common.confirm') }}
+            </button>
+          </div>
+        </form>
+      </div>
     </Teleport>
 
     <!-- Clone Confirm Modal -->
@@ -3784,6 +3861,14 @@ function formatShortDate(dateStr: string | null | undefined): string {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@media (max-width: 639px) {
+  .instance-detail-actions > button {
+    min-height: 2.75rem;
+    flex: 1 1 calc(33.333% - 0.5rem);
+    justify-content: center;
   }
 }
 

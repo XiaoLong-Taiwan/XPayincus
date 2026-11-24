@@ -28,7 +28,7 @@ interface Props {
 
 interface Emits {
   (e: 'update:visible', value: boolean): void
-  (e: 'submit', data: { image: string; sshKeyId: number; customInitCommandIds?: number[] }): void
+  (e: 'submit', data: { image: string; sshKeyId?: number; customInitCommandIds?: number[] }): void
 }
 
 const props = defineProps<Props>()
@@ -108,10 +108,10 @@ function toggleImageDropdown() {
 }
 
 function handleSubmit(): void {
-  if (selectedImage.value && selectedSshKeyId.value) {
+  if (selectedImage.value) {
     emit('submit', { 
       image: selectedImage.value, 
-      sshKeyId: selectedSshKeyId.value,
+      ...(selectedSshKeyId.value ? { sshKeyId: selectedSshKeyId.value } : {}),
       customInitCommandIds: customInitCommandIds.value.length > 0 ? customInitCommandIds.value : undefined
     })
   }
@@ -307,11 +307,8 @@ function close(): void {
                 {{ key.name }}
               </option>
             </select>
-            <p 
-              v-if="sshKeys.length === 0"
-              class="text-xs mt-1.5 text-red-500"
-            >
-              {{ t('rebuildModal.addSshKeyHint') }}
+            <p v-if="sshKeys.length === 0" class="text-xs mt-1.5 text-themed-muted">
+              {{ t('rebuildModal.noSshKey') }}
             </p>
           </div>
 
@@ -342,8 +339,8 @@ function close(): void {
           <!-- Action buttons -->
           <div class="flex justify-end gap-3 pt-2">
             <button type="button" class="btn-secondary" @click="close">{{ t('rebuildModal.cancel') }}</button>
-            <button 
-              :disabled="loading || !selectedImage || !selectedSshKeyId || sshKeys.length === 0" 
+            <button
+              :disabled="loading || !selectedImage"
               class="btn-danger" 
               @click="handleSubmit"
             >

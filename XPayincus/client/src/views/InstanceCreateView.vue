@@ -1350,7 +1350,7 @@ async function handleSubmit(): Promise<void> {
       <div class="card space-y-3 p-5"><div class="h-5 w-36 animate-pulse rounded bg-themed-tertiary"></div><div class="h-12 animate-pulse rounded bg-themed-tertiary"></div><div class="h-12 animate-pulse rounded bg-themed-tertiary"></div></div>
     </div>
 
-    <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto lg:flex-1" @submit.prevent="handleSubmit">
+    <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto pb-28 lg:flex-1 lg:pb-5" @submit.prevent="handleSubmit">
       <div class="mx-auto w-full max-w-5xl space-y-5 pb-5">
         <div class="nimbus-pane space-y-5 p-4 sm:p-6">
           <section v-if="activeStep === 1" class="create-step-heading">
