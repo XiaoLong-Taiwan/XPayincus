@@ -1510,6 +1510,7 @@ export default {
                 taskInProgress: 'Instance has another task in progress, please wait',
                 rebuildSuccess: 'System rebuilt successfully, new password generated',
                 recreateSuccess: 'Instance recreated successfully, new password generated',
+                selectImage: 'Please select an image',
                 selectImageAndKey: 'Please select an image and SSH key',
                 clone: 'Clone Instance',
                 cloning: 'Cloning...',
@@ -1561,6 +1562,11 @@ export default {
                 batchDeletePartial: 'Deleted {success}, {fail} failed',
             },
             password: {
+                change: 'Change password',
+                new: 'New password',
+                confirm: 'Confirm password',
+                mismatch: 'Passwords do not match',
+                changed: 'Password changed',
                 loadFailed: 'Failed to load password',
             },
             quota: {
