@@ -1199,6 +1199,12 @@ export interface HostAgentStatus {
   updatedAt: string
 }
 
+export interface HostMonitoringSettings {
+  monitoringVisible: boolean
+  monitoringDisplayName: string | null
+  monitoringCategory: string | null
+}
+
 export interface HostAgentStatusResponse {
   host: {
     id: number

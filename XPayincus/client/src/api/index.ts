@@ -629,7 +629,7 @@ export interface RenewalForecast {
 
 const api = {
   hostStatus: {
-    list: (): Promise<{ hosts: Array<{ id: number; countryCode: string | null; packages: Array<{ id: number; name: string }>; sampledAt: string | null; cpuPercent: number | null; ramPercent: number | null; diskPercent: number | null; swapPercent: number | null; rxBytesPerSecond: number | null; txBytesPerSecond: number | null }> }> =>
+    list: (): Promise<{ hosts: Array<{ id: number; displayName: string | null; category: string | null; source: 'realtime' | 'heartbeat' | null; countryCode: string | null; packages: Array<{ id: number; name: string }>; sampledAt: string | null; cpuPercent: number | null; ramPercent: number | null; diskPercent: number | null; swapPercent: number | null; rxBytesPerSecond: number | null; txBytesPerSecond: number | null }> }> =>
       http.get('/host-status')
   },
   operations: {

@@ -366,6 +366,7 @@ func detectIncusSocket() (string, bool) {
 type cpuStat struct {
 	idle  uint64
 	total uint64
+	guest uint64
 }
 
 func readCPUUsagePercent() float64 {
@@ -422,7 +423,11 @@ func readCPUStat() (cpuStat, bool) {
 		if len(values) > 4 {
 			idle += values[4]
 		}
-		return cpuStat{idle: idle, total: total}, true
+		var guest uint64
+		for i := 8; i < len(values) && i < 10; i++ {
+			guest += values[i]
+		}
+		return cpuStat{idle: idle, total: total, guest: guest}, true
 	}
 	return cpuStat{}, false
 }

@@ -11,6 +11,9 @@ interface HostStatusPackage {
 
 interface HostStatus {
   id: number
+  displayName: string | null
+  category: string | null
+  source: 'realtime' | 'heartbeat' | null
   countryCode: string | null
   packages: HostStatusPackage[]
   sampledAt: string | null
@@ -28,9 +31,13 @@ const loading = ref(true)
 const error = ref(false)
 const countryFilter = ref('')
 const packageFilter = ref('')
-let refreshTimer: ReturnType<typeof setInterval> | undefined
+const categoryFilter = ref('')
+let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let requestPending = false
+let refreshRequested = false
+let unmounted = false
 
+const categories = computed(() => [...new Set(hosts.value.map(host => host.category).filter((category): category is string => Boolean(category)))].sort((a, b) => a.localeCompare(b, locale.value)))
 const countries = computed(() => [...new Set(hosts.value.map(host => host.countryCode).filter((code): code is string => Boolean(code)))].sort())
 const packages = computed(() => {
   const entries = new Map<number, string>()
@@ -41,11 +48,23 @@ const packages = computed(() => {
 })
 const filteredHosts = computed(() => hosts.value.filter(host =>
   (!countryFilter.value || host.countryCode === countryFilter.value) &&
-  (!packageFilter.value || host.packages?.some(item => String(item.id) === packageFilter.value))
+  (!packageFilter.value || host.packages?.some(item => String(item.id) === packageFilter.value)) &&
+  (!categoryFilter.value || host.category === categoryFilter.value)
 ))
 
+function scheduleRefresh() {
+  clearTimeout(refreshTimer)
+  if (!unmounted && document.visibilityState === 'visible') {
+    refreshTimer = setTimeout(() => void loadHosts(false), 3000)
+  }
+}
+
 async function loadHosts(showLoading = true) {
-  if (requestPending) return
+  if (unmounted) return
+  if (requestPending) {
+    refreshRequested = true
+    return
+  }
   requestPending = true
   if (showLoading) loading.value = true
   try {
@@ -57,6 +76,14 @@ async function loadHosts(showLoading = true) {
   } finally {
     loading.value = false
     requestPending = false
+    scheduleRefresh()
+    if (refreshRequested && document.visibilityState === 'visible') {
+      refreshRequested = false
+      clearTimeout(refreshTimer)
+      void loadHosts(false)
+    } else {
+      refreshRequested = false
+    }
   }
 }
 
@@ -80,13 +107,20 @@ function formatTime(value: string | null): string {
   return value ? new Date(value).toLocaleString(locale.value) : t('hostStatus.noValue')
 }
 
+function handleVisibilityChange() {
+  clearTimeout(refreshTimer)
+  if (document.visibilityState === 'visible') void loadHosts(false)
+}
+
 onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   void loadHosts()
-  refreshTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') void loadHosts(false)
-  }, 30_000)
 })
-onUnmounted(() => clearInterval(refreshTimer))
+onUnmounted(() => {
+  unmounted = true
+  clearTimeout(refreshTimer)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 </script>
 
 <template>
@@ -111,11 +145,19 @@ onUnmounted(() => clearInterval(refreshTimer))
             <option v-for="item in packages" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
           </select>
         </label>
+        <label class="grid gap-1 text-xs text-themed-muted">
+          {{ t('hostStatus.category') }}
+          <select v-model="categoryFilter" class="min-w-40 rounded-md border-themed bg-themed-surface px-3 py-2 text-sm text-themed">
+            <option value="">{{ t('hostStatus.allCategories') }}</option>
+            <option v-for="category in categories" :key="category" :value="category">{{ category }}</option>
+          </select>
+        </label>
       </div>
     </header>
 
+    <p v-if="error && !loading && hosts.length" role="status" class="rounded-md border border-amber-500/40 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">{{ t('hostStatus.refreshFailed') }} <button class="underline" @click="loadHosts(false)">{{ t('hostStatus.retry') }}</button></p>
     <div v-if="loading" class="py-16 text-center text-sm text-themed-muted">{{ t('hostStatus.loading') }}</div>
-    <div v-else-if="error" class="py-16 text-center">
+    <div v-else-if="error && !hosts.length" class="py-16 text-center">
       <p class="text-sm text-themed-muted">{{ t('hostStatus.loadFailed') }}</p>
       <button class="mt-3 rounded-md border border-themed px-3 py-2 text-sm text-themed hover:bg-themed-surface" @click="loadHosts()">{{ t('hostStatus.retry') }}</button>
     </div>
@@ -125,11 +167,18 @@ onUnmounted(() => clearInterval(refreshTimer))
         <div class="flex items-start justify-between gap-3 border-b border-themed pb-3">
           <div class="flex min-w-0 items-center gap-2">
             <FlagIcon v-if="host.countryCode" :code="host.countryCode" class="shrink-0" />
-            <h2 class="truncate font-semibold text-themed">{{ t('hostStatus.hosts') }} #{{ host.id }}</h2>
+            <div class="min-w-0">
+              <h2 class="truncate font-semibold text-themed">{{ host.displayName || t('hostStatus.hostId', { id: host.id }) }}</h2>
+              <p v-if="host.displayName" class="text-xs text-themed-muted">{{ t('hostStatus.hostId', { id: host.id }) }}</p>
+            </div>
           </div>
-          <time class="shrink-0 text-right text-xs text-themed-muted">{{ t('hostStatus.sampledAt', { time: formatTime(host.sampledAt) }) }}</time>
+          <span class="shrink-0 rounded border px-2 py-1 text-xs" :class="error ? 'border-amber-500/40 text-amber-700 dark:text-amber-300' : host.sampledAt ? 'border-green-600/40 text-green-700 dark:text-green-300' : 'border-themed text-themed-muted'">
+            {{ error ? t('hostStatus.error') : host.sampledAt ? (host.source === 'realtime' ? t('hostStatus.realtime') : host.source === 'heartbeat' ? t('hostStatus.heartbeat') : t('hostStatus.noSample')) : t('hostStatus.noSample') }}
+          </span>
         </div>
+        <p class="mt-2 text-xs text-themed-muted">{{ t('hostStatus.sampledAt', { time: formatTime(host.sampledAt) }) }}</p>
         <div class="mt-3 flex flex-wrap gap-1.5">
+          <span v-if="host.category" class="rounded border border-themed px-2 py-1 text-xs text-themed">{{ host.category }}</span>
           <span v-for="item in host.packages" :key="item.id" class="rounded border border-themed px-2 py-1 text-xs text-themed-muted">{{ item.name }}</span>
         </div>
         <dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">

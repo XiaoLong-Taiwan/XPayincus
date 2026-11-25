@@ -27,7 +27,7 @@ const zhTW = {
         deleteConfirm: '刪除 IPv4 位址 {address}？', deleteFailed: '刪除位址失敗：{error}', status: { free: '可用', assigned: '已分配', disabled: '停用' },
     },
     hostStatus: {
-        title: '主機狀態', description: '查看各方案主機目前的資源使用情況。', country: '國家／地區', package: '方案', allCountries: '所有國家／地區', allPackages: '所有方案', hosts: '主機', sampledAt: '更新於 {time}', cpu: 'CPU', ram: '記憶體', disk: '磁碟', swap: '交換空間', network: '網路', receive: '接收', transmit: '傳送', noValue: '暫無資料', loading: '正在載入主機狀態…', empty: '沒有符合篩選條件的主機。', loadFailed: '載入主機狀態失敗，請重試。', retry: '重試'
+        title: '主機狀態', description: '查看各方案主機目前的資源使用情況。', country: '國家／地區', package: '方案', category: '分類', allCategories: '所有分類', allCountries: '所有國家／地區', allPackages: '所有方案', hosts: '主機', hostId: '主機 #{id}', sampledAt: '取樣時間：{time}', realtime: '即時', heartbeat: '心跳資料', noSample: '無樣本', error: '更新錯誤', refreshFailed: '主機狀態更新失敗，以下為最近成功取得的資料。', cpu: 'CPU', ram: '記憶體', disk: '磁碟', swap: '交換空間', network: '網路', receive: '接收', transmit: '傳送', noValue: '暫無資料', loading: '正在載入主機狀態…', empty: '沒有符合篩選條件的主機。', loadFailed: '載入主機狀態失敗，請重試。', retry: '重試'
     },
     networkTest: {
         title: '公開網路測試',
@@ -1143,7 +1143,9 @@ const zhTW = {
     // 實例相關
     instance: {
         monitoring: {
-            memory: '記憶體', diskIo: '磁碟 I/O', rx: '網路接收速率', tx: '網路傳送速率',
+            historyTab: '歷史監控', historySamples: '分時樣本',
+            historyLoadFailed: '無法載入歷史監控資料。',
+            memory: '記憶體', diskIo: '磁碟 I/O', diskRead: '磁碟讀取速率', diskWrite: '磁碟寫入速率', rx: '網路接收速率', tx: '網路傳送速率',
             title: '即時監控', complete: '完整', dataStatus: '資料狀態', connected: '即時監控', connecting: '連線中', reconnecting: '重新連線中', offline: 'Agent 離線', error: '監控連線失敗',
             loading: '載入七日趨勢…', history: '七日趨勢 · {seconds} 秒解析度', average: '七日平均', empty: '尚無趨勢資料', incomplete: '部分歷史樣本無法取得。', rxBytes: '七日接收總量', txBytes: '七日傳送總量', received: '收', transmitted: '發', bytes: 'bytes', coverage: '涵蓋率', resetCount: '重設次數', partial: '不完整', count: '樣本數', retentionDays: '保留天數', resolutionSeconds: '解析度（秒）', capacityTruncated: '受容量限制截斷', bucketsTruncated: '桶數截斷'
         },
@@ -4777,6 +4779,16 @@ selectSshKey: '請選擇 SSH 金鑰',
                 activeTask: '活躍任務',
                 latestInstanceAction: '最近單實例動作',
             },
+            monitoringSettings: '客戶主機狀態',
+            monitoringSettingsHint: '這些設定只會套用於原本就有權查看此宿主狀態的客戶。',
+            monitoringVisible: '在客戶主機狀態頁顯示此宿主',
+            monitoringDisplayName: '顯示名稱',
+            monitoringDisplayNameHint: '留空時顯示主機編號。',
+            monitoringCategory: '分類',
+            monitoringCategoryHint: '可填寫一個自訂分類，也可留空。',
+            monitoringSettingsLoadFailed: '無法載入主機狀態設定。',
+            monitoringSettingsSaveFailed: '無法儲存主機狀態設定。',
+            monitoringSettingsSaved: '已儲存主機狀態設定。',
             statusOnline: '線上',
             statusOffline: '離線',
             statusMaintenance: '維護中',

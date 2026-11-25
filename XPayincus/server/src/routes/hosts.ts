@@ -1978,6 +1978,59 @@ export default async function hostRoutes(fastify: FastifyInstance) {
     }
   })
 
+  const monitoringSettingsSelect = {
+    monitoringVisible: true,
+    monitoringDisplayName: true,
+    monitoringCategory: true
+  } as const
+
+  fastify.get<{ Params: { id: string } }>('/:id/admin/monitoring-settings', {
+    onRequest: [fastify.authenticateAdmin]
+  }, async (request, reply) => {
+    const hostId = parsePositiveRouteId(request.params.id)
+    if (!hostId || hostId > 2_147_483_647) return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
+
+    const settings = await prisma.host.findUnique({
+      where: { id: hostId },
+      select: monitoringSettingsSelect
+    })
+    if (!settings) return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
+    return settings
+  })
+
+  fastify.put<{ Params: { id: string }; Body: unknown }>('/:id/admin/monitoring-settings', {
+    onRequest: [fastify.authenticateAdmin]
+  }, async (request, reply) => {
+    const hostId = parsePositiveRouteId(request.params.id)
+    if (!hostId || hostId > 2_147_483_647) return reply.code(400).send(apiError(ErrorCode.INVALID_ID))
+
+    const body = request.body
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS))
+    }
+    const { monitoringVisible, monitoringDisplayName, monitoringCategory } = body as Record<string, unknown>
+    if (typeof monitoringVisible !== 'boolean' ||
+      (monitoringDisplayName !== null && typeof monitoringDisplayName !== 'string') ||
+      (monitoringCategory !== null && typeof monitoringCategory !== 'string')) {
+      return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS))
+    }
+
+    const displayName = monitoringDisplayName?.trim() || null
+    const category = monitoringCategory?.trim() || null
+    if ((displayName && (displayName.length > 64 || displayName.includes('\0'))) ||
+      (category && (category.length > 32 || category.includes('\0')))) {
+      return reply.code(400).send(apiError(ErrorCode.INVALID_PARAMS))
+    }
+
+    const [settings] = await prisma.host.updateManyAndReturn({
+      where: { id: hostId },
+      data: { monitoringVisible, monitoringDisplayName: displayName, monitoringCategory: category },
+      select: monitoringSettingsSelect
+    })
+    if (!settings) return reply.code(404).send(apiError(ErrorCode.HOST_NOT_FOUND))
+    return settings
+  })
+
   // 获取节点镜像白名单配置（管理员或节点所有者）
   fastify.get<{ Params: { id: string } }>('/:id/images', {
     onRequest: [fastify.authenticate]

@@ -816,6 +816,10 @@ model Host {
   // 探针地址
   probeUrl String? @map("probe_url") // 节点探针监控地址
 
+  monitoringVisible     Boolean @default(true) @map("monitoring_visible")
+  monitoringDisplayName String? @map("monitoring_display_name")
+  monitoringCategory    String? @map("monitoring_category")
+
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   instances    Instance[]
   ipAddresses  IpAddress[]

@@ -26,7 +26,7 @@ export default {
         status: { free: '可用', assigned: '已分配', disabled: '禁用' },
     },
     hostStatus: {
-        title: '主机状态', description: '查看各套餐主机的当前资源使用情况。', country: '国家/地区', package: '套餐', allCountries: '全部国家/地区', allPackages: '全部套餐', hosts: '主机', sampledAt: '更新于 {time}', cpu: 'CPU', ram: '内存', disk: '磁盘', swap: '交换空间', network: '网络', receive: '接收', transmit: '发送', noValue: '暂无数据', loading: '正在加载主机状态…', empty: '没有符合筛选条件的主机。', loadFailed: '加载主机状态失败，请重试。', retry: '重试'
+        title: '主机状态', description: '查看各套餐主机的当前资源使用情况。', country: '国家/地区', package: '套餐', category: '分类', allCategories: '全部分类', allCountries: '全部国家/地区', allPackages: '全部套餐', hosts: '主机', hostId: '主机 #{id}', sampledAt: '采样时间：{time}', realtime: '实时', heartbeat: '心跳数据', noSample: '无样本', error: '更新错误', refreshFailed: '主机状态更新失败，以下为最近成功获取的数据。', cpu: 'CPU', ram: '内存', disk: '磁盘', swap: '交换空间', network: '网络', receive: '接收', transmit: '发送', noValue: '暂无数据', loading: '正在加载主机状态…', empty: '没有符合筛选条件的主机。', loadFailed: '加载主机状态失败，请重试。', retry: '重试'
     },
     networkTest: {
         title: '公开网络测试',
@@ -1046,7 +1046,9 @@ export default {
     // 实例相关
     instance: {
         monitoring: {
-            memory: '内存', diskIo: '磁盘 I/O', rx: '网络接收速率', tx: '网络传输速率',
+            historyTab: '历史监控', historySamples: '分时样本',
+            historyLoadFailed: '无法加载历史监控数据。',
+            memory: '内存', diskIo: '磁盘 I/O', diskRead: '磁盘读取速率', diskWrite: '磁盘写入速率', rx: '网络接收速率', tx: '网络传输速率',
             title: '实时监控', complete: '完整', dataStatus: '数据状态', connected: '实时监控', connecting: '连接中', reconnecting: '重新连接中', offline: 'Agent 离线', error: '监控连接失败',
             loading: '加载七日趋势…', history: '七日趋势 · {seconds} 秒分辨率', average: '七日平均', empty: '暂无趋势数据', incomplete: '部分历史样本无法获取。', rxBytes: '七日接收总量', txBytes: '七日发送总量', received: '收', transmitted: '发', bytes: 'bytes', coverage: '覆盖率', resetCount: '重置次数', partial: '不完整', count: '样本数', retentionDays: '保留天数', resolutionSeconds: '分辨率（秒）', capacityTruncated: '受容量限制截断', bucketsTruncated: '桶数截断'
         },
@@ -4005,6 +4007,16 @@ selectSshKey: '请选择 SSH 密钥',
                 activeTask: '活跃任务',
                 latestInstanceAction: '最近单实例动作',
             },
+            monitoringSettings: '客户主机状态',
+            monitoringSettingsHint: '这些设置仅适用于原本就有权查看此宿主状态的客户。',
+            monitoringVisible: '在客户主机状态页显示此宿主',
+            monitoringDisplayName: '显示名称',
+            monitoringDisplayNameHint: '留空时显示主机编号。',
+            monitoringCategory: '分类',
+            monitoringCategoryHint: '可填写一个自定义分类，也可留空。',
+            monitoringSettingsLoadFailed: '无法加载主机状态设置。',
+            monitoringSettingsSaveFailed: '无法保存主机状态设置。',
+            monitoringSettingsSaved: '已保存主机状态设置。',
             statusOnline: '在线',
             statusOffline: '离线',
             statusMaintenance: '维护中',

@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	heartbeatPath = "/api/agent/heartbeat"
-	realtimePath  = "/api/agent/monitoring/realtime"
+	heartbeatPath         = "/api/agent/heartbeat"
+	realtimePath          = "/api/agent/monitoring/realtime"
+	hostRealtimePath      = "/api/agent/monitoring/host-realtime"
+	signedRequestAttempts = 3
 )
+
+var ErrHostRealtimeUnsupported = errors.New("host realtime monitoring endpoint is unsupported")
 
 type Client struct {
 	panelURL       string
@@ -110,6 +114,28 @@ func New(cfg config.Config) *Client {
 	}
 }
 
+// HostRealtimeMonitoring sends a point-in-time sample without retrying or spooling it.
+func (client *Client) HostRealtimeMonitoring(ctx context.Context, payload map[string]any) error {
+	body, err := protocol.CanonicalJSON(payload)
+	if err != nil {
+		return err
+	}
+	response, err := client.doSignedRequest(ctx, hostRealtimePath, body, 1)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return ErrHostRealtimeUnsupported
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("host realtime monitoring returned status %d", response.StatusCode)
+	}
+	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	return err
+}
+
 func (client *Client) RealtimeMonitoring(ctx context.Context, payload map[string]any) error {
 	body, err := protocol.CanonicalJSON(payload)
 	if err != nil {
@@ -118,7 +144,7 @@ func (client *Client) RealtimeMonitoring(ctx context.Context, payload map[string
 	if len(body) > 400*1024 {
 		return fmt.Errorf("realtime monitoring payload exceeds limit")
 	}
-	response, err := client.doSignedRequest(ctx, realtimePath, body)
+	response, err := client.doSignedRequest(ctx, realtimePath, body, signedRequestAttempts)
 	if err != nil {
 		return err
 	}
@@ -153,7 +179,7 @@ func (client *Client) Heartbeat(ctx context.Context, payload map[string]any) (He
 	}
 
 	startedAt := time.Now()
-	response, err := client.doSignedRequest(ctx, heartbeatPath, body)
+	response, err := client.doSignedRequest(ctx, heartbeatPath, body, signedRequestAttempts)
 	if err != nil {
 		return HeartbeatResult{}, err
 	}
@@ -206,8 +232,15 @@ func isRetryableStatus(status int) bool {
 	return status == http.StatusBadGateway || status == 530 || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 }
 
-func (client *Client) doSignedRequest(ctx context.Context, path string, body []byte) (*http.Response, error) {
-	const maxAttempts = 3
+func (client *Client) doSignedRequest(ctx context.Context, path string, body []byte, maxAttempts int) (*http.Response, error) {
+	httpClient := client.httpClient
+	if path == hostRealtimePath {
+		requestClient := *httpClient
+		requestClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		httpClient = &requestClient
+	}
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		timestamp := protocol.NewTimestamp()
@@ -227,7 +260,7 @@ func (client *Client) doSignedRequest(ctx context.Context, path string, body []b
 		request.Header.Set("x-incudal-nonce", nonce)
 		request.Header.Set("x-incudal-body-sha256", bodyHash)
 		request.Header.Set("x-incudal-signature", signature)
-		response, requestErr := client.httpClient.Do(request)
+		response, requestErr := httpClient.Do(request)
 		if requestErr != nil {
 			lastErr = requestErr
 			if ctx.Err() != nil || !isRetryableRequestError(requestErr) || attempt+1 == maxAttempts {

@@ -309,7 +309,7 @@ export default {
     },
 
     hostStatus: {
-        title: 'Host Status', description: 'Current resource usage for hosts across available plans.', country: 'Country', package: 'Package', allCountries: 'All countries', allPackages: 'All packages', hosts: 'Hosts', sampledAt: 'Updated {time}', cpu: 'CPU', ram: 'Memory', disk: 'Disk', swap: 'Swap', network: 'Network', receive: 'Receive', transmit: 'Transmit', noValue: 'Unavailable', loading: 'Loading host status...', empty: 'No hosts match these filters.', loadFailed: 'Failed to load host status. Please try again.', retry: 'Retry'
+        title: 'Host Status', description: 'Current resource usage for hosts across available plans.', country: 'Country', package: 'Package', category: 'Category', allCategories: 'All categories', allCountries: 'All countries', allPackages: 'All packages', hosts: 'Hosts', hostId: 'Host #{id}', sampledAt: 'Sampled at {time}', realtime: 'Live', heartbeat: 'Heartbeat', noSample: 'No sample', error: 'Update error', refreshFailed: 'Host status update failed. Showing the most recently fetched data.', cpu: 'CPU', ram: 'Memory', disk: 'Disk', swap: 'Swap', network: 'Network', receive: 'Receive', transmit: 'Transmit', noValue: 'Unavailable', loading: 'Loading host status...', empty: 'No hosts match these filters.', loadFailed: 'Failed to load host status. Please try again.', retry: 'Retry'
     },
 
     // Theme
@@ -985,7 +985,9 @@ export default {
     // Instance
     instance: {
         monitoring: {
-            memory: 'Memory', diskIo: 'Disk I/O', rx: 'Network receive rate', tx: 'Network transmit rate',
+            historyTab: 'Monitoring history', historySamples: 'Samples by time',
+            historyLoadFailed: 'Could not load monitoring history.',
+            memory: 'Memory', diskIo: 'Disk I/O', diskRead: 'Disk read rate', diskWrite: 'Disk write rate', rx: 'Network receive rate', tx: 'Network transmit rate',
             title: 'Live monitoring', complete: 'Complete', dataStatus: 'Data status', connected: 'Live monitoring', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Agent offline', error: 'Monitoring connection failed',
             loading: 'Loading seven-day history…', history: 'Seven-day history · {seconds}s resolution', average: 'Seven-day average', empty: 'No monitoring history yet', incomplete: 'Some historical samples are unavailable.', rxBytes: 'Seven-day received', txBytes: 'Seven-day transmitted', received: 'Received', transmitted: 'Transmitted', bytes: 'bytes', coverage: 'Coverage', resetCount: 'Reset count', partial: 'Partial', count: 'Samples', retentionDays: 'Retention days', resolutionSeconds: 'Resolution (seconds)', capacityTruncated: 'Capacity truncated', bucketsTruncated: 'Buckets truncated'
         },
@@ -3949,6 +3951,16 @@ export default {
                 activeTask: 'Active Task',
                 latestInstanceAction: 'Latest Single-Instance Action',
             },
+            monitoringSettings: 'Customer Host Status',
+            monitoringSettingsHint: 'These settings apply only to customers who already have access to this host’s status.',
+            monitoringVisible: 'Show this host in Customer Host Status',
+            monitoringDisplayName: 'Display name',
+            monitoringDisplayNameHint: 'Leave blank to display the host ID.',
+            monitoringCategory: 'Category',
+            monitoringCategoryHint: 'Enter one custom category or leave blank.',
+            monitoringSettingsLoadFailed: 'Could not load host status settings.',
+            monitoringSettingsSaveFailed: 'Could not save host status settings.',
+            monitoringSettingsSaved: 'Host status settings saved.',
             statusOnline: 'Online',
             statusOffline: 'Offline',
             statusMaintenance: 'Maintenance',

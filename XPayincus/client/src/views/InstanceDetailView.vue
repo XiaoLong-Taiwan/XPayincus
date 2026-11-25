@@ -15,6 +15,7 @@ import SkeletonLoader from '@/components/SkeletonLoader.vue'
 import { useToast } from '@/stores/toast'
 import { useConfigStore } from '@/stores/config'
 import InstanceInfoTab from '@/components/instance/InstanceInfoTab.vue'
+import InstanceMonitoringPanel from '@/components/instances/InstanceMonitoringPanel.vue'
 import InstanceNetworkTab from '@/components/instance/InstanceNetworkTab.vue'
 import InstanceQuotaTab from '@/components/instance/InstanceQuotaTab.vue'
 import InstanceConfigTab from '@/components/instance/InstanceConfigTab.vue'
@@ -119,7 +120,7 @@ function getReturnPath(): string {
 }
 
 // 标签页状态
-type TabType = 'info' | 'network' | 'traffic' | 'snapshots' | 'quota' | 'config' | 'logs'
+type TabType = 'info' | 'monitoring' | 'network' | 'traffic' | 'snapshots' | 'quota' | 'config' | 'logs'
 const activeTab = ref<TabType>('info')
 const instanceDetailRouteNames = new Set(['instance-detail', 'admin-instance-detail'])
 
@@ -819,6 +820,7 @@ interface DetailTab {
 
 const allTabs: DetailTab[] = [
   { key: 'info', labelKey: 'instance.detail.tabs.info', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { key: 'monitoring', labelKey: 'instance.monitoring.historyTab', icon: 'M3 3v18h18M7 14l4-4 4 3 6-7' },
   { key: 'network', labelKey: 'instance.detail.tabs.network', icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
   { key: 'traffic', labelKey: 'instance.detail.tabs.traffic', icon: 'M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z' },
   { key: 'quota', labelKey: 'instance.detail.tabs.quota', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
@@ -2486,7 +2488,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
           </div>
         </div>
 
-        <div class="instance-detail-actions flex items-center gap-2 flex-wrap">
+        <div class="instance-detail-actions flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <!-- Active Task Indicator -->
           <div
             v-if="activeTask"
@@ -2524,7 +2526,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
           <!-- Cloud-init Initializing -->
           <div
             v-if="isRunning && !cloudInitReady"
-            class="flex items-center gap-2"
+            class="instance-cloud-init-actions contents"
           >
             <button
               class="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all"
@@ -2583,7 +2585,8 @@ function formatShortDate(dateStr: string | null | undefined): string {
           </button>
           <select
             v-model="powerAction"
-            :class="['btn-secondary btn-sm sm:btn max-w-full', powerStatus.class]"
+            class="btn-secondary btn-sm sm:btn"
+            :class="powerStatus.class"
             :aria-label="$t('instance.detail.actions.powerMenu')"
             :disabled="isOperationDisabled || (!isRunning && !isStopped)"
             @change="handlePowerAction"
@@ -2743,12 +2746,13 @@ function formatShortDate(dateStr: string | null | undefined): string {
                 ? 'border-primary-500 text-themed font-semibold'
                 : 'border-transparent text-themed-muted hover:text-themed'
             ]"
-            @click="activeTab = tab.key as TabType"
+            :aria-pressed="activeTab === tab.key"
+            @click="activeTab = tab.key"
           >
-            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" :d="tab.icon" />
             </svg>
-            <span class="hidden sm:inline">{{ $t(tab.labelKey) }}</span>
+            <span :class="{ 'sr-only sm:not-sr-only': tab.key !== 'monitoring' }">{{ $t(tab.labelKey) }}</span>
           </button>
         </div>
       </div>
@@ -3092,10 +3096,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
               :can-edit-config="instance.isHostOwner === true"
               :enable-resource-pool="!isAdminEntry && (instance as any).enableResourcePool === true"
               :monitoring-sample="instanceMonitoring.sample.value"
-              :monitoring-trend="instanceMonitoring.trend.value"
               :monitoring-status="instanceMonitoring.status.value"
-              :monitoring-history-loading="instanceMonitoring.historyLoading.value"
-              :monitoring-history-error="instanceMonitoring.historyError.value"
               @toggle-password="togglePasswordVisibility"
               @change-password="showChangePassword = true"
               @copy="copyToClipboard"
@@ -3103,6 +3104,13 @@ function formatShortDate(dateStr: string | null | undefined): string {
               @redeem="openRedeemModal"
             />
           </div>
+
+          <InstanceMonitoringPanel
+            v-if="activeTab === 'monitoring' && instance"
+            :trend="instanceMonitoring.trend.value"
+            :history-loading="instanceMonitoring.historyLoading.value"
+            :history-error="instanceMonitoring.historyError.value"
+          />
 
           <!-- Network Tab -->
           <InstanceNetworkTab
@@ -3864,12 +3872,26 @@ function formatShortDate(dateStr: string | null | undefined): string {
   }
 }
 
-@media (max-width: 639px) {
-  .instance-detail-actions > :is(button, select),
-  .instance-secondary-actions > button {
-    min-height: 2.75rem;
-    flex: 1 1 auto;
-    justify-content: center;
+.instance-detail-actions {
+  --action-width: calc((100% - 1rem) / 3);
+  --action-height: 2.75rem;
+}
+
+.instance-detail-actions > :is(button, select),
+.instance-secondary-actions > button,
+.instance-cloud-init-actions > button {
+  flex: 0 0 auto;
+  width: var(--action-width);
+  height: var(--action-height);
+  min-width: 0;
+  justify-content: center;
+  text-align: center;
+}
+
+@media (min-width: 640px) {
+  .instance-detail-actions {
+    --action-width: 11rem;
+    --action-height: 2.5rem;
   }
 }
 

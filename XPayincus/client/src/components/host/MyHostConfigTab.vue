@@ -7,6 +7,8 @@ import { onClickOutside } from '@vueuse/core'
 import { availableFlagCountryCodes, getLocalizedCountryName } from '@/utils/countryDisplay'
 import { buildHostApiUrl, extractHostAddressFromUrl, validateIdentifier, validateName, validateHostAddress, validateIpAddress } from '@/utils/validation'
 import api from '@/api'
+import adminApi from '@/api/admin'
+import type { HostMonitoringSettings } from '@/types/api'
 import { useToast } from '@/stores/toast'
 import FlagIcon from '@/components/FlagIcon.vue'
 
@@ -62,6 +64,49 @@ interface Emits {
 
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
+
+const canEditMonitoring = computed(() => import.meta.env.VITE_APP_ENTRY === 'admin' && isAdmin.value)
+const monitoringForm = ref<HostMonitoringSettings | null>(null)
+const monitoringLoadFailed = ref(false)
+const monitoringSaving = ref(false)
+const monitoringRetry = ref(0)
+
+watch([canEditMonitoring, () => props.host.id, monitoringRetry], async ([allowed, hostId], _, onCleanup) => {
+  monitoringForm.value = null
+  monitoringLoadFailed.value = false
+  if (!allowed) return
+
+  let stale = false
+  onCleanup(() => { stale = true })
+  try {
+    const settings = await adminApi.hosts.getMonitoringSettings(hostId)
+    if (!stale) monitoringForm.value = settings
+  } catch {
+    if (!stale) monitoringLoadFailed.value = true
+  }
+}, { immediate: true })
+
+async function saveMonitoringSettings() {
+  const form = monitoringForm.value
+  if (!canEditMonitoring.value || !form || monitoringSaving.value) return
+
+  monitoringSaving.value = true
+  try {
+    const settings = await adminApi.hosts.updateMonitoringSettings(props.host.id, {
+      monitoringVisible: form.monitoringVisible,
+      monitoringDisplayName: form.monitoringDisplayName?.trim() || null,
+      monitoringCategory: form.monitoringCategory?.trim() || null
+    })
+    if (monitoringForm.value === form) {
+      monitoringForm.value = settings
+      toast.success(t('admin.hosts.monitoringSettingsSaved'))
+    }
+  } catch {
+    if (monitoringForm.value === form) toast.error(t('admin.hosts.monitoringSettingsSaveFailed'))
+  } finally {
+    monitoringSaving.value = false
+  }
+}
 
 const saving = ref(false)
 const agentManagedHost = computed(() => (props.host.url || '').startsWith('agent://'))
@@ -711,5 +756,40 @@ async function saveConfig() {
         </button>
       </div>
     </form>
+
+    <section v-if="canEditMonitoring" class="mt-6 border-t border-themed pt-6">
+      <h3 class="text-sm font-medium text-themed">{{ t('admin.hosts.monitoringSettings') }}</h3>
+      <p class="mt-1 text-xs text-themed-muted">{{ t('admin.hosts.monitoringSettingsHint') }}</p>
+      <form v-if="monitoringForm" class="mt-4" @submit.prevent="saveMonitoringSettings">
+        <fieldset class="space-y-4" :disabled="monitoringSaving">
+          <label class="flex items-center gap-2 text-sm text-themed">
+            <input v-model="monitoringForm.monitoringVisible" type="checkbox" />
+            {{ t('admin.hosts.monitoringVisible') }}
+          </label>
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <label class="block text-xs text-themed-muted">
+              {{ t('admin.hosts.monitoringDisplayName') }}
+              <input v-model="monitoringForm.monitoringDisplayName" type="text" maxlength="64" class="input mt-1" />
+              <span class="mt-1 block">{{ t('admin.hosts.monitoringDisplayNameHint') }}</span>
+            </label>
+            <label class="block text-xs text-themed-muted">
+              {{ t('admin.hosts.monitoringCategory') }}
+              <input v-model="monitoringForm.monitoringCategory" type="text" maxlength="32" class="input mt-1" />
+              <span class="mt-1 block">{{ t('admin.hosts.monitoringCategoryHint') }}</span>
+            </label>
+          </div>
+          <div class="flex justify-end">
+            <button type="submit" class="btn-primary" :disabled="monitoringSaving">
+              {{ t(monitoringSaving ? 'common.saving' : 'common.save') }}
+            </button>
+          </div>
+        </fieldset>
+      </form>
+      <div v-else-if="monitoringLoadFailed" class="mt-4 flex flex-wrap items-center gap-3">
+        <p class="text-sm text-error" role="alert">{{ t('admin.hosts.monitoringSettingsLoadFailed') }}</p>
+        <button type="button" class="btn-secondary" @click="monitoringRetry++">{{ t('common.retry') }}</button>
+      </div>
+      <p v-else class="mt-4 text-sm text-themed-muted" role="status">{{ t('common.loading') }}</p>
+    </section>
   </div>
 </template>

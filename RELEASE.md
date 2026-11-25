@@ -1,8 +1,16 @@
 # 統一發行
 
-根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.38`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
+根層工作區包含 `XPayincus` 與 `XPayincus-Agent`，RFW／ZFS 實體來源分別位於 `XPayincus-Agent/components/rfw` 與 `XPayincus-Agent/components/zfs`。版本唯一來源為根 `VERSION`，本次發行目標為 `v1.0.39`，正式發布狀態與最新版本以 [GitHub Releases](https://github.com/XiaoLong-Taiwan/XPayincus/releases) 為準。格式必須為 canonical `vSemVer`：`vMAJOR.MINOR.PATCH[-prerelease][+build]`；核心數字與純數字預發行識別碼不得有前導零，識別碼不得為空，只接受 ASCII 英數與連字號。版本檔只允許單一版本及可選的一個 LF／CRLF 結尾，拒絕 BOM、空白或額外行。Compose 僅用於面板；Agent、RFW 與 ZFS 在宿主機執行，子目錄 workflow 僅供歷史參考。
 
 GitHub Actions 必須從統一倉庫根層 checkout，面板、Agent 與 Agent 內兩個宿主元件須納入實際來源，不能只有 gitlink 或 submodule。Git 工作區是否已提交、推送及遠端 CI 是否成功，需另以當次紀錄確認，不應把文件中的工作區描述當作即時狀態。來源碼上傳不等於建立 GitHub Release，也不代表已部署。
+
+## v1.0.39 發行目標
+
+- Agent 新增每 3 秒回報主機即時監控資料。客戶端「主機狀態」在頁面可見時每 3 秒更新，優先顯示即時取樣，缺少新鮮取樣時改用仍有效的心跳資料。
+- 管理員可設定主機是否出現在客戶端「主機狀態」，並自訂顯示名稱與分類。客戶端可依分類篩選。
+- 面板升級需套用 Prisma 遷移 `20261125000000_add_host_monitoring_settings`。既有主機的監控可見性預設開啟，自訂名稱與分類預設留空。
+- 實例詳情的基本資訊保留即時指標，歷史趨勢圖、分時樣本與流量統計移至獨立的「歷史監控」分頁，並調整操作按鈕在窄螢幕上的排列。
+- 同步 Agent、RFW／ZFS、Dashboard、Compose 映像標籤、OCI 標籤與套件版本。發行驗證、建置與封裝由 GitHub Actions 執行。詳見 [v1.0.39 發行說明](XPayincus/docs-site/release-notes/v1.0.39.md)。
 
 ## v1.0.38 發行目標
 

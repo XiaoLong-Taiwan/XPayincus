@@ -30,6 +30,7 @@ import {
   type HostAgentRecord
 } from '../lib/host-agent-credentials.js'
 import { processAgentInstanceReport } from '../services/agent-instance-report.js'
+import { publishCustomerHostRealtimePoint } from '../services/customer-host-status.js'
 import { clampAgentHeartbeatIntervalSeconds, deriveAgentStatus, getAgentHeartbeatIntervalSeconds } from '../lib/agent-status.js'
 import { AgentReleaseCache, readBoundedAgentResponse, validateCachedAgentManifest } from '../lib/agent-release-cache.js'
 import { homedir } from 'node:os'
@@ -74,6 +75,16 @@ interface AgentRealtimeBody {
   sampledAt?: string
   intervalSeconds?: number
   instances?: unknown[]
+}
+
+interface AgentHostRealtimeBody {
+  sampledAt?: string
+  cpuPercent?: number
+  ramPercent?: number
+  diskPercent?: number
+  swapPercent?: number
+  rxBytesPerSecond?: number
+  txBytesPerSecond?: number
 }
 
 interface AgentBinaryParams {
@@ -1064,32 +1075,58 @@ async function authenticateAgentRequest(
   return agent
 }
 
-async function authenticateRealtimeAgentRequest(
-  request: FastifyRequest<{ Body: AgentRealtimeBody }>,
+async function authenticateRealtimeAgentRequest<TBody>(
+  request: FastifyRequest<{ Body: TBody }>,
   reply: FastifyReply
 ): Promise<HostAgentRecord | null> {
   const headers = readAgentAuthHeaders(request.headers)
-  if (!headers) return reply.code(401).send({ error: 'Agent authentication headers are required', code: 'AGENT_AUTH_REQUIRED' }) as never
-  const headerError = validateAgentHeaders(headers)
-  if (headerError) return reply.code(401).send({ error: 'Invalid Agent authentication headers', code: 'AGENT_AUTH_INVALID', details: headerError }) as never
-  if (!isAgentTimestampFresh(headers.timestamp)) return reply.code(401).send({ error: 'Agent request timestamp is expired', code: 'AGENT_AUTH_EXPIRED' }) as never
-  const bodyHash = request.rawAgentBody
-    ? createHash('sha256').update(request.rawAgentBody).digest('hex')
-    : createAgentBodyHash(request.body ?? {})
-  if (bodyHash !== headers.bodyHash.toLowerCase()) return reply.code(401).send({ error: 'Agent body hash mismatch', code: 'AGENT_BODY_HASH_MISMATCH' }) as never
-  const agent = await agentModel.findUnique({ where: { agentId: headers.agentId } })
-  if (!agent || !agent.enabled) return reply.code(401).send({ error: 'Agent is not enabled', code: 'AGENT_DISABLED' }) as never
-  const secret = decryptSensitiveData(agent.secretEncrypted)
-  if (!secret || !isValidAgentSecret(secret)) return reply.code(401).send({ error: 'Agent secret is not available', code: 'AGENT_SECRET_INVALID' }) as never
-  if (!verifyAgentSignature(secret, { method: request.method, path: buildRequestPath(request), timestamp: headers.timestamp, nonce: headers.nonce, bodyHash }, headers.signature)) {
-    return reply.code(401).send({ error: 'Agent signature verification failed', code: 'AGENT_SIGNATURE_INVALID' }) as never
+  if (!headers) {
+    reply.code(401).send({ error: 'Agent authentication headers are required', code: 'AGENT_AUTH_REQUIRED' })
+    return null
   }
-  const now = Date.now()
-  for (const [key, expiresAt] of realtimeNonces) if (expiresAt <= now) realtimeNonces.delete(key)
+  const headerError = validateAgentHeaders(headers)
+  if (headerError) {
+    reply.code(401).send({ error: 'Invalid Agent authentication headers', code: 'AGENT_AUTH_INVALID', details: headerError })
+    return null
+  }
+  if (!isAgentTimestampFresh(headers.timestamp)) {
+    reply.code(401).send({ error: 'Agent request timestamp is expired', code: 'AGENT_AUTH_EXPIRED' })
+    return null
+  }
+  const bodyHash = request.rawAgentBody && createHash('sha256').update(request.rawAgentBody).digest('hex')
+  if (!bodyHash || bodyHash !== headers.bodyHash.toLowerCase()) {
+    reply.code(401).send({ error: 'Agent body hash mismatch', code: 'AGENT_BODY_HASH_MISMATCH' })
+    return null
+  }
+  const agent = await agentModel.findUnique({ where: { agentId: headers.agentId } })
+  if (!agent || !agent.enabled) {
+    reply.code(401).send({ error: 'Agent is not enabled', code: 'AGENT_DISABLED' })
+    return null
+  }
+  const secret = decryptSensitiveData(agent.secretEncrypted)
+  if (!secret || !isValidAgentSecret(secret)) {
+    reply.code(401).send({ error: 'Agent secret is not available', code: 'AGENT_SECRET_INVALID' })
+    return null
+  }
+  if (!verifyAgentSignature(secret, { method: request.method, path: buildRequestPath(request), timestamp: headers.timestamp, nonce: headers.nonce, bodyHash }, headers.signature)) {
+    reply.code(401).send({ error: 'Agent signature verification failed', code: 'AGENT_SIGNATURE_INVALID' })
+    return null
+  }
+  const now = performance.now()
+  for (const [key, expiresAt] of realtimeNonces) {
+    if (expiresAt > now) break
+    realtimeNonces.delete(key)
+  }
   const nonceKey = `${agent.agentId}:${headers.nonce}`
-  if (realtimeNonces.has(nonceKey)) return reply.code(401).send({ error: 'Agent nonce was already used', code: 'AGENT_NONCE_REPLAY' }) as never
+  if (realtimeNonces.has(nonceKey)) {
+    reply.code(401).send({ error: 'Agent nonce was already used', code: 'AGENT_NONCE_REPLAY' })
+    return null
+  }
+  if (realtimeNonces.size >= realtimeNonceLimit) {
+    reply.code(503).send({ error: 'Agent realtime authentication is temporarily unavailable', code: 'AGENT_REALTIME_AUTH_UNAVAILABLE' })
+    return null
+  }
   realtimeNonces.set(nonceKey, now + agentNonceTtlMs)
-  while (realtimeNonces.size > realtimeNonceLimit) realtimeNonces.delete(realtimeNonces.keys().next().value!)
   return agent
 }
 
@@ -1775,13 +1812,35 @@ export default async function agentRoutes(fastify: FastifyInstance) {
     })
   })
 
+  fastify.post<{ Body: AgentHostRealtimeBody }>('/monitoring/host-realtime', {
+    bodyLimit: 2048,
+    config: { rateLimit: { max: 300, timeWindow: '1 minute' } }
+  }, async (request, reply) => {
+    const agent = await authenticateRealtimeAgentRequest<AgentHostRealtimeBody>(request, reply)
+    if (!agent) return
+    const body = request.body
+    const now = Date.now()
+    const sampledAt = typeof body?.sampledAt === 'string' ? Date.parse(body.sampledAt) : NaN
+    const allowedKeys = new Set(['sampledAt', 'cpuPercent', 'ramPercent', 'diskPercent', 'swapPercent', 'rxBytesPerSecond', 'txBytesPerSecond'])
+    const entries = Object.entries(body ?? {})
+    const valid = entries.length > 1 && Number.isFinite(sampledAt) && sampledAt <= now + 60000 && sampledAt >= now - 15000 &&
+      entries.every(([key, value]) => allowedKeys.has(key) && (key === 'sampledAt' || (
+        typeof value === 'number' && Number.isFinite(value) && value >= 0 &&
+        (key.endsWith('Percent') ? value <= 100 : true)
+      )))
+    if (!valid) return reply.code(400).send({ error: 'Invalid host realtime monitoring payload', code: 'AGENT_HOST_MONITORING_INVALID' })
+    const { sampledAt: _sampledAt, ...metrics } = body
+    const accepted = publishCustomerHostRealtimePoint(agent.hostId, { agentId: agent.agentId, sampledAt, ...metrics }, now)
+    return { ok: true, accepted, serverTime: new Date(now).toISOString() }
+  })
+
   fastify.post<{ Body: AgentRealtimeBody }>('/monitoring/realtime', async (request, reply) => {
     const agent = await authenticateRealtimeAgentRequest(request, reply)
     if (!agent) return
     const now = Date.now()
     const bodyBytes = request.rawAgentBody?.byteLength ?? Buffer.byteLength(JSON.stringify(request.body ?? {}))
     if (bodyBytes > 400 * 1024) return reply.code(413).send({ error: 'Realtime monitoring payload is too large', code: 'AGENT_MONITORING_TOO_LARGE' })
-    const points = normalizeRealtimeInstances(request.body, now)
+    const points = isRecord(request.body) ? normalizeRealtimeInstances(request.body, now) : null
     if (!points) return reply.code(400).send({ error: 'Invalid realtime monitoring payload', code: 'AGENT_MONITORING_INVALID' })
     const acceptedInstances = await publishReportedInstanceMonitoring(agent, points, now)
     return { ok: true, acceptedInstances, serverTime: new Date(now).toISOString() }

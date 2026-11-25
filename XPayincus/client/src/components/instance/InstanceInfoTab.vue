@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatMemory, formatDisk, formatDate } from '@/utils/formatters'
 import type { Instance } from '@/types/api'
-import type { InstanceHistory, InstanceMonitoringSample } from '@/api/agent-monitoring'
+import type { InstanceMonitoringSample } from '@/api/agent-monitoring'
 import FlagIcon from '@/components/FlagIcon.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import { getVipBadgeInlineStyle, normalizeVipBadgeStyle } from '@/utils/vipBadge'
@@ -41,10 +41,7 @@ interface Props {
   canEditConfig?: boolean
   enableResourcePool?: boolean
   monitoringSample?: InstanceMonitoringSample | null
-  monitoringTrend?: InstanceHistory | null
   monitoringStatus?: 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error'
-  monitoringHistoryLoading?: boolean
-  monitoringHistoryError?: { message: string; code?: string | null; status?: number | null } | null
 }
 
 interface Emits {
@@ -79,14 +76,6 @@ const mappedSshPort = computed(() => {
 const isRunning = computed(() => props.instance.status?.toLowerCase() === 'running')
 const hasLiveMonitoring = computed(() => isRunning.value && props.monitoringStatus === 'connected' && props.monitoringSample?.online === true)
 const monitoringMetrics = computed(() => hasLiveMonitoring.value ? props.monitoringSample?.metrics ?? {} : {})
-const monitoringTrendRows = computed(() => props.monitoringTrend?.buckets ?? [])
-const historyMetrics = [
-  { key: 'cpuUsagePercent', label: 'instance.detail.info.cpu', suffix: '%' },
-  { key: 'memoryUsedBytes', label: 'instance.monitoring.memory', suffix: '' },
-  { key: 'diskIOBytesPerSecond', label: 'instance.monitoring.diskIo', suffix: ' B/s' },
-  { key: 'rxBytesPerSecond', label: 'instance.monitoring.rx', suffix: ' B/s' },
-  { key: 'txBytesPerSecond', label: 'instance.monitoring.tx', suffix: ' B/s' }
-]
 const memoryUsageMb = computed(() => {
   const bytes = monitoringMetrics.value.memoryUsedBytes
   return typeof bytes === 'number' && Number.isFinite(bytes) ? bytes / 1024 / 1024 : null
@@ -186,13 +175,6 @@ const integerFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 
 
 function formatMonitoringMetric(value: number | undefined, suffix = ''): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${integerFormat.format(value)}${suffix}` : '—'
-}
-
-function formatHistoryMetric(value: number | undefined, metric: typeof historyMetrics[number]): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
-  if (metric.key === 'memoryUsedBytes') return value === 0 ? '0 MB' : formatMemory(value / 1024 / 1024)
-  if (metric.suffix === ' B/s') return formatBytesPerSecond(value)
-  return formatMonitoringMetric(value, metric.suffix)
 }
 
 function formatBytes(value: number | undefined): string {
@@ -599,52 +581,6 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
           <p class="text-xs" :class="monitoringStatus === 'connected' ? 'text-green-600' : monitoringStatus === 'offline' || monitoringStatus === 'error' ? 'text-red-600' : 'text-amber-600'" role="status" aria-live="polite">
             {{ t(`instance.monitoring.${monitoringStatus ?? 'connecting'}`) }}
           </p>
-          <p v-if="monitoringHistoryLoading" class="mt-2 text-xs text-themed-muted" role="status">{{ t('instance.monitoring.loading') }}</p>
-          <p v-else-if="monitoringHistoryError" class="mt-2 text-xs text-red-600" role="alert">
-            {{ monitoringHistoryError.message }}<span v-if="monitoringHistoryError.code">（{{ monitoringHistoryError.code }}）</span>
-          </p>
-          <details v-else-if="monitoringTrend" class="mt-2 text-xs">
-            <summary class="cursor-pointer text-themed-muted">{{ t('instance.monitoring.history', { seconds: monitoringTrend.resolutionSeconds }) }}</summary>
-            <dl class="my-2 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-              <div><dt class="text-themed-muted">{{ t('instance.monitoring.retentionDays') }}</dt><dd>{{ monitoringTrend.retentionDays }}</dd></div>
-              <div><dt class="text-themed-muted">{{ t('instance.monitoring.resolutionSeconds') }}</dt><dd>{{ monitoringTrend.resolutionSeconds }}</dd></div>
-              <div><dt class="text-themed-muted">{{ t('instance.monitoring.incomplete') }}</dt><dd>{{ monitoringTrend.incomplete ? t('common.yes') : t('common.no') }}</dd></div>
-              <div><dt class="text-themed-muted">{{ t('instance.monitoring.capacityTruncated') }}</dt><dd>{{ monitoringTrend.capacityTruncated ? t('common.yes') : t('common.no') }}</dd></div>
-              <div><dt class="text-themed-muted">{{ t('instance.monitoring.bucketsTruncated') }}</dt><dd>{{ monitoringTrend.bucketsTruncated ? t('common.yes') : t('common.no') }}</dd></div>
-            </dl>
-            <p v-if="monitoringTrend.incomplete || monitoringTrend.capacityTruncated || monitoringTrend.bucketsTruncated" class="mt-2 text-amber-600">{{ t('instance.monitoring.incomplete') }}</p>
-            <dl class="my-2 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-              <div v-for="key in ['rxBytes', 'txBytes']" :key="key" class="min-w-0 rounded border border-themed p-2">
-                <dt class="text-themed-muted">{{ t(`instance.monitoring.${key}`) }}</dt>
-                <dd class="font-mono tabular-nums">{{ formatBytes(monitoringTrend.summaryCounters[key]?.delta) }} {{ t('instance.monitoring.bytes') }}</dd>
-                <dd class="mt-1 text-themed-muted">{{ t('instance.monitoring.coverage') }}: {{ Math.round((monitoringTrend.summaryCounters[key]?.coverage ?? 0) * 100) }}%</dd>
-                <dd class="text-themed-muted">{{ t('instance.monitoring.resetCount') }}: {{ monitoringTrend.summaryCounters[key]?.resetCount ?? 0 }}</dd>
-                <dd class="text-themed-muted">{{ t('instance.monitoring.partial') }}: {{ monitoringTrend.summaryCounters[key]?.partial ? t('common.yes') : t('common.no') }}</dd>
-                <dd class="text-themed-muted">{{ t('instance.monitoring.count') }}: {{ monitoringTrend.summaryCounters[key]?.count ?? 0 }}</dd>
-              </div>
-            </dl>
-            <template v-if="monitoringTrendRows.length">
-              <h4 class="mt-3 font-semibold">{{ t('instance.monitoring.average') }}</h4>
-              <dl class="my-2 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-                <div v-for="metric in historyMetrics" :key="metric.key" class="min-w-0 rounded border border-themed p-2">
-                  <dt class="text-themed-muted">{{ t(metric.label) }}</dt>
-                  <dd class="font-mono tabular-nums">{{ formatHistoryMetric(monitoringTrend.summary[metric.key]?.avg, metric) }}</dd>
-                </div>
-              </dl>
-              <div class="max-h-64 space-y-2 overflow-y-auto">
-                <article v-for="bucket in monitoringTrendRows" :key="bucket.from" class="border-b border-themed py-2">
-                  <time :datetime="bucket.from" class="text-themed-muted">{{ new Date(bucket.from).toLocaleString() }}</time>
-                  <dl class="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-                    <div v-for="metric in historyMetrics" :key="metric.key">
-                      <dt class="text-themed-muted">{{ t(metric.label) }}</dt>
-                      <dd class="font-mono tabular-nums">{{ formatHistoryMetric(bucket.metrics[metric.key]?.avg, metric) }}</dd>
-                    </div>
-                  </dl>
-                </article>
-              </div>
-            </template>
-            <p v-else class="mt-2 text-themed-muted">{{ t('instance.monitoring.empty') }}</p>
-          </details>
         </div>
         <!-- Bandwidth Limits -->
         <div class="pt-2 border-t-2 border-themed">

@@ -138,15 +138,22 @@ const fastify = Fastify({
 })
 
 fastify.addHook('preParsing', async (request, _reply, payload) => {
-  if (request.method !== 'POST' || !['/api/agent/heartbeat', '/api/agent/monitoring/realtime'].includes(request.url.split('?')[0])) {
+  if (request.method !== 'POST' || !['/api/agent/heartbeat', '/api/agent/monitoring/realtime', '/api/agent/monitoring/host-realtime'].includes(request.url.split('?')[0])) {
     return payload
   }
 
   const chunks: Buffer[] = []
-  for await (const chunk of payload) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  let length = 0
+  const bodyLimit = request.routeOptions.bodyLimit
+  for await (const chunk of (payload as Readable).iterator({ destroyOnReturn: false })) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    length += bytes.length
+    if (length > bodyLimit) {
+      throw Object.assign(new Error('Request body is too large'), { statusCode: 413, code: 'FST_ERR_CTP_BODY_TOO_LARGE' })
+    }
+    chunks.push(bytes)
   }
-  request.rawAgentBody = Buffer.concat(chunks)
+  request.rawAgentBody = Buffer.concat(chunks, length)
   return Readable.from(request.rawAgentBody)
 })
 

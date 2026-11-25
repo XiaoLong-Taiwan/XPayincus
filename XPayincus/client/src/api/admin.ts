@@ -2,7 +2,7 @@ import axios, { type AxiosInstance } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { buildApiUrl } from '@/utils/api-url'
 import { API_BASE_URL } from '@/utils/runtime-config'
-import type { CreateHostResponse, RegenerateHostInstallResponse } from '@/types/api.js'
+import type { CreateHostResponse, HostMonitoringSettings, RegenerateHostInstallResponse } from '@/types/api.js'
 
 export interface HostingAccessApplication {
   id: number
@@ -1238,6 +1238,10 @@ const api = {
         hasSshKey: boolean
       }
     }> => http.get(`/hosts/${hostId}/users/lookup`, { params: { username } }),
+    getMonitoringSettings: (id: number): Promise<HostMonitoringSettings> =>
+      http.get(`/hosts/${id}/admin/monitoring-settings`),
+    updateMonitoringSettings: (id: number, data: HostMonitoringSettings): Promise<HostMonitoringSettings> =>
+      http.put(`/hosts/${id}/admin/monitoring-settings`, data),
     getImagePolicy: (id: number): Promise<HostImagePolicy> => http.get(`/hosts/${id}/images`),
     updateImagePolicy: (id: number, data: { useDefault: boolean; imageIds?: number[] }): Promise<HostImagePolicy & { message: string }> =>
       http.put(`/hosts/${id}/images`, data),

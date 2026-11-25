@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { subscribeInstanceMonitoring, getInstanceMonitoringSubscriberCount, publishInstanceMonitoring } from '../src/lib/agent-monitoring-stream.js'
 import { consumeMonitoringStreamAccessTicket, generateMonitoringStreamAccessTicket, inspectMonitoringStreamAccessTicket } from '../src/lib/action-ticket.js'
 import { ingestAgentMonitoring, matchAgentMonitoringInstances, monitoringInstanceScope, monitoringRetentionMs, publishAgentInstanceMonitoring, readManagedInstanceHistory, readManagedInstanceSnapshot, type InstancePoint } from '../src/services/agent-monitoring.js'
-import { customerHostMetrics } from '../src/services/customer-host-status.js'
+import { customerHostMetrics, publishCustomerHostRealtimePoint, readCustomerHostRealtimePoint } from '../src/services/customer-host-status.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const routeSource = readFileSync(join(root, 'src/routes/agent-monitoring-stream.ts'), 'utf8')
@@ -20,10 +20,16 @@ try {
   assert.match(hostStatus, /onRequest: \[fastify\.authenticate\]/)
   assert.match(hostStatus, /const userId\s*=\s*request\.user\.id\b/)
   assert.match(hostStatus, /const ownInstance\s*=\s*\{\s*userId\s*,\s*status:\s*\{\s*not:\s*'deleted'\s+as const\s*,?\s*\}\s*,?\s*\}/)
-  assert.match(hostStatus, /where:\s*\{\s*OR:\s*\[\s*\{\s*userId\s*,?\s*\}\s*,\s*\{\s*instances:\s*\{\s*some:\s*ownInstance\s*,?\s*\}\s*,?\s*\}\s*,?\s*\]\s*,?\s*\}/)
+  assert.match(hostStatus, /where:\s*\{\s*monitoringVisible:\s*true\s*,\s*OR:\s*\[\s*\{\s*userId\s*,?\s*\}\s*,\s*\{\s*instances:\s*\{\s*some:\s*ownInstance\s*,?\s*\}\s*,?\s*\}\s*,?\s*\]\s*,?\s*\}/)
   assert.match(hostStatus, /instances:\s*\{\s*where:\s*ownInstance\s*,/)
   assert.match(hostStatus, /packageHosts:\s*\{\s*where:\s*\{\s*package:\s*\{\s*userId\s*,?\s*\}\s*,?\s*\}/)
   assert.match(hostStatus, /Cache-Control', 'no-store'/)
+  assert.doesNotMatch(hostStatus, /monitoringVisible:\s*host\./)
+  assert.doesNotMatch(hostStatus, /select:\s*\{[^}]*monitoringVisible:/)
+  assert.match(hostStatus, /displayName: customName/)
+  assert.match(hostStatus, /category: host\.monitoringCategory/)
+  assert.match(hostStatus, /countryCode: host\.countryCode/)
+  assert.match(hostStatus, /max: 120, timeWindow: '1 minute'/)
   const hostNow = new Date()
   const hostAgent = {
     enabled: true, status: 'online', lastSeenAt: hostNow,
@@ -31,11 +37,25 @@ try {
       hostRxBytesPerSecond: 321, hostTxBytesPerSecond: -1, cpuTotal: 8, memoryTotalMb: 16000 } }
   }
   assert.deepEqual(customerHostMetrics(hostAgent, hostNow), {
-    sampledAt: hostNow.toISOString(), cpuPercent: 31, ramPercent: 50, diskPercent: null, swapPercent: 0,
+    sampledAt: hostNow.toISOString(), source: 'heartbeat', cpuPercent: 31, ramPercent: 50, diskPercent: null, swapPercent: 0,
     rxBytesPerSecond: 321, txBytesPerSecond: null
   })
   assert.deepEqual(customerHostMetrics(hostAgent, new Date(hostNow.getTime() + 121000)), customerHostMetrics(null, hostNow))
   assert.deepEqual(customerHostMetrics({ ...hostAgent, enabled: false }, hostNow), customerHostMetrics(null, hostNow))
+  const realtimePoint = { agentId: 'agent-1', sampledAt: hostNow.getTime(), cpuPercent: 22, ramPercent: 44 }
+  assert.equal(publishCustomerHostRealtimePoint(991, realtimePoint, hostNow.getTime()), true)
+  assert.equal(publishCustomerHostRealtimePoint(991, { ...realtimePoint, sampledAt: realtimePoint.sampledAt - 1 }, hostNow.getTime()), false)
+  assert.equal(readCustomerHostRealtimePoint(991, 'agent-1', hostNow.getTime())?.cpuPercent, 22)
+  assert.equal(readCustomerHostRealtimePoint(991, 'different-agent', hostNow.getTime()), null)
+  assert.equal(readCustomerHostRealtimePoint(991, 'agent-1', hostNow.getTime() + 15001), null)
+  assert.equal(publishCustomerHostRealtimePoint(991, { ...realtimePoint, agentId: 'agent-2', sampledAt: hostNow.getTime() + 60000, rxBytesPerSecond: 0, txBytesPerSecond: 2048 }, hostNow.getTime()), true)
+  assert.equal(readCustomerHostRealtimePoint(991, 'agent-1', hostNow.getTime()), null)
+  assert.deepEqual(customerHostMetrics(hostAgent, hostNow, 991, 'agent-2'), {
+    sampledAt: new Date(hostNow.getTime() + 60000).toISOString(), source: 'realtime', cpuPercent: 22, ramPercent: 44,
+    diskPercent: null, swapPercent: null, rxBytesPerSecond: 0, txBytesPerSecond: 2048
+  })
+  assert.equal(customerHostMetrics(hostAgent, new Date(hostNow.getTime() + 15001), 991, 'agent-2').source, 'heartbeat')
+  assert.equal(publishCustomerHostRealtimePoint(991, { ...realtimePoint, agentId: 'agent-2', sampledAt: hostNow.getTime() + 15001 }, hostNow.getTime() + 15001), true)
 
   const history = routeSource.slice(routeSource.indexOf("'/instances/:instanceId/monitoring/history'"), routeSource.indexOf("'/instances/:instanceId/monitoring/stream-ticket'"))
   assert.match(history, /onRequest: \[fastify\.authenticate\]/)
@@ -61,7 +81,21 @@ try {
   const streamRegistration = appSource.indexOf('fastify.register(agentMonitoringStreamRoutes')
   assert.ok(streamRegistration >= 0 && streamRegistration < appSource.indexOf('fastify.register(agentRoutes'))
   const agentRouteSource = readFileSync(join(root, 'src/routes/agent.ts'), 'utf8')
-  assert.ok(agentRouteSource.includes("code: 'AGENT_HOST_NOT_VERIFIED'"))
+  const realtimeAuth = agentRouteSource.slice(agentRouteSource.indexOf('async function authenticateRealtimeAgentRequest'), agentRouteSource.indexOf('function normalizeRealtimeInstances'))
+  assert.match(realtimeAuth, /request\.rawAgentBody && createHash\('sha256'\)\.update\(request\.rawAgentBody\)/)
+  assert.doesNotMatch(realtimeAuth, /createAgentBodyHash|return reply/)
+  for (const code of ['AGENT_AUTH_REQUIRED', 'AGENT_AUTH_INVALID', 'AGENT_AUTH_EXPIRED', 'AGENT_BODY_HASH_MISMATCH', 'AGENT_DISABLED', 'AGENT_SECRET_INVALID', 'AGENT_SIGNATURE_INVALID', 'AGENT_NONCE_REPLAY', 'AGENT_REALTIME_AUTH_UNAVAILABLE']) {
+    assert.match(realtimeAuth, new RegExp(`code: '${code}'[^\\n]*\\n\\s*return null`))
+  }
+  assert.match(realtimeAuth, /if \(realtimeNonces\.size >= realtimeNonceLimit\)/)
+  assert.match(agentRouteSource, /if \(!host\?\.isInstalled\).*code: 'AGENT_HOST_NOT_VERIFIED'/)
+  const hostRealtimeRoute = agentRouteSource.slice(agentRouteSource.indexOf("'/monitoring/host-realtime'"), agentRouteSource.indexOf("'/monitoring/realtime'"))
+  assert.match(hostRealtimeRoute, /authenticateRealtimeAgentRequest<AgentHostRealtimeBody>/)
+  assert.match(hostRealtimeRoute, /bodyLimit: 2048/)
+  assert.match(hostRealtimeRoute, /config: \{ rateLimit: \{/)
+  assert.match(hostRealtimeRoute, /sampledAt >= now - 15000/)
+  assert.match(hostRealtimeRoute, /publishCustomerHostRealtimePoint/)
+  assert.match(appSource, /'\/api\/agent\/monitoring\/host-realtime'/)
   assert.ok(agentRouteSource.includes('const requestedFrom = request.query.from === undefined ? now - 86400000 : Date.parse(request.query.from)'))
   assert.ok(agentRouteSource.includes('const requestedTo = request.query.to === undefined ? now : Date.parse(request.query.to)'))
   assert.ok(agentRouteSource.includes('const from = Math.max(requestedFrom, now - 7 * 86400000)'))

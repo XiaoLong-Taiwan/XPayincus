@@ -27,18 +27,20 @@ function writeEvent(response: NodeJS.WritableStream, event: InstanceMonitoringSt
 export default async function agentMonitoringStreamRoutes(fastify: FastifyInstance) {
   fastify.get('/host-status', {
     onRequest: [fastify.authenticate],
-    config: { rateLimit: { max: 12, timeWindow: '1 minute' } }
+    config: { rateLimit: { max: 120, timeWindow: '1 minute', keyGenerator: request => `host-status:${request.user.id}` } }
   }, async (request, reply) => {
     const userId = request.user.id
     const ownInstance = { userId, status: { not: 'deleted' as const } }
     const packageLabel = { id: true, name: true } as const
     const hosts = await prisma.host.findMany({
-      where: { OR: [{ userId }, { instances: { some: ownInstance } }] },
+      where: { monitoringVisible: true, OR: [{ userId }, { instances: { some: ownInstance } }] },
       orderBy: { id: 'asc' },
       select: {
         id: true,
         countryCode: true,
-        agent: { select: { enabled: true, status: true, lastSeenAt: true, lastReport: true } },
+        monitoringDisplayName: true,
+        monitoringCategory: true,
+        agent: { select: { agentId: true, enabled: true, status: true, lastSeenAt: true, lastReport: true } },
         instances: { where: ownInstance, distinct: ['packageId'], select: { package: { select: packageLabel } } },
         packageHosts: { where: { package: { userId } }, select: { package: { select: packageLabel } } }
       }
@@ -51,7 +53,16 @@ export default async function agentMonitoringStreamRoutes(fastify: FastifyInstan
         for (const row of [...host.packageHosts, ...host.instances]) {
           if (row.package) packages.set(row.package.id, row.package)
         }
-        return { id: host.id, countryCode: host.countryCode, packages: [...packages.values()], ...customerHostMetrics(host.agent, now) }
+        const metrics = customerHostMetrics(host.agent, now, host.id, host.agent?.agentId)
+        const customName = host.monitoringDisplayName?.trim() || null
+        return {
+          id: host.id,
+          displayName: customName,
+          category: host.monitoringCategory?.trim() || null,
+          countryCode: host.countryCode,
+          packages: [...packages.values()],
+          ...metrics
+        }
       })
     }
   })

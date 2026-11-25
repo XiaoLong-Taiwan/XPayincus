@@ -19,7 +19,7 @@ import (
 	"github.com/XiaoLong-Taiwan/XPayincus-Agent/internal/upgrade"
 )
 
-var version = "v1.0.38"
+var version = "v1.0.39"
 var operationStatePath string
 
 func main() {
@@ -52,6 +52,8 @@ func main() {
 
 	go tunnel.Run(ctx, cfg)
 	go sendRealtimeMonitoring(ctx, client, cfg.MonitoringIntervalSeconds, cfg.MonitoringInterval)
+	hostSampler := &report.HostRealtimeSampler{}
+	go runHostRealtime(ctx, 3*time.Second, hostSampler.Sample, client.HostRealtimeMonitoring)
 	log.Printf("incudal-agent started: panel=%s heartbeat=%s monitoring=%s", cfg.PanelURL, cfg.HeartbeatInterval, cfg.MonitoringInterval)
 	upgradeRunner := upgrade.DefaultRunner(cfg)
 	var upgradeInProgress atomic.Bool

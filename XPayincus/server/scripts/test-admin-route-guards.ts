@@ -307,9 +307,9 @@ function isAllowedPublicOrTokenRoute(route: RouteInfo): boolean {
   if (file === 'network-probe.ts') return path === '/targets' || path === '/prepare'
   if (file === 'help.ts') return !path.startsWith('/admin')
   if (file === 'agent.ts') {
-    if (path === '/monitoring/realtime') {
+    if (path === '/monitoring/realtime' || path === '/monitoring/host-realtime') {
       return route.method === 'POST'
-        && route.handler.includes('authenticateRealtimeAgentRequest(request, reply)')
+        && /const agent = await authenticateRealtimeAgentRequest(?:<AgentHostRealtimeBody>)?\(request, reply\)\s+if \(!agent\) return/.test(route.handler)
     }
     if (path === '/panel-trust/:phase') {
       return route.method === 'POST'
@@ -339,6 +339,18 @@ function isAllowedPublicOrTokenRoute(route: RouteInfo): boolean {
 }
 
 const routes = collectRoutes()
+for (const path of ['/monitoring/realtime', '/monitoring/host-realtime']) {
+  const route = routes.find(route => route.file === 'agent.ts' && route.method === 'POST' && route.path === path)
+  if (!route || !isAllowedPublicOrTokenRoute(route)) {
+    throw new Error(`POST ${path} must require realtime Agent authentication`)
+  }
+}
+for (const method of ['GET', 'PUT']) {
+  const route = routes.find(route => route.file === 'hosts.ts' && route.method === method && route.path === '/:id/admin/monitoring-settings')
+  if (!route || !/onRequest:\s*\[\s*fastify\.authenticateAdmin\s*\]/.test(route.options)) {
+    throw new Error(`${method} host monitoring settings must use authenticateAdmin`)
+  }
+}
 const adminLikeRoutes = routes.filter(isAdminLikeRoute)
 const adminGuardFailures = adminLikeRoutes.filter(route => !hasAdminGuard(route))
 const unprotectedRoutes = routes.filter(route => !hasRouteProtection(route) && !isAllowedPublicOrTokenRoute(route))

@@ -40,9 +40,9 @@ export interface MonitoringHistory extends MonitoringResponse {
   incomplete: boolean
   retentionDays: number
   resolutionSeconds: number
-  summary: Record<string, MonitoringStats>
-  summaryCounters: Record<string, MonitoringCounterStats>
-  buckets: Array<{ from: string; to: string; metrics: Record<string, MonitoringStats>; counters: Record<string, MonitoringCounterStats> }>
+  summary: Partial<Record<string, MonitoringStats>>
+  summaryCounters: Partial<Record<string, MonitoringCounterStats>>
+  buckets: Array<{ from: string; to: string; metrics: Partial<Record<string, MonitoringStats>>; counters: Partial<Record<string, MonitoringCounterStats>> }>
   bucketsTruncated: boolean
 }
 export interface InstanceHistory extends MonitoringHistory {
