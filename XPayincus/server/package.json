@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "XPayincus backend service",
   "type": "module",
   "main": "dist/app.js",
@@ -68,7 +68,7 @@
     "test:gift-card-guards": "node --import tsx scripts/test-gift-card-guards.ts",
     "test:gift-card-flow": "node --import tsx scripts/test-gift-card-flow.ts",
     "test:hosting-balance-guards": "node --import tsx scripts/test-hosting-balance-guards.ts",
-    "test:hosting-access-application-guards": "node --import tsx scripts/test-hosting-access-application-guards.ts && node --import tsx scripts/test-hosting-access-application-flow.ts",
+    "test:hosting-legacy-access-guards": "node --import tsx scripts/test-hosting-legacy-access-guards.ts && node --import tsx scripts/test-hosting-legacy-access-flow.ts",
     "test:host-notification-email-task-guards": "node --import tsx scripts/test-host-notification-email-task-guards.ts",
     "test:image-route-guards": "node --import tsx scripts/test-image-route-guards.ts",
     "test:inbox-query-guards": "node --import tsx scripts/test-inbox-query-guards.ts",

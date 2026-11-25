@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '@/stores/theme'
 import { useToast } from '@/stores/toast'
@@ -7,6 +7,7 @@ import api from '@/api'
 import FlagIcon from '@/components/FlagIcon.vue'
 import type { HostAgentStatus } from '@/types/api'
 import HostInstallFields from './HostInstallFields.vue'
+import { agentStatusIndicator, agentStatusRefreshSeconds } from './agent-status'
 import { useHostInstallDetails } from '@/composables/useHostInstallDetails'
 
 const { t } = useI18n()
@@ -89,12 +90,9 @@ const agentUpgradeRequesting = ref(false)
 const agentInstallCommandLoading = ref(false)
 const { installDetails, clearInstallDetails, loadInstallDetails } = useHostInstallDetails()
 const agentStatusError = ref('')
-let agentStatusRefreshTimer: ReturnType<typeof setInterval> | null = null
-let agentStatusRefreshIntervalMs = 0
-
-const defaultAgentRefreshSeconds = 30
-const minAgentRefreshSeconds = 5
-const maxAgentRefreshSeconds = 3600
+let agentStatusRefreshTimer: ReturnType<typeof setTimeout> | undefined
+let agentStatusController: AbortController | null = null
+let agentStatusActive = true
 
 async function loadInstanceStats() {
   try {
@@ -131,47 +129,48 @@ async function loadTrafficHistory() {
   }
 }
 
-async function loadAgentStatus(showToast = false) {
-  agentStatusLoading.value = !agentStatus.value
+async function loadAgentStatus(showToast = false, replace = false) {
+  if (!agentStatusActive || document.visibilityState !== 'visible' || (agentStatusRefreshing.value && !replace)) return
+  stopAgentStatusAutoRefresh()
+  const current = new AbortController()
+  agentStatusController = current
   agentStatusRefreshing.value = true
   try {
-    const response = await api.hosts.getAgentStatus(props.host.id)
+    const response = await api.hosts.getAgentStatus(props.host.id, current.signal)
+    if (current.signal.aborted) return
     agentStatus.value = response.agent
     agentStatusError.value = ''
-    startAgentStatusAutoRefresh()
     if (showToast) {
       toast.success(t('admin.hosts.agentStatusRefreshSuccess'))
     }
   } catch (err: any) {
+    if (current.signal.aborted) return
     agentStatusError.value = err?.message || String(err)
     if (showToast) {
       toast.error(t('admin.hosts.agentStatusLoadFailed') + ': ' + agentStatusError.value)
     }
   } finally {
-    agentStatusLoading.value = false
-    agentStatusRefreshing.value = false
+    if (!current.signal.aborted) {
+      agentStatusController = null
+      agentStatusLoading.value = false
+      agentStatusRefreshing.value = false
+      if (document.visibilityState === 'visible') {
+        agentStatusRefreshTimer = setTimeout(() => void loadAgentStatus(), agentHeartbeatIntervalSeconds.value * 1000)
+      }
+    }
   }
 }
 
 function stopAgentStatusAutoRefresh() {
-  if (agentStatusRefreshTimer) {
-    clearInterval(agentStatusRefreshTimer)
-    agentStatusRefreshTimer = null
-  }
-  agentStatusRefreshIntervalMs = 0
+  clearTimeout(agentStatusRefreshTimer)
+  agentStatusController?.abort()
+  agentStatusController = null
+  agentStatusRefreshing.value = false
 }
 
-function startAgentStatusAutoRefresh() {
-  const refreshIntervalMs = agentHeartbeatIntervalSeconds.value * 1000
-  if (agentStatusRefreshTimer && agentStatusRefreshIntervalMs === refreshIntervalMs) {
-    return
-  }
-
-  stopAgentStatusAutoRefresh()
-  agentStatusRefreshIntervalMs = refreshIntervalMs
-  agentStatusRefreshTimer = setInterval(() => {
-    loadAgentStatus()
-  }, refreshIntervalMs)
+function handleAgentStatusVisibility() {
+  if (document.visibilityState === 'visible') void loadAgentStatus()
+  else stopAgentStatusAutoRefresh()
 }
 
 const statusInfo = computed(() => {
@@ -184,17 +183,8 @@ const statusInfo = computed(() => {
 })
 
 const agentStatusInfo = computed(() => {
-  if (!agentStatus.value) {
-    return { label: t('admin.hosts.agentNotInstalled'), class: 'badge-default', dot: 'bg-gray-500' }
-  }
-  if (!agentStatus.value.enabled) {
-    return { label: t('admin.hosts.agentDisabled'), class: 'badge-warning', dot: 'bg-yellow-500' }
-  }
-  const map: Record<string, { label: string; class: string; dot: string }> = {
-    online: { label: t('admin.hosts.agentOnline'), class: 'badge-success', dot: 'bg-green-500' },
-    offline: { label: t('admin.hosts.agentOffline'), class: 'badge-default', dot: 'bg-gray-500' }
-  }
-  return map[agentStatus.value.status] || { label: t('admin.hosts.agentUnknown'), class: 'badge-default', dot: 'bg-gray-500' }
+  const { key, dot } = agentStatusIndicator(agentStatus.value)
+  return { label: t(key), dot }
 })
 
 const agentReport = computed(() => agentStatus.value?.lastReport ?? {})
@@ -203,18 +193,7 @@ const reportedHost = computed(() => agentReport.value.host ?? {})
 const reportedInterfaces = computed(() => reportedHost.value.network?.interfaces ?? [])
 const reportedPools = computed(() => reportedHost.value.storagePools ?? [])
 const hostMetrics = computed(() => agentReport.value.metrics ?? {})
-const agentHeartbeatIntervalSeconds = computed(() => {
-  const value = hostMetrics.value.heartbeatIntervalSeconds
-  if (
-    typeof value !== 'number' ||
-    !Number.isSafeInteger(value) ||
-    value < minAgentRefreshSeconds ||
-    value > maxAgentRefreshSeconds
-  ) {
-    return defaultAgentRefreshSeconds
-  }
-  return value
-})
+const agentHeartbeatIntervalSeconds = computed(() => agentStatusRefreshSeconds(agentStatus.value))
 const agentStatusDescription = computed(() => t('admin.hosts.agentStatusDesc', {
   seconds: agentHeartbeatIntervalSeconds.value
 }))
@@ -257,12 +236,18 @@ watch(() => props.host.id, () => {
   clearInstallDetails()
   loadInstanceStats()
   loadTrafficHistory()
-  loadAgentStatus()
-  startAgentStatusAutoRefresh()
+  stopAgentStatusAutoRefresh()
+  agentStatus.value = null
+  agentStatusError.value = ''
+  agentStatusLoading.value = true
+  void loadAgentStatus()
 }, { immediate: true })
 
+onMounted(() => document.addEventListener('visibilitychange', handleAgentStatusVisibility))
 onBeforeUnmount(() => {
+  agentStatusActive = false
   stopAgentStatusAutoRefresh()
+  document.removeEventListener('visibilitychange', handleAgentStatusVisibility)
 })
 
 const agentIncusStatus = computed(() => {
@@ -349,7 +334,7 @@ async function requestAgentUpgrade() {
       ? t('admin.hosts.agentUpgradeRequestSuccess', { seconds: result.nextHeartbeatSeconds })
       : t('admin.hosts.agentAlreadyLatest')
     toast.success(message)
-    await loadAgentStatus()
+    await loadAgentStatus(false, true)
   } catch (err: any) {
     toast.error(t('admin.hosts.agentUpgradeRequestFailed') + ': ' + (err?.message || String(err)))
   } finally {
@@ -487,7 +472,7 @@ const xAxisLabels = computed(() => {
           <dt class="text-gray-500">{{ t('admin.hosts.status') }}</dt>
           <dd>
             <span class="inline-flex items-center gap-1.5">
-              <span :class="['w-2 h-2 rounded-full', statusInfo.dot]"></span>
+              <span aria-hidden="true" :class="['w-2 h-2 shrink-0 rounded-full', statusInfo.dot]"></span>
               <span :class="['badge', statusInfo.class]">{{ statusInfo.label }}</span>
             </span>
           </dd>
@@ -719,14 +704,15 @@ const xAxisLabels = computed(() => {
 
     <div
       v-else-if="agentStatusError"
-      class="rounded-lg p-3 text-sm"
+      class="flex items-center gap-1.5 rounded-lg p-3 text-sm"
       :class="themeStore.isDark ? 'bg-red-500/10 text-red-300' : 'bg-red-50 text-red-600'"
     >
-      {{ t('admin.hosts.agentStatusLoadFailed') }}: {{ agentStatusError }}
+      <span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-rose-500" />
+      <span>{{ t('admin.hosts.agentStatusLoadFailed') }}: {{ agentStatusError }}</span>
     </div>
 
     <div v-else-if="!agentStatus" class="flex items-start gap-3 rounded-lg p-4" :class="themeStore.isDark ? 'bg-gray-800/60' : 'bg-gray-50'">
-      <span :class="['w-2.5 h-2.5 rounded-full mt-1.5', agentStatusInfo.dot]"></span>
+      <span aria-hidden="true" :class="['w-2.5 h-2.5 shrink-0 rounded-full mt-1.5', agentStatusInfo.dot]"></span>
       <div>
         <p class="text-sm font-medium" :class="themeStore.isDark ? 'text-gray-300' : 'text-gray-700'">
           {{ agentStatusInfo.label }}
@@ -747,8 +733,8 @@ const xAxisLabels = computed(() => {
       >
         <div class="flex flex-wrap items-center gap-2">
           <span class="inline-flex items-center gap-1.5">
-            <span :class="['w-2 h-2 rounded-full', agentStatusInfo.dot]"></span>
-            <span :class="['badge', agentStatusInfo.class]">{{ agentStatusInfo.label }}</span>
+            <span aria-hidden="true" :class="['w-2 h-2 shrink-0 rounded-full', agentStatusInfo.dot]"></span>
+            <span class="text-xs">{{ agentStatusInfo.label }}</span>
           </span>
           <button
             v-if="canRequestAgentUpgrade"

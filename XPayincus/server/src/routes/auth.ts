@@ -106,8 +106,7 @@ async function buildAuthUserPayload(user: {
     avatarStyle: user.avatar_style,
     avatarBadgeId: user.avatar_badge_id ?? null,
     hasCreatedHostBefore: hostingFeatureStatus.hasCreatedHostBefore,
-    canAccessHostingFeature: hostingFeatureStatus.canAccessHostingFeature,
-    hostingApplicationStatus: hostingFeatureStatus.applicationStatus
+    canAccessHostingFeature: hostingFeatureStatus.canAccessHostingFeature
   }
 }
 

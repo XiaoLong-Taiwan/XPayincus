@@ -5,8 +5,9 @@ defineOptions({
 })
 
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { onClickOutside } from '@vueuse/core'
 import api from '@/api'
 const adminApi = () => import('@/api/admin')
 import { useAuthStore } from '@/stores/auth'
@@ -316,14 +317,26 @@ const canDeleteInstance = computed<boolean>(() => {
 // 终端模态框
 const showTerminalModal = ref<boolean>(false)
 const showInstanceActions = ref(false)
+const instanceActionsGroup = ref<HTMLElement | null>(null)
+const instanceActionsToggle = ref<HTMLButtonElement | null>(null)
+
+onClickOutside(instanceActionsGroup, () => closeInstanceActions())
+
+function closeInstanceActions(restoreFocus = false): void {
+  showInstanceActions.value = false
+  if (restoreFocus) instanceActionsToggle.value?.focus()
+}
+
+function handleInstanceActionsFocusOut(event: FocusEvent): void {
+  if (event.relatedTarget instanceof Node && !instanceActionsGroup.value?.contains(event.relatedTarget)) {
+    closeInstanceActions()
+  }
+}
+
 const terminalConnected = ref<boolean>(false)
 const terminalSessionActive = ref<boolean>(false)  // 终端会话是否存在（无论连接状态）
 const terminalForceDisconnect = ref<boolean>(false)
 const terminalTabCount = ref<number>(0)  // 终端标签数量
-
-// 终端悄浮按钮拖动状态
-const terminalFabY = ref<number | null>(null) // null 表示使用默认位置
-const isDragging = ref(false)
 
 // Cloud-init 初始化状态
 const cloudInitReady = ref<boolean>(true) // 默认 true，只有检测到未完成时才显示提示
@@ -334,49 +347,6 @@ let cloudInitRetryCount = 0 // 重试计数器
 let cloudInitRetryTimer: ReturnType<typeof setTimeout> | null = null // 重试定时器
 const CLOUD_INIT_AUTO_RETRY_DELAY_MS = 10000
 const CLOUD_INIT_MAX_AUTO_RETRIES = 12
-let dragStartY = 0
-let dragStartFabY = 0
-
-// 开始拖动（鼠标/触摸）
-function startDrag(e: MouseEvent | TouchEvent) {
-    isDragging.value = true
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
-    dragStartY = clientY
-    // 如果还没有设置过位置，从当前位置计算
-    if (terminalFabY.value === null) {
-        dragStartFabY = window.innerHeight - 96 - 48 // bottom-24 (96px) + 按钮高度
-    } else {
-        dragStartFabY = terminalFabY.value
-    }
-    // 添加全局事件监听
-    window.addEventListener('mousemove', onDrag)
-    window.addEventListener('mouseup', endDrag)
-    window.addEventListener('touchmove', onDrag, { passive: false })
-    window.addEventListener('touchend', endDrag)
-}
-
-// 拖动中
-function onDrag(e: MouseEvent | TouchEvent) {
-    if (!isDragging.value) return
-    e.preventDefault()
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
-    const deltaY = clientY - dragStartY
-    let newY = dragStartFabY + deltaY
-    // 限制在屏幕范围内 (顶部 64px 到底部 32px)
-    const minY = 64
-    const maxY = window.innerHeight - 48 - 32
-    newY = Math.max(minY, Math.min(maxY, newY))
-    terminalFabY.value = newY
-}
-
-// 结束拖动
-function endDrag() {
-    isDragging.value = false
-    window.removeEventListener('mousemove', onDrag)
-    window.removeEventListener('mouseup', endDrag)
-    window.removeEventListener('touchmove', onDrag)
-    window.removeEventListener('touchend', endDrag)
-}
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 let isComponentMounted = ref<boolean>(true)  // 组件挂载状态标志
@@ -437,15 +407,6 @@ onMounted(async (): Promise<void> => {
 onUnmounted(() => {
   clearInstancePassword()
   isComponentMounted.value = false
-  // 关闭终端模态框（确保断开连接）
-  showTerminalModal.value = false
-  terminalConnected.value = false
-  terminalSessionActive.value = false
-  terminalTabCount.value = 0
-  // 清理拖动事件监听器（如果正在拖动时组件卸载）
-  if (isDragging.value) {
-    endDrag()
-  }
   if (refreshInterval) {
     clearInterval(refreshInterval)
     refreshInterval = null
@@ -462,13 +423,6 @@ onUnmounted(() => {
     clearTimeout(cloudInitRetryTimer)
     cloudInitRetryTimer = null
   }
-})
-
-// 路由离开守卫 - 确保离开页面时断开终端连接
-onBeforeRouteLeave(() => {
-  // 关闭终端模态框，触发其内部的断开逻辑
-  showTerminalModal.value = false
-  terminalConnected.value = false
 })
 
 // 监听标签页变化以加载数据
@@ -571,6 +525,11 @@ const instanceHostName = computed<string>(() => {
 // 监听路由参数变化，重新加载实例数据
 watch(() => route.params.id, async (newId, oldId) => {
   if (newId !== oldId) {
+    showTerminalModal.value = false
+    terminalConnected.value = false
+    terminalSessionActive.value = false
+    terminalForceDisconnect.value = false
+    terminalTabCount.value = 0
     instanceMonitoring.disconnect()
     monitoringBinding = ''
     // 如果路由参数从有效变为无效，或者路由名称变化，清除定时器
@@ -626,10 +585,6 @@ watch(() => route.params.id, async (newId, oldId) => {
       cloudInitChecking.value = false
       cloudInitManualCompleting.value = false
 
-      // 重置终端状态
-      terminalConnected.value = false
-      terminalSessionActive.value = false
-      terminalTabCount.value = 0
       showInstanceActions.value = false
 
       // 关闭所有弹窗
@@ -645,7 +600,6 @@ watch(() => route.params.id, async (newId, oldId) => {
       showDestroyModal.value = false
       showCloneModal.value = false
       showSuspendModal.value = false
-      showTerminalModal.value = false
       showConfigEditModal.value = false
 
       // 加载新实例数据
@@ -2483,12 +2437,21 @@ function formatShortDate(dateStr: string | null | undefined): string {
           <div class="min-w-0">
             <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
               <h1 class="page-title max-w-full truncate">{{ instance.name }}</h1>
+              <span
+                class="nimbus-status-pill inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-1 text-xs font-medium"
+                :data-tone="powerStatus.class"
+                :class="{ 'is-dark': themeStore.isDark }"
+                role="status"
+              >
+                <span class="nimbus-status-dot" aria-hidden="true" />
+                {{ powerStatus.label }}
+              </span>
             </div>
             <p class="page-description mt-0.5 font-mono tabular-nums">{{ formatImageName(instance.image, (instance as any).imageName) }} · <span class="uppercase">{{ (instance as any).host?.name || (instance as any).host || '-' }}</span></p>
           </div>
         </div>
 
-        <div class="instance-detail-actions flex min-w-0 max-w-full flex-wrap items-center gap-2">
+        <div class="instance-detail-actions relative flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto lg:justify-end">
           <!-- Active Task Indicator -->
           <div
             v-if="activeTask"
@@ -2586,33 +2549,44 @@ function formatShortDate(dateStr: string | null | undefined): string {
           <select
             v-model="powerAction"
             class="btn-secondary btn-sm sm:btn"
-            :class="powerStatus.class"
             :aria-label="$t('instance.detail.actions.powerMenu')"
             :disabled="isOperationDisabled || (!isRunning && !isStopped)"
             @change="handlePowerAction"
           >
-            <option value="" disabled>{{ powerStatus.label }}</option>
+            <option value="" disabled>{{ $t('instance.detail.actions.powerMenu') }}</option>
             <option value="start" :disabled="!isStopped">{{ $t('instance.actions.start') }}</option>
             <option v-if="canUsePowerOperations" value="stop" :disabled="!isRunning">{{ $t('instance.actions.stop') }}</option>
             <option v-if="canUsePowerOperations" value="restart" :disabled="!isRunning">{{ $t('instance.actions.restart') }}</option>
             <option v-if="canUsePowerOperations" value="forceStop" :disabled="!isRunning">{{ $t('instance.detail.actions.forceStop') }}</option>
             <option v-if="canUsePowerOperations" value="forceRestart" :disabled="!isRunning">{{ $t('instance.detail.actions.forceRestart') }}</option>
           </select>
-          <button
-            type="button"
-            class="btn-secondary btn-sm sm:hidden"
-            :aria-expanded="showInstanceActions"
-            aria-controls="instance-secondary-actions"
-            @click="showInstanceActions = !showInstanceActions"
-          >
-            {{ $t('common.actions') }}
-          </button>
           <div
-            id="instance-secondary-actions"
-            class="instance-secondary-actions w-full flex-wrap gap-2 sm:contents"
-            :class="showInstanceActions ? 'flex' : 'hidden'"
-            @keydown.esc="showInstanceActions = false"
+            ref="instanceActionsGroup"
+            class="instance-more-actions ms-auto sm:contents"
+            @focusout="handleInstanceActionsFocusOut"
+            @keydown.esc="showInstanceActions && closeInstanceActions(true)"
           >
+            <button
+              ref="instanceActionsToggle"
+              type="button"
+              class="btn-secondary btn-sm sm:hidden"
+              :aria-label="$te('instance.card.moreActions') ? $t('instance.card.moreActions') : $t('common.actions')"
+              :aria-expanded="showInstanceActions"
+              aria-controls="instance-secondary-actions"
+              @click="showInstanceActions = !showInstanceActions"
+            >
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="12" r="1.5" />
+                <circle cx="12" cy="12" r="1.5" />
+                <circle cx="19" cy="12" r="1.5" />
+              </svg>
+            </button>
+            <div
+              id="instance-secondary-actions"
+              class="instance-secondary-actions sm:contents"
+              :class="{ 'is-open': showInstanceActions }"
+              @click="showInstanceActions && closeInstanceActions(true)"
+            >
           <button
             :disabled="isOperationDisabled"
             class="btn-secondary btn-sm sm:btn"
@@ -2659,8 +2633,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             :title="$t('instance.detail.rebuild.title')"
             @click="handleRebuildClick"
           >
-            <span class="sm:hidden">{{ $t('instance.detail.rebuild.title') }}</span>
-            <span class="hidden sm:inline">{{ $t('instance.detail.rebuild.title') }}</span>
+            {{ $t('instance.detail.rebuild.title') }}
           </button>
           <!-- 同步状态按钮 -->
           <button
@@ -2674,8 +2647,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
-            <span v-else class="sm:hidden">{{ $t('instance.detail.actions.syncStatus') }}</span>
-            <span class="hidden sm:inline">{{ $t('instance.detail.actions.syncStatus') }}</span>
+            <span>{{ $t('instance.detail.actions.syncStatus') }}</span>
           </button>
           <button
             v-if="!isAdminEntry && canTransfer && !showPaidSubscriptionCard"
@@ -2684,8 +2656,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             :title="$t('transfer.actions.transfer')"
             @click="handleTransferBtnClick"
           >
-            <span class="sm:hidden">{{ $t('transfer.actions.transfer') }}</span>
-            <span class="hidden sm:inline">{{ $t('transfer.actions.transfer') }}</span>
+            {{ $t('transfer.actions.transfer') }}
           </button>
           <!-- 封停按钮（仅宿主机所有者可见，实例未封停时） -->
           <button
@@ -2730,6 +2701,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             </svg>
             <span v-else>{{ $t('common.delete') }}</span>
           </button>
+            </div>
           </div>
         </div>
       </div>
@@ -3110,6 +3082,8 @@ function formatShortDate(dateStr: string | null | undefined): string {
             :trend="instanceMonitoring.trend.value"
             :history-loading="instanceMonitoring.historyLoading.value"
             :history-error="instanceMonitoring.historyError.value"
+            :monitoring-status="instanceMonitoring.status.value"
+            :sampled-at="instanceMonitoring.sample.value?.sampledAt"
           />
 
           <!-- Network Tab -->
@@ -3562,6 +3536,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
       :instance-id="instance?.id || null"
       :instance-name="instance?.name"
       :allow-manual-cloud-init-complete="hasCloudInitManualPermission"
+      allow-minimize
       @update:connected="terminalConnected = $event"
       @update:session-active="terminalSessionActive = $event"
       @update:tab-count="terminalTabCount = $event"
@@ -3569,42 +3544,25 @@ function formatShortDate(dateStr: string | null | undefined): string {
     />
 
     <!-- 终端悬浮按钮 - 当终端会话存在但模态框关闭时显示 -->
-    <Transition name="slide-up">
+    <Teleport to="body">
       <div
-        v-if="terminalSessionActive && !showTerminalModal && isRunning"
-        class="fixed right-4 z-40 flex items-center gap-1 rounded-xl shadow-xl select-none"
-        :class="[
-          themeStore.isDark
-            ? 'bg-neutral-900/95 border border-neutral-700 backdrop-blur-sm'
-            : 'bg-white/95 border border-gray-200 backdrop-blur-sm shadow-lg',
-          isDragging ? 'cursor-grabbing' : ''
-        ]"
-        :style="terminalFabY !== null ? { top: terminalFabY + 'px' } : { bottom: '96px' }"
+        v-if="terminalSessionActive && !showTerminalModal"
+        class="terminal-restore-dock fixed z-40 flex items-center rounded-xl border shadow-xl select-none"
+        :class="themeStore.isDark ? 'bg-neutral-900 border-neutral-700' : 'bg-white border-gray-200'"
       >
-        <!-- 拖动手柄 -->
-        <div
-          class="flex items-center px-2 py-3 cursor-grab active:cursor-grabbing touch-none"
-          :class="themeStore.isDark ? 'text-neutral-500 hover:text-neutral-300' : 'text-gray-400 hover:text-gray-600'"
-          @mousedown="startDrag"
-          @touchstart.prevent="startDrag"
-        >
-          <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M8 6a2 2 0 11-4 0 2 2 0 014 0zM8 12a2 2 0 11-4 0 2 2 0 014 0zM8 18a2 2 0 11-4 0 2 2 0 014 0zM14 6a2 2 0 11-4 0 2 2 0 014 0zM14 12a2 2 0 11-4 0 2 2 0 014 0zM14 18a2 2 0 11-4 0 2 2 0 014 0z" />
-          </svg>
-        </div>
-        <!-- 分割线 -->
-        <div class="w-px h-6" :class="themeStore.isDark ? 'bg-neutral-700' : 'bg-gray-200'" />
         <!-- 恢复按钮 -->
         <button
-          class="flex items-center gap-2.5 px-3 py-2.5 transition-colors"
+          type="button"
+          class="flex min-h-11 min-w-0 items-center gap-2.5 rounded-l-xl px-3 py-2.5 transition-colors"
           :class="themeStore.isDark
             ? 'hover:bg-neutral-800 text-white'
             : 'hover:bg-gray-50 text-gray-900'"
           :title="$t('terminal.restore')"
+          :aria-label="$t('terminal.restore')"
           @click="showTerminalModal = true"
         >
           <!-- 连接状态指示器：绿色闪烁=连接中，灰色=断开 -->
-          <span class="relative flex h-2 w-2">
+          <span class="relative flex h-2 w-2 shrink-0" aria-hidden="true">
             <span
               v-if="terminalConnected"
               class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"
@@ -3614,36 +3572,38 @@ function formatShortDate(dateStr: string | null | undefined): string {
               :class="terminalConnected ? 'bg-emerald-500' : 'bg-neutral-400'"
             ></span>
           </span>
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          <span class="text-sm font-medium">{{ $t('terminal.title') }}</span>
+          <span class="truncate text-sm font-medium">{{ $t('terminal.title') }}</span>
           <!-- 标签数量徽章 -->
           <span
             v-if="terminalTabCount > 1"
-            class="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-medium rounded-full"
+            class="inline-flex shrink-0 items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-medium rounded-full"
             :class="themeStore.isDark ? 'bg-neutral-700 text-neutral-300' : 'bg-gray-200 text-gray-600'"
           >
             {{ terminalTabCount }}
           </span>
         </button>
         <!-- 分割线 -->
-        <div class="w-px h-6" :class="themeStore.isDark ? 'bg-neutral-700' : 'bg-gray-200'" />
+        <div class="w-px h-6 shrink-0" :class="themeStore.isDark ? 'bg-neutral-700' : 'bg-gray-200'" aria-hidden="true" />
         <!-- 断开连接按钮 -->
         <button
-          class="p-2.5 rounded-r-xl transition-colors"
+          type="button"
+          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-r-xl transition-colors"
           :class="themeStore.isDark
             ? 'text-neutral-400 hover:text-red-400 hover:bg-neutral-800'
             : 'text-gray-400 hover:text-red-500 hover:bg-gray-50'"
           :title="$t('terminal.disconnect')"
+          :aria-label="$t('terminal.disconnect')"
           @click="terminalForceDisconnect = true; terminalSessionActive = false; terminalTabCount = 0"
         >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
-    </Transition>
+    </Teleport>
 
     <!-- 自动续费设置弹窗 -->
     <Teleport to="body">
@@ -3786,6 +3746,12 @@ function formatShortDate(dateStr: string | null | undefined): string {
 </template>
 
 <style scoped>
+.terminal-restore-dock {
+  right: calc(1rem + env(safe-area-inset-right, 0px));
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  max-width: calc(100% - 2rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+}
+
 /* ============================================================
    Nimbus polish for the instance detail view.
    Motion is subtle and always disabled under reduced-motion.
@@ -3812,9 +3778,28 @@ function formatShortDate(dateStr: string | null | undefined): string {
   pointer-events: none;
 }
 
-/* Status pill dot (colour comes from getStatusInfo utility classes) */
 .nimbus-status-pill {
+  --status-light: #475569;
+  --status-dark: #cbd5e1;
+  color: var(--status-light);
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
   line-height: 1.1;
+}
+.nimbus-status-pill.is-dark {
+  color: var(--status-dark);
+}
+.nimbus-status-pill[data-tone='badge-success'] {
+  --status-light: #15803d;
+  --status-dark: #86efac;
+}
+.nimbus-status-pill[data-tone='badge-warning'] {
+  --status-light: #92400e;
+  --status-dark: #fcd34d;
+}
+.nimbus-status-pill[data-tone='badge-error'] {
+  --status-light: #b91c1c;
+  --status-dark: #fca5a5;
 }
 .nimbus-status-dot {
   display: inline-block;
@@ -3822,6 +3807,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
   height: 0.4rem;
   border-radius: 9999px;
   flex-shrink: 0;
+  background: currentColor;
 }
 
 /* Underline tab bar: hide the horizontal scrollbar, keep it swipeable */
@@ -3872,26 +3858,55 @@ function formatShortDate(dateStr: string | null | undefined): string {
   }
 }
 
-.instance-detail-actions {
-  --action-width: calc((100% - 1rem) / 3);
-  --action-height: 2.75rem;
-}
-
 .instance-detail-actions > :is(button, select),
+.instance-more-actions > button,
 .instance-secondary-actions > button,
 .instance-cloud-init-actions > button {
-  flex: 0 0 auto;
-  width: var(--action-width);
-  height: var(--action-height);
-  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.625rem;
   justify-content: center;
-  text-align: center;
+  font-size: 0.75rem;
 }
 
-@media (min-width: 640px) {
-  .instance-detail-actions {
-    --action-width: 11rem;
-    --action-height: 2.5rem;
+.instance-detail-actions > select {
+  padding-inline-end: 1.5rem;
+}
+
+@media (max-width: 639px) {
+  .instance-detail-actions > :is(button, select),
+  .instance-more-actions > button,
+  .instance-cloud-init-actions > button {
+    min-height: 2.75rem;
+  }
+
+  .instance-more-actions > button {
+    min-width: 2.75rem;
+  }
+
+  .instance-secondary-actions {
+    position: absolute;
+    z-index: 20;
+    inset-block-start: calc(100% + 0.5rem);
+    inset-inline-end: 0;
+    display: none;
+    width: min(14rem, 100%);
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.375rem;
+    border: 1px solid var(--kawaii-line);
+    border-radius: 0.75rem;
+    background: var(--kawaii-surface);
+    box-shadow: var(--kawaii-shadow);
+  }
+
+  .instance-secondary-actions.is-open {
+    display: flex;
+  }
+
+  .instance-secondary-actions > button {
+    min-height: 2.5rem;
+    justify-content: flex-start;
+    text-align: start;
   }
 }
 

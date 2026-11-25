@@ -6,19 +6,6 @@ import type { CreateHostResponse, RegenerateHostInstallResponse } from '@/types/
 export { agentMonitoringApi, instanceMonitoringStreamUrl } from './agent-monitoring'
 export type { InstanceHistory, InstanceMonitoringSample, InstanceMonitoringSnapshot } from './agent-monitoring'
 
-export interface HostingAccessApplication {
-  id: number
-  userId: number
-  status: 'pending' | 'approved' | 'rejected'
-  reason: string
-  reviewReason: string | null
-  reviewedById: number | null
-  reviewedAt: string | null
-  createdAt: string
-  updatedAt: string
-  user?: { id: number; username: string; email: string | null } | null
-  reviewedBy?: { id: number; username: string } | null
-}
 import type { LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UpdateUserResponse, GenerateInviteRequest, InviteListResponse, User, BadgeOverview, BadgeMultiDrawResponse, BadgeOwnership, BadgeCatalogItem, BadgeSeriesItem, UpdateUserRequest, Instance, InstanceWithDetails, InstanceStats, CreateInstanceRequest, CreateInstanceResponse, UpdateInstanceRequest, ChangeHostOptionsResponse, PortMapping, CreatePortMappingRequest, IpAddress, Ipv6Subnet, HostAgentStatusResponse, HostAgentInstallCommandResponse, HostAgentUpgradeRequestResponse, Snapshot, Backup, CreateSnapshotRequest, CreateBackupRequest, SnapshotPolicy, BackupPolicy, UpdateSnapshotPolicyRequest, UpdateBackupPolicyRequest, Host, HostWithDetails, AvailableHost, CreateHostRequest, UpdateHostRequest, Package, CreatePackageRequest, UpdatePackageRequest, SshKey, CreateSshKeyRequest, NotificationChannel, CreateNotificationChannelRequest, UpdateNotificationChannelRequest, UserOAuthBinding, HelpArticle, HostImagePolicy, SystemImage, Log, PaginatedResponse, Ticket, TicketMessage, TicketStatus, TicketObjectLink, TicketObjectLinkType, TicketSupportContext, TicketInternalNote, CreateTicketRequest, PaginatedTickets, PaginatedTicketMessages, TerminalSavedCommand, CreateTerminalSavedCommandRequest, UpdateTerminalSavedCommandRequest, TelegramBindingStatus, TelegramBindTokenResponse, UserInvite, UserInviteSummary, PublicApiScope, PublicApiScopeMetadata, PublicApiToken, CreatePublicApiTokenRequest, CreatePublicApiTokenResponse, OAuthProviderConsentResponse, OAuthProviderAuthorizeRequest, OAuthProviderAuthorizeResponse, OAuthProviderAuthorization, GiftCardListResponse, GiftCardRecord } from '@/types/api.js'
 
 export type VipRuleType = 'user' | 'hosting'
@@ -1128,8 +1115,8 @@ const api = {
       http.post(`/hosts/${id}/verify`, {}, { timeout: TIMEOUT.MEDIUM }),
     regenerateInstall: (id: number): Promise<RegenerateHostInstallResponse> =>
       http.post(`/hosts/${id}/regenerate-install`, {}),
-    getAgentStatus: (id: number): Promise<HostAgentStatusResponse> =>
-      http.get(`/agent/hosts/${id}/status`),
+    getAgentStatus: (id: number, signal?: AbortSignal): Promise<HostAgentStatusResponse> =>
+      http.get(`/agent/hosts/${id}/status`, { signal }),
     generateAgentInstallCommand: (id: number): Promise<HostAgentInstallCommandResponse> =>
       http.post(`/agent/hosts/${id}/install-command`, {}),
     requestAgentUpgrade: (id: number, targetVersion: string): Promise<HostAgentUpgradeRequestResponse> =>
@@ -3501,10 +3488,6 @@ const api = {
 
   // ==================== 托管余额 API ====================
   hosting: {
-    getApplication: (): Promise<{ application: HostingAccessApplication | null }> =>
-      http.get('/hosting/application'),
-    submitApplication: (reason: string): Promise<{ application: HostingAccessApplication }> =>
-      http.post('/hosting/application', { reason }),
     // 检查托管准入条件
     checkAccess: (): Promise<{
       allowed: boolean

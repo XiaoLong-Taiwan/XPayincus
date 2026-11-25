@@ -338,8 +338,8 @@ onUnmounted(() => {
       </header>
 
       <!-- 页面内容 -->
-      <main class="kawaii-workspace nimbus-workspace min-h-0 flex-1 px-3 sm:px-4 md:px-6 xl:px-10 py-4 md:py-6" :class="[isSplitPane ? 'overflow-auto lg:overflow-hidden' : 'overflow-auto', mobileMenuOpen && 'max-md:!overflow-hidden']">
-        <div class="w-full mx-auto" :class="isSplitPane ? 'lg:h-full' : 'max-w-[1680px]'">
+      <main class="kawaii-workspace nimbus-workspace min-h-0 flex-1 px-3 sm:px-4 md:px-6 xl:px-10 py-4 md:py-6" :class="[isSplitPane ? 'overflow-hidden' : 'overflow-auto', mobileMenuOpen && 'max-md:!overflow-hidden']">
+        <div class="w-full mx-auto" :class="isSplitPane ? 'h-full' : 'max-w-[1680px]'">
           <slot />
         </div>
       </main>

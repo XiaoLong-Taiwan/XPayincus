@@ -1274,8 +1274,8 @@ async function handleSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="kawaii-page animate-fade-in min-w-0 lg:h-full lg:flex lg:flex-col">
-    <header class="mb-3 flex flex-col gap-3 border-b border-themed pb-3 sm:mb-4 sm:flex-row sm:items-end sm:justify-between sm:gap-4 sm:pb-4 lg:mb-3 lg:shrink-0">
+  <div class="kawaii-page animate-fade-in flex h-full min-w-0 flex-col">
+    <header class="mb-3 flex shrink-0 flex-col gap-3 border-b border-themed pb-3 sm:mb-4 sm:flex-row sm:items-end sm:justify-between sm:gap-4 sm:pb-4 lg:mb-3">
       <div class="min-w-0">
         <h1 class="text-xl font-semibold tracking-tight text-themed sm:text-2xl">{{ $t('instance.createPage.title') }}</h1>
         <p class="mt-1.5 text-sm text-themed-muted">{{ $t('instance.createPage.description') }}</p>
@@ -1286,11 +1286,11 @@ async function handleSubmit(): Promise<void> {
       </RouterLink>
     </header>
 
-    <div v-if="!loading" class="mb-4 flex flex-wrap items-center gap-2 border-b border-themed pb-4 lg:mb-3 lg:shrink-0">
+    <div v-if="!loading" class="mb-4 flex shrink-0 flex-wrap items-center gap-2 border-b border-themed pb-4 lg:mb-3">
       <span class="text-xs font-semibold uppercase tracking-[0.16em] text-themed-muted">{{ t('instance.createPage.flowLabel') }}</span>
       <span class="text-sm text-themed-muted">{{ t('instance.createPage.flowHint') }}</span>
     </div>
-    <div v-if="!loading" class="mb-4 flex justify-center lg:mb-3 lg:shrink-0">
+    <div v-if="!loading" class="mb-4 flex shrink-0 justify-center lg:mb-3">
       <div
         class="nimbus-segmented inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-themed bg-themed-surface p-1 scrollbar-hide"
       >
@@ -1337,7 +1337,7 @@ async function handleSubmit(): Promise<void> {
       </div>
     </div>
 
-    <div v-if="loading" class="mx-auto w-full max-w-5xl space-y-4" aria-live="polite">
+    <div v-if="loading" class="mx-auto min-h-0 w-full max-w-5xl flex-1 space-y-4 overflow-y-auto" aria-live="polite">
       <div class="card space-y-4 p-5 sm:p-6">
         <div class="flex items-center gap-3 text-sm font-medium text-themed-muted">
           <svg class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -1350,7 +1350,7 @@ async function handleSubmit(): Promise<void> {
       <div class="card space-y-3 p-5"><div class="h-5 w-36 animate-pulse rounded bg-themed-tertiary"></div><div class="h-12 animate-pulse rounded bg-themed-tertiary"></div><div class="h-12 animate-pulse rounded bg-themed-tertiary"></div></div>
     </div>
 
-    <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto pb-28 lg:flex-1 lg:pb-5" @submit.prevent="handleSubmit">
+    <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto flex-1 overscroll-y-contain" @submit.prevent="handleSubmit">
       <div class="mx-auto w-full max-w-5xl space-y-5 pb-5">
         <div class="nimbus-pane space-y-5 p-4 sm:p-6">
           <section v-if="activeStep === 1" class="create-step-heading">
@@ -1697,20 +1697,20 @@ async function handleSubmit(): Promise<void> {
           </div>
         </div>
       </div>
-      <InstancePurchaseStepper
-        v-if="!loading"
-        v-model:active-step="activeStep"
-        class="mx-auto w-full max-w-5xl"
-        :can-continue="canContinuePurchase"
-        :can-submit="canSubmit"
-        :submitting="submitting"
-        :status="purchaseState"
-        @update:active-step="setPurchaseStep"
-        @next="goToNextPurchaseStep"
-        @previous="goToPreviousPurchaseStep"
-        @submit="handleSubmit"
-      />
     </form>
+    <InstancePurchaseStepper
+      v-if="!loading"
+      v-model:active-step="activeStep"
+      class="mx-auto w-full max-w-5xl shrink-0"
+      :can-continue="canContinuePurchase"
+      :can-submit="canSubmit"
+      :submitting="submitting"
+      :status="purchaseState"
+      @update:active-step="setPurchaseStep"
+      @next="goToNextPurchaseStep"
+      @previous="goToPreviousPurchaseStep"
+      @submit="handleSubmit"
+    />
   </div>
 
   <!-- 托管者信息弹窗 -->

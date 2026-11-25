@@ -190,7 +190,7 @@ function assertNoForcedSimplifiedChineseFallback(): void {
   assert.ok(!localeIndexSource.includes('resolveMessageFallback'), 'Simplified Chinese fallback helper must be removed')
 }
 
-function assertSplitLocalePruneKeepsAdminBenefits(): void {
+function assertSplitLocalePruneBoundaries(): void {
   const adminPruneStart = viteConfigSource.indexOf('function stripAdminOnlyLocaleMessages')
   const userPruneStart = viteConfigSource.indexOf('function stripUserOnlyLocaleMessages')
   assert.ok(adminPruneStart >= 0 && userPruneStart > adminPruneStart, 'Vite config must define split locale prune helpers')
@@ -203,6 +203,9 @@ function assertSplitLocalePruneKeepsAdminBenefits(): void {
   const adminEntertainmentRemovedKeysMatch = /const adminEntertainmentRemovedKeys = \[([\s\S]*?)\]/.exec(adminPruneSource)
   assert.ok(adminEntertainmentRemovedKeysMatch, 'admin locale prune must define adminEntertainmentRemovedKeys')
   const adminEntertainmentRemovedKeysSource = adminEntertainmentRemovedKeysMatch[1]
+  const adminOnlyNavKeysMatch = /const adminOnlyNavKeys = \[([\s\S]*?)\]/.exec(userPruneSource)
+  assert.ok(adminOnlyNavKeysMatch, 'customer locale prune must define adminOnlyNavKeys')
+  assert.ok(!/['"]billing['"]/.test(adminOnlyNavKeysMatch[1]), 'customer locale prune must keep nav.billing for the customer sidebar')
 
   assert.ok(
     !userOnlyTopLevelKeysSource.includes("'entertainment'"),
@@ -250,7 +253,7 @@ for (const [localeName, source] of Object.entries(localeSources)) {
 assertFrontendKeysExist()
 assertD152NamespaceParity()
 assertNoForcedSimplifiedChineseFallback()
-assertSplitLocalePruneKeepsAdminBenefits()
+assertSplitLocalePruneBoundaries()
 assertTrafficNotificationPlaceholders()
 
 console.log('frontend i18n key checks passed')

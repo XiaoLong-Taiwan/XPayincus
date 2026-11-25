@@ -1,6 +1,7 @@
 const en = {
   title: 'Agent monitoring', window: 'Time window', hour: 'Last hour', day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days',
   refresh: 'Refresh', loading: 'Loading…', empty: 'No samples in this window', error: 'Unable to load monitoring data. Retry to refresh.',
+  statusCheckedAt: 'Status checked at', statusLoading: 'Checking Agent status…', statusUnavailable: 'Unable to check Agent status. Select Refresh to retry.',
   host: 'Host history', hostStatus: 'Host status', hostStatusHint: 'Only percentages and current network rates are shown. Missing samples are not zero.', incomplete: 'Some samples are incomplete; unavailable values are not estimated.', metric: 'Metric', resolution: 'Bucket size', minute: '1 minute', fiveMinutes: '5 minutes', oneHour: '1 hour', sixHours: '6 hours',
   min: 'Minimum', max: 'Maximum', avg: 'Average', count: 'Samples', coverage: 'Coverage', period: 'Period', summary: 'Window summary',
   coverageHint: 'Coverage is the fraction of this period covered by sample intervals, not uptime. Missing values are not zero.',
@@ -26,6 +27,7 @@ type Copy = { [K in keyof typeof en]: string }
 const zhTW: Copy = {
   title: 'Agent 監控', window: '時間窗', hour: '最近 1 小時', day: '最近 24 小時', week: '最近 7 天', month: '最近 30 天',
   refresh: '重新整理', loading: '載入中…', empty: '此時間窗沒有樣本', error: '無法載入監控資料，請重新整理重試。',
+  statusCheckedAt: '狀態查詢時間', statusLoading: '正在查詢 Agent 狀態…', statusUnavailable: '無法查詢 Agent 狀態，請重新整理重試。',
   host: '宿主歷史', hostStatus: '主機狀態', hostStatusHint: '僅顯示百分比與當前網路速率。缺失樣本不視為零。', incomplete: '部分樣本不完整；不可用數值不會估算。', metric: '指標', resolution: '分桶大小', minute: '1 分鐘', fiveMinutes: '5 分鐘', oneHour: '1 小時', sixHours: '6 小時',
   min: '最小值', max: '最大值', avg: '平均值', count: '樣本數', coverage: '涵蓋率', period: '時段', summary: '時間窗彙總',
   coverageHint: '涵蓋率是樣本區間涵蓋此時段的比例，不代表在線率。缺失值不視為零。',
@@ -49,6 +51,7 @@ const zhTW: Copy = {
 const zhCN: Copy = {
   title: 'Agent 监控', window: '时间窗', hour: '最近 1 小时', day: '最近 24 小时', week: '最近 7 天', month: '最近 30 天',
   refresh: '刷新', loading: '加载中…', empty: '此时间窗没有样本', error: '无法加载监控数据，请刷新重试。',
+  statusCheckedAt: '状态查询时间', statusLoading: '正在查询 Agent 状态…', statusUnavailable: '无法查询 Agent 状态，请刷新重试。',
   host: '宿主历史', hostStatus: '主机状态', hostStatusHint: '仅显示百分比与当前网络速率。缺失样本不视为零。', incomplete: '部分样本不完整；不可用数值不会估算。', metric: '指标', resolution: '分桶大小', minute: '1 分钟', fiveMinutes: '5 分钟', oneHour: '1 小时', sixHours: '6 小时',
   min: '最小值', max: '最大值', avg: '平均值', count: '样本数', coverage: '覆盖率', period: '时段', summary: '时间窗汇总',
   coverageHint: '覆盖率是样本区间覆盖此时段的比例，不代表在线率。缺失值不视为零。',

@@ -53,6 +53,9 @@ const instanceDetailViewSource = readRepoFile('client/src/views/InstanceDetailVi
 const instancesApiSource = readRepoFile('client/src/api/index.ts')
 const adminInstancesApiSource = readRepoFile('client/src/api/admin.ts')
 const agentMonitoringPanelSource = readRepoFile('client/src/components/host/AgentMonitoringPanel.vue')
+const hostStatusViewSource = readRepoFile('client/src/views/HostStatusView.vue')
+const hostInfoTabSource = readRepoFile('client/src/components/host/HostInfoTab.vue')
+const monitoredHostDetailSource = readRepoFile('client/src/views/resources/MyHostDetailView.vue')
 const containerTerminalSource = readRepoFile('client/src/components/instance/TerminalModal.vue')
 const terminalPageSource = readRepoFile('client/src/views/TerminalView.vue')
 const trafficStatsSource = readRepoFile('client/src/components/instance/TrafficStats.vue')
@@ -677,7 +680,7 @@ assert.ok(
     !sideNavSource.includes("return route.path === '/dashboard'") &&
     !sideNavSource.includes('RouterLink to="/"') &&
     sideNavSource.includes('let baseItems = [...navMenuItems]') &&
-    sideNavUserItemsSource.includes("path: '/hosting-application'") &&
+    !sideNavUserItemsSource.includes("path: '/hosting-application'") &&
     !sideNavUserItemsSource.includes("path: '/resources/hosts'") &&
     !sideNavUserItemsSource.includes("path: '/resources/packages'") &&
     !sideNavUserItemsSource.includes("path: '/hosting-wallet'") &&
@@ -688,11 +691,10 @@ assert.ok(
   'shared SideNav menu tables must be build-time aliased so customer bundles do not keep admin navigation entries'
 )
 assert.ok(
-  sideNavSource.includes("item.icon === 'clipboard'") &&
-    instanceCreateViewSource.includes("'instance.createPage'") &&
+  instanceCreateViewSource.includes("'instance.createPage'") &&
     instanceCreateViewSource.includes('min-h-0 space-y-4 overflow-y-auto') &&
     !instanceCreateViewSource.includes("'instance.selector'"),
-  'hosting application navigation and instance creation layout must render the configured icon, translated headings, and a desktop scroll container'
+  'instance creation layout must render translated headings and a desktop scroll container'
 )
 assert.ok(
   publicPackagesRouteSource.includes('db.checkPackagesSoldOut([pkg.id])'),
@@ -851,9 +853,12 @@ assert.ok(
     containerTerminalSource.includes('@click="closeModal"'),
   'instance terminal must stay on the shared detail route, with a full-viewport mobile layout and a closable desktop dialog'
 )
+const instanceStatusPill = sectionBetween(instanceDetailViewSource, 'class="nimbus-status-pill ', '</span>')
 const instancePowerMenu = sectionBetween(instanceDetailViewSource, 'v-model="powerAction"', '</select>')
 assert.ok(
-  instancePowerMenu.includes('{{ powerStatus.label }}') &&
+  instanceStatusPill.includes('role="status"') &&
+    instanceStatusPill.includes('{{ powerStatus.label }}') &&
+    instancePowerMenu.includes('<option value="" disabled>{{ $t(\'instance.detail.actions.powerMenu\') }}</option>') &&
     ['start', 'stop', 'restart', 'forceStop', 'forceRestart'].every(action => instancePowerMenu.includes(`value="${action}"`)) &&
     instancePowerMenu.includes('value="stop" :disabled="!isRunning"') &&
     instancePowerMenu.includes('value="restart" :disabled="!isRunning"') &&
@@ -865,7 +870,7 @@ assert.ok(
     instanceDetailViewSource.includes('const force = action === \'forceStop\' || action === \'forceRestart\'') &&
     instanceDetailViewSource.includes('if (!force || confirm(') &&
     instanceDetailViewSource.includes('aria-controls="instance-secondary-actions"'),
-  'instance power menu must show status and all five actions without treating a forced stop as a graceful shutdown'
+  'instance detail must show status and offer all five power actions without treating a forced stop as a graceful shutdown'
 )
 for (const [entry, source] of [['user', instancesApiSource], ['admin', adminInstancesApiSource]]) {
   for (const action of ['stop', 'restart']) {
@@ -887,6 +892,23 @@ assert.ok(
     agentMonitoringPanelSource.includes('const { name, incusId } = selection') &&
     agentMonitoringPanelSource.includes('agentMonitoringApi.instanceHistory(hostId, query, name, current.signal, incusId)'),
   'monitoring must distinguish same-name rows by Incus ID and reload history for the selected identity'
+)
+assert.ok(
+  hostStatusViewSource.includes(':class="sampleDotClass[status]"') &&
+    hostStatusViewSource.includes('t(`hostStatus.${status}`)') &&
+    hostStatusViewSource.includes(':disabled="requestPending" @click="loadHosts()"') &&
+    hostStatusViewSource.includes('onDeactivated(deactivate)') &&
+    hostStatusViewSource.includes("if (!active || document.visibilityState !== 'visible') return"),
+  'public host status must pair sample labels with dots and poll only while the view is active and visible'
+)
+assert.ok(
+  monitoredHostDetailSource.includes(`v-if="activeTab === 'monitoringHistory' && isAdminHostDetail" :host-id="host.id" show-agent-status`) &&
+    agentMonitoringPanelSource.includes(':class="agentIndicator.dot"') &&
+    agentMonitoringPanelSource.includes(':disabled="loading || agentStatusLoading" @click="refresh"') &&
+    agentMonitoringPanelSource.includes('setTimeout(() => void loadAgentStatus(), agentStatusRefreshSeconds(') &&
+    hostInfoTabSource.includes('agentStatusIndicator(agentStatus.value)') &&
+    hostInfoTabSource.includes('api.hosts.getAgentStatus(props.host.id, current.signal)'),
+  'host detail and admin history must use consistent Agent indicators and refresh Agent status independently of historical filters'
 )
 assert.ok(
   myHostsViewSource.includes('class="grid gap-3 lg:hidden"') &&

@@ -1,6 +1,8 @@
 import { prisma } from '../db/index.js'
 import { getSystemConfigBoolean } from '../db/system-config.js'
 
+type LegacyApplicationStatus = 'pending' | 'approved' | 'rejected' | null
+
 export interface HostingAccessResult {
   allowed: boolean
   reason?: string
@@ -9,7 +11,7 @@ export interface HostingAccessResult {
     hasCreatedHostBefore: boolean
     featureEnabled: boolean
     hiddenBySystemSetting: boolean
-    applicationStatus?: 'pending' | 'approved' | 'rejected' | null
+    applicationStatus?: LegacyApplicationStatus
   }
 }
 
@@ -21,7 +23,7 @@ interface HostingFeatureState {
   role: 'admin' | 'user'
   hasCreatedHostBefore: boolean
   featureEnabled: boolean
-  applicationStatus: 'pending' | 'approved' | 'rejected' | null
+  applicationStatus: LegacyApplicationStatus
 }
 
 async function getHostingFeatureState(userId: number): Promise<HostingFeatureState | null> {
@@ -30,9 +32,7 @@ async function getHostingFeatureState(userId: number): Promise<HostingFeatureSta
     select: {
       role: true,
       hasCreatedHostBefore: true,
-      hostingAccessApplications: {
-        select: { status: true }
-      }
+      hostingAccessApplications: { select: { status: true } }
     }
   })
 
@@ -54,15 +54,13 @@ export async function getUserHostingFeatureStatus(userId: number): Promise<{
   canAccessHostingFeature: boolean
   hasCreatedHostBefore: boolean
   featureEnabled: boolean
-  applicationStatus: 'pending' | 'approved' | 'rejected' | null
 }> {
   const state = await getHostingFeatureState(userId)
   if (!state) {
     return {
       canAccessHostingFeature: false,
       hasCreatedHostBefore: false,
-      featureEnabled: false,
-      applicationStatus: null
+      featureEnabled: false
     }
   }
 
@@ -70,16 +68,14 @@ export async function getUserHostingFeatureStatus(userId: number): Promise<{
     return {
       canAccessHostingFeature: true,
       hasCreatedHostBefore: state.hasCreatedHostBefore,
-      featureEnabled: true,
-      applicationStatus: 'approved'
+      featureEnabled: true
     }
   }
 
   return {
     canAccessHostingFeature: state.applicationStatus === 'approved' && (state.featureEnabled || state.hasCreatedHostBefore),
     hasCreatedHostBefore: state.hasCreatedHostBefore,
-    featureEnabled: state.featureEnabled,
-    applicationStatus: state.applicationStatus
+    featureEnabled: state.featureEnabled
   }
 }
 
@@ -123,7 +119,7 @@ export async function checkHostingAccess(
   if (state.applicationStatus !== 'approved') {
     return {
       allowed: false,
-      reason: state.applicationStatus === 'pending' ? '托管上架申请正在审核中' : '请先提交并通过托管上架申请',
+      reason: '此帳號未取得託管上架資格',
       details
     }
   }

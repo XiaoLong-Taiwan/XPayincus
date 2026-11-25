@@ -309,6 +309,7 @@ export default {
     },
 
     hostStatus: {
+        stale: 'Sample expired',
         title: 'Host Status', description: 'Current resource usage for hosts across available plans.', country: 'Country', package: 'Package', category: 'Category', allCategories: 'All categories', allCountries: 'All countries', allPackages: 'All packages', hosts: 'Hosts', hostId: 'Host #{id}', sampledAt: 'Sampled at {time}', realtime: 'Live', heartbeat: 'Heartbeat', noSample: 'No sample', error: 'Update error', refreshFailed: 'Host status update failed. Showing the most recently fetched data.', cpu: 'CPU', ram: 'Memory', disk: 'Disk', swap: 'Swap', network: 'Network', receive: 'Receive', transmit: 'Transmit', noValue: 'Unavailable', loading: 'Loading host status...', empty: 'No hosts match these filters.', loadFailed: 'Failed to load host status. Please try again.', retry: 'Retry'
     },
 
@@ -985,11 +986,13 @@ export default {
     // Instance
     instance: {
         monitoring: {
-            historyTab: 'Monitoring history', historySamples: 'Samples by time',
+            historyTab: 'Monitoring history', historyReference: '7-day trends (for reference)',
+            historyFresh: 'Live data up to date', historyOffline: 'Monitoring offline · No fresh data',
             historyLoadFailed: 'Could not load monitoring history.',
             memory: 'Memory', diskIo: 'Disk I/O', diskRead: 'Disk read rate', diskWrite: 'Disk write rate', rx: 'Network receive rate', tx: 'Network transmit rate',
             title: 'Live monitoring', complete: 'Complete', dataStatus: 'Data status', connected: 'Live monitoring', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Agent offline', error: 'Monitoring connection failed',
-            loading: 'Loading seven-day history…', history: 'Seven-day history · {seconds}s resolution', average: 'Seven-day average', empty: 'No monitoring history yet', incomplete: 'Some historical samples are unavailable.', rxBytes: 'Seven-day received', txBytes: 'Seven-day transmitted', received: 'Received', transmitted: 'Transmitted', bytes: 'bytes', coverage: 'Coverage', resetCount: 'Reset count', partial: 'Partial', count: 'Samples', retentionDays: 'Retention days', resolutionSeconds: 'Resolution (seconds)', capacityTruncated: 'Capacity truncated', bucketsTruncated: 'Buckets truncated'
+            loading: 'Loading seven-day history…', average: 'Average', empty: 'No monitoring history yet', incomplete: 'Incomplete history',
+            rxBytes: 'Seven-day received', txBytes: 'Seven-day transmitted'
         },
         networkMode: { routed: 'Routed' },
         servicePanelExtensionTitle: 'Service panel extension',
@@ -1315,6 +1318,7 @@ export default {
             manage: 'Manage',
             push: 'PUSH',
             renew: 'Renew',
+            moreActions: 'More actions',
         },
         // Mobile card
         mobileCard: {
@@ -1628,6 +1632,7 @@ export default {
                 hide: 'Hide',
                 resourceUsage: 'Resource Usage',
                 cpu: 'CPU',
+                purchasedCpu: 'Purchased {percent}',
                 memory: 'Memory',
                 disk: 'Disk',
                 inbound: 'Inbound',
@@ -3804,6 +3809,7 @@ export default {
             tokenExpired: 'Token expired, please recreate the host',
             // Detail page
             tabInfo: 'Info',
+            tabMonitoringHistory: 'Monitoring History',
             tabConfig: 'Config',
             tabInstances: 'Instances',
             portMappings: 'Port mappings',
@@ -7254,62 +7260,11 @@ export default {
 
     // Hosting Access
     hosting: {
-        application: {
-            status: {
-                notSubmitted: 'Not submitted',
-                pending: 'Under review',
-                approved: 'Approved',
-                rejected: 'Rejected; you can resubmit',
-            },
-            loadFailed: 'Unable to load application status. Please try again.',
-            reasonRequired: 'Please enter an application reason.',
-            submitSuccess: 'Hosting application submitted.',
-            submitFailed: 'Failed to submit application.',
-            eyebrow: 'Hosting Services',
-            title: 'Hosting Application',
-            loading: 'Loading',
-            description: 'After you submit the application, an administrator will review your eligibility to host nodes. Once approved, you can manage nodes, packages, and earnings.',
-            reviewReason: 'Review feedback',
-            retry: 'Reload',
-            reasonLabel: 'Application reason',
-            reasonPlaceholder: 'Describe the node resources, network environment, or service plan you can provide.',
-            submitting: 'Submitting',
-            resubmit: 'Resubmit application',
-            submit: 'Submit application',
-            management: 'Hosting management',
-            manageHosts: 'Manage nodes',
-            managePackages: 'Manage packages',
-            hostingWallet: 'Hosting earnings',
-            pendingMessage: 'Your application has been recorded. You can check its status here.',
-        },
-        applications: {
-            loadFailed: 'Unable to load applications. Please try again.',
-            approved: 'Application approved.',
-            approveFailed: 'Failed to approve application.',
-            rejectPrompt: 'Enter a reason for rejection.',
-            rejected: 'Application rejected.',
-            rejectFailed: 'Failed to reject application.',
-            eyebrow: 'Hosting Management',
-            title: 'Hosting Applications',
-            status: {
-                pending: 'Pending review',
-                approved: 'Approved',
-                rejected: 'Rejected',
-            },
-            loading: 'Loading',
-            empty: 'No applications',
-            noEmail: 'No email provided',
-            reviewReason: 'Review feedback:',
-            approve: 'Approve',
-            reject: 'Reject',
-            userFallback: 'User #{id}',
-        },
         accessDenied: {
             title: 'Hosting Requirements Not Met',
             description: 'You need to meet the following condition to use hosting features:',
-            condition: 'Own at least 1 instance',
-            currentInstances: 'Currently own {count} instances',
-            hint: 'Includes both free and paid instances, from official or hosted nodes.',
+            condition: 'This account is not eligible to list hosted services',
+            hint: 'Hosting features are available to accounts with existing approval.',
             featureHiddenCondition: 'Hosting is currently unavailable to new users',
             featureHiddenCurrent: 'You have not created any host yet, so this entry is currently hidden by the system.',
             featureHiddenHint: 'Contact an administrator to reopen hosting access, or try again when the feature is enabled again.',

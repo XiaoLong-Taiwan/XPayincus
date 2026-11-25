@@ -37,11 +37,6 @@ const accessDeniedConditionText = computed(() =>
 const accessDeniedStatusText = computed(() =>
   accessDeniedDetails.value?.hiddenBySystemSetting
     ? t('hosting.accessDenied.featureHiddenCurrent')
-    : t('hosting.accessDenied.currentInstances', { count: accessDeniedDetails.value?.instanceCount || 0 })
-)
-const accessDeniedHintText = computed(() =>
-  accessDeniedDetails.value?.hiddenBySystemSetting
-    ? t('hosting.accessDenied.featureHiddenHint')
     : t('hosting.accessDenied.hint')
 )
 
@@ -693,7 +688,6 @@ onActivated(() => {
       <p class="text-sm text-themed-muted mb-4">{{ t('hosting.accessDenied.description') }}</p>
 
       <div class="space-y-3 mb-6">
-        <!-- 条件：至少拥有过1台实例 -->
         <div class="flex items-center gap-3 rounded-lg border border-themed bg-themed-secondary p-3">
           <div class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-themed-hover text-themed-muted">
             <span class="text-xs font-medium">!</span>
@@ -707,7 +701,7 @@ onActivated(() => {
         </div>
       </div>
 
-      <p class="text-xs text-themed-muted mb-4">{{ accessDeniedHintText }}</p>
+      <p v-if="accessDeniedDetails?.hiddenBySystemSetting" class="text-xs text-themed-muted mb-4">{{ t('hosting.accessDenied.featureHiddenHint') }}</p>
 
       <button
         class="btn-primary w-full"

@@ -47,6 +47,7 @@ interface TerminalTab {
     isWebGLEnabled: boolean
     consoleWarningShown: boolean
     connectAttempt: number
+    retryOnRestore?: boolean
 }
 
 const props = defineProps<{
@@ -54,6 +55,7 @@ const props = defineProps<{
     instanceId: number | null
     instanceName?: string
     forceDisconnect?: boolean
+    allowMinimize?: boolean
     allowManualCloudInitComplete?: boolean
 }>()
 
@@ -88,7 +90,11 @@ const searchText = ref('')
 const isFullscreen = ref(false)
 const viewportWidth = ref(window.innerWidth)
 const viewportHeight = ref<number>()
+const visualWidth = ref<number>()
 const viewportTop = ref(0)
+const viewportLeft = ref(0)
+const dialogRef = ref<HTMLElement | null>(null)
+let fitFrame: number | undefined
 const showTerminalActions = ref(false)
 
 // 设置弹窗状态
@@ -160,6 +166,7 @@ const isMobileDevice = computed(() => {
 const cloudInitStatus = ref<'idle' | 'checking' | 'not_ready' | 'ready' | 'skipped'>('idle')
 const cloudInitState = ref<CloudInitState | null>(null)
 const cloudInitManualCompleting = ref(false)
+let sessionGeneration = 0
 
 const cloudInitPromptTitle = computed(() => {
     return cloudInitState.value === 'unknown' || cloudInitState.value === 'agent_unavailable'
@@ -237,6 +244,7 @@ function createTab(): TerminalTab {
 // 添加新标签
 function addTab() {
     if (tabs.value.length >= MAX_TABS) return
+    if (isMobileDevice.value) activeTab.value?.terminal?.blur()
     const tab = createTab()
     tabs.value.push(tab)
     activeTabId.value = tab.id
@@ -279,16 +287,7 @@ function closeTab(tabId: string) {
     
     // 如果关闭的是当前标签，切换到其他标签
     if (activeTabId.value === tabId && tabs.value.length > 0) {
-        activeTabId.value = tabs.value[Math.min(index, tabs.value.length - 1)].id
-        // 确保新激活的标签正确显示
-        nextTick(() => {
-            const newTab = activeTab.value
-            if (newTab?.terminal && newTab.fitAddon) {
-                newTab.fitAddon.fit()
-                newTab.terminal.refresh(0, newTab.terminal.rows - 1)
-                newTab.terminal.focus()
-            }
-        })
+        switchTab(tabs.value[Math.min(index, tabs.value.length - 1)].id)
     }
     
     // 如果没有标签了，关闭模态框
@@ -300,16 +299,10 @@ function closeTab(tabId: string) {
 // 切换标签
 function switchTab(tabId: string) {
     if (activeTabId.value === tabId) return
+    if (isMobileDevice.value) activeTab.value?.terminal?.blur()
     activeTabId.value = tabId
-    
-    nextTick(() => {
-        const tab = activeTab.value
-        if (tab?.terminal && tab.fitAddon) {
-            tab.fitAddon.fit()
-            tab.terminal.refresh(0, tab.terminal.rows - 1)
-            tab.terminal.focus()
-        }
-    })
+    scheduleTerminalFit()
+    if (!isMobileDevice.value) nextTick(focusTerminal)
 }
 
 // 生成酷炫的 Incudal 欢迎信息
@@ -354,12 +347,14 @@ function maybePrintConsoleFallbackWarning(tab: TerminalTab) {
 }
 
 // 带重连提示的连接函数（用于用户主动重连或自动重连）
-function reconnectTab(tabId: string) {
+function reconnectTab(tabId: string, automatic = false) {
     const tab = tabs.value.find(t => t.id === tabId)
     if (!tab) return
     
     // 如果已经在连接中，不重复操作
     if (tab.status === 'connecting' || tab.status === 'reconnecting') return
+
+    if (!automatic) reconnectAttempts.value.delete(tabId)
     
     // 输出重连提示
     if (tab.terminal) {
@@ -367,6 +362,21 @@ function reconnectTab(tabId: string) {
     }
     
     void connectTab(tabId)
+}
+
+function reconnectEndedTabsOnRestore() {
+    if (!props.visible || !props.instanceId || props.forceDisconnect) return
+    if (cloudInitStatus.value !== 'ready' && cloudInitStatus.value !== 'skipped') return
+
+    for (const tab of tabs.value) {
+        if (!tab.retryOnRestore || tab.ws?.readyState !== WebSocket.CLOSED) continue
+        if (tab.status !== 'disconnected' && tab.status !== 'error') continue
+        if (reconnectTimers.value.has(tab.id)) continue
+        const attempts = reconnectAttempts.value.get(tab.id) ?? 0
+        if (attempts >= TERMINAL_MAX_RECONNECT_ATTEMPTS) continue
+        reconnectAttempts.value.set(tab.id, attempts + 1)
+        reconnectTab(tab.id, true)
+    }
 }
 
 // 初始化标签的终端
@@ -415,6 +425,7 @@ function initTabTerminal(tabId: string) {
     tab.serializeAddon = runtime.serializeAddon
     tab.clipboardAddon = runtime.clipboardAddon
     tab.isWebGLEnabled = runtime.isWebGLEnabled
+    scheduleTerminalFit()
     
     // 输出欢迎信息（首次创建时）
     printWelcomeBanner(runtime.terminal, props.instanceName || `Instance #${props.instanceId}`)
@@ -425,7 +436,10 @@ function initTabTerminal(tabId: string) {
 
 // 检查 Cloud-init 状态并连接
 async function checkCloudInitAndConnect(tabId: string) {
-    if (!props.instanceId) return
+    const instanceId = props.instanceId
+    if (!instanceId) return
+    const generation = sessionGeneration
+    const isCurrentSession = () => generation === sessionGeneration && props.instanceId === instanceId
     
     // 如果已经检查过且结果是 ready 或 skipped，直接连接
     if (cloudInitStatus.value === 'ready' || cloudInitStatus.value === 'skipped') {
@@ -437,7 +451,8 @@ async function checkCloudInitAndConnect(tabId: string) {
     cloudInitChecking.value = true
     
     try {
-        const result = await api.instances.checkCloudInitStatus(props.instanceId) as CloudInitStatusResponse
+        const result = await api.instances.checkCloudInitStatus(instanceId) as CloudInitStatusResponse
+        if (!isCurrentSession()) return
         cloudInitState.value = result.state
         if (result.ready) {
             cloudInitStatus.value = 'ready'
@@ -454,11 +469,12 @@ async function checkCloudInitAndConnect(tabId: string) {
             }
         }
     } catch (err) {
+        if (!isCurrentSession()) return
         console.error('[CloudInit] Check failed:', err)
         cloudInitState.value = 'unknown'
         cloudInitStatus.value = 'not_ready'
     } finally {
-        cloudInitChecking.value = false
+        if (isCurrentSession()) cloudInitChecking.value = false
     }
 }
 
@@ -476,20 +492,25 @@ function skipCloudInitAndConnect() {
 }
 
 async function manualCompleteCloudInitAndConnect() {
-    if (!props.instanceId || !activeTabId.value) return
+    const instanceId = props.instanceId
+    const tabId = activeTabId.value
+    if (!instanceId || !tabId) return
+    const generation = sessionGeneration
+    const isCurrentSession = () => generation === sessionGeneration && props.instanceId === instanceId
 
     cloudInitManualCompleting.value = true
     try {
-        const result = await api.instances.manualCompleteCloudInit(props.instanceId) as CloudInitStatusResponse
+        const result = await api.instances.manualCompleteCloudInit(instanceId) as CloudInitStatusResponse
+        if (!isCurrentSession()) return
         cloudInitState.value = result.state
         cloudInitStatus.value = 'ready'
         emit('cloud-init-manual-complete')
         toast.success(t('terminal.cloudInitManualCompleteSuccess'))
-        connectTab(activeTabId.value)
+        connectTab(tabId)
     } catch (err: any) {
-        toast.error(err?.message || t('common.operationFailed'))
+        if (isCurrentSession()) toast.error(err?.message || t('common.operationFailed'))
     } finally {
-        cloudInitManualCompleting.value = false
+        if (isCurrentSession()) cloudInitManualCompleting.value = false
     }
 }
 
@@ -497,6 +518,7 @@ async function manualCompleteCloudInitAndConnect() {
 async function connectTab(tabId: string) {
     const tab = tabs.value.find(t => t.id === tabId)
     if (!tab || !props.instanceId) return
+    tab.retryOnRestore = false
     
     const token = authStore.token
     if (!token) {
@@ -571,9 +593,11 @@ async function connectTab(tabId: string) {
                 } else {
                     currentTab.status = 'error'
                     currentTab.error = 'Connection lost'
-                    reconnectAttempts.value.delete(tabId)
                 }
             } else {
+                const retryableClose = shouldRetryTerminalClose(event.code)
+                const idleTimeout = currentTab.status === 'disconnected' && currentTab.error === 'Idle timeout'
+                currentTab.retryOnRestore = idleTimeout && (retryableClose || event.code === 1000)
                 currentTab.status = 'disconnected'
             }
         }
@@ -624,8 +648,7 @@ function handleControlMessage(tabId: string, message: { type: string; sessionId?
             }
             // 连接成功，重置重连计数
             reconnectAttempts.value.delete(tabId)
-            if (tab.terminal && tab.fitAddon) {
-                tab.fitAddon.fit()
+            if (tab.terminal) {
                 sendResize(tabId, tab.terminal.cols, tab.terminal.rows)
             }
             maybePrintConsoleFallbackWarning(tab)
@@ -663,28 +686,32 @@ function sendResize(tabId: string, cols: number, rows: number) {
     }
 }
 
-// 关闭模态框
-function minimizeModal() {
-    showSavedCommandsMobile.value = false
+function hideModal() {
+    blurDialogFocus()
     emit('update:visible', false)
     emit('update:connected', hasConnectedTab.value)
     emit('update:sessionActive', tabs.value.length > 0)
 }
 
+function dismissModal() {
+    if (props.allowMinimize) hideModal()
+    else closeModal()
+}
+
 function closeModal() {
+    blurDialogFocus()
+    cancelTerminalFit()
     disconnectAll()
     isFullscreen.value = false
-    showSearch.value = false
     searchText.value = ''
-    showSettings.value = false
-    showTerminalActions.value = false
-    closeContextMenu()
-    minimizeModal()
+    hideModal()
     emit('close')
 }
 
 // 断开所有连接
 function disconnectAll() {
+    cancelTerminalFit()
+    sessionGeneration += 1
     showSavedCommandsMobile.value = false
     // 清理所有重连定时器
     reconnectTimers.value.forEach(timer => clearTimeout(timer))
@@ -699,6 +726,7 @@ function disconnectAll() {
         disposeTerminalRuntime(tab)
     })
     tabs.value = []
+    activeTabId.value = ''
     containerRefs.value.clear()
     
     // 重置 Cloud-init 状态
@@ -713,21 +741,13 @@ function disconnectAll() {
 // 切换全屏
 function toggleFullscreen() {
     isFullscreen.value = !isFullscreen.value
-    setTimeout(() => {
-        const tab = activeTab.value
-        if (tab?.fitAddon) {
-            tab.fitAddon.fit()
-            requestAnimationFrame(() => tab.fitAddon?.fit())
-        }
-    }, 50)
+    scheduleTerminalFit()
 }
 
 // 处理窗口大小变化
 function handleResize() {
     viewportWidth.value = window.innerWidth
-    if (props.visible) {
-        handleViewportResize()
-    }
+    handleViewportResize()
 }
 
 // 设置字体大小
@@ -736,9 +756,9 @@ function updateFontSize(size: number) {
     tabs.value.forEach(tab => {
         if (tab.terminal) {
             tab.terminal.options.fontSize = size
-            tab.fitAddon?.fit()
         }
     })
+    scheduleTerminalFit()
 }
 
 // 切换终端主题
@@ -760,6 +780,7 @@ function clearTerminal() {
 
 // 聚焦当前终端
 function focusTerminal() {
+    if (!props.visible) return
     activeTab.value?.terminal?.focus()
 }
 
@@ -784,7 +805,11 @@ function handleSearchPrevious() {
 function closeSearch() {
     showSearch.value = false
     searchText.value = ''
-    focusTerminal()
+    if (isMobileDevice.value) {
+        dialogRef.value?.focus({ preventScroll: true })
+    } else {
+        focusTerminal()
+    }
 }
 
 // 右键菜单
@@ -866,14 +891,12 @@ function executeSavedCommand(command: string) {
 
 // 移动端快捷工具栏 - 收起键盘
 function handleHideKeyboard() {
-    // 尝试收起虚拟键盘
-    if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur()
-    }
-    // 重新聚焦终端（但不弹出键盘）
-    setTimeout(() => {
-        activeTab.value?.terminal?.focus()
-    }, 100)
+    blurDialogFocus()
+}
+
+function blurDialogFocus() {
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && dialogRef.value?.contains(focused)) focused.blur()
 }
 
 // 全选终端内容
@@ -1051,11 +1074,10 @@ function handleKeydown(e: KeyboardEvent) {
             showSavedCommandsMobile.value = false
         } else if (showSearch.value) {
             closeSearch()
-        } else if (isFullscreen.value) {
-            isFullscreen.value = false
-            setTimeout(() => activeTab.value?.fitAddon?.fit(), 50)
-        } else {
-            closeModal()
+        } else if (isFullscreen.value && !isMobileDevice.value) {
+            toggleFullscreen()
+        } else if (!props.allowMinimize || !isMobileDevice.value || e.target === dialogRef.value) {
+            dismissModal()
         }
     }
 }
@@ -1069,39 +1091,28 @@ function setContainerRef(tabId: string, el: HTMLElement | null) {
 
 // 监听 visible 变化
 watch(() => props.visible, async (visible) => {
-    if (visible && props.instanceId) {
-        updateViewport()
-        // 重置 Cloud-init 状态（每次打开模态框时重新检查）
-        cloudInitStatus.value = 'idle'
-        cloudInitState.value = null
-        cloudInitChecking.value = false
-        cloudInitManualCompleting.value = false
-        
-        await nextTick()
-        if (!props.visible) return
-        
-        // 如果没有标签，创建第一个
-        if (tabs.value.length === 0) {
-            addTab()
-        } else {
-            // 刷新所有标签并自动重连断开的连接
-            tabs.value.forEach(tab => {
-                if (tab.terminal && tab.fitAddon) {
-                    tab.fitAddon.fit()
-                    tab.terminal.refresh(0, tab.terminal.rows - 1)
-                }
-                
-                // 自动重连断开的连接
-                if (tab.status === 'disconnected' || tab.status === 'error') {
-                    reconnectTab(tab.id)
-                }
-            })
-            
-            // 聚焦当前标签
-            setTimeout(() => {
-                activeTab.value?.terminal?.focus()
-            }, 50)
-        }
+    if (!visible) {
+        blurDialogFocus()
+        cancelTerminalFit()
+        showSearch.value = false
+        showSettings.value = false
+        showSavedCommandsMobile.value = false
+        showTerminalActions.value = false
+        linkTooltip.visible = false
+        closeContextMenu()
+        return
+    }
+
+    handleViewportResize()
+    await nextTick()
+    if (!props.visible || !props.instanceId) return
+
+    dialogRef.value?.focus({ preventScroll: true })
+    if (tabs.value.length === 0) {
+        addTab()
+    } else {
+        if (props.allowMinimize) reconnectEndedTabsOnRestore()
+        if (!isMobileDevice.value) focusTerminal()
     }
 }, { immediate: true })
 
@@ -1112,7 +1123,7 @@ watch(() => props.visible && isMobileDevice.value, (active, _, onCleanup) => {
     onCleanup(() => { document.body.style.overflow = previousOverflow })
 }, { immediate: true })
 
-watch(showTerminalActions, handleViewportResize)
+watch(showTerminalActions, scheduleTerminalFit)
 
 // 监听连接状态变化
 watch(() => hasConnectedTab.value, (connected) => {
@@ -1122,10 +1133,16 @@ watch(() => hasConnectedTab.value, (connected) => {
 // 监听强制断开
 watch(() => props.forceDisconnect, (force) => {
     if (force) {
+        blurDialogFocus()
         disconnectAll()
+        emit('update:sessionActive', false)
         emit('update:forceDisconnect', false)
     }
 })
+
+function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') reconnectEndedTabsOnRestore()
+}
 
 onMounted(() => {
     window.addEventListener('resize', handleResize)
@@ -1153,13 +1170,20 @@ onUnmounted(() => {
 function updateViewport() {
     if (!props.visible || !isMobileDevice.value) return
     viewportHeight.value = window.visualViewport?.height
+    visualWidth.value = window.visualViewport?.width
     viewportTop.value = window.visualViewport?.offsetTop ?? 0
+    viewportLeft.value = window.visualViewport?.offsetLeft ?? 0
 }
 
 function handleViewportResize() {
-    if (!props.visible) return
     updateViewport()
-    nextTick(() => {
+    scheduleTerminalFit()
+}
+
+function scheduleTerminalFit() {
+    if (!props.visible || fitFrame !== undefined) return
+    fitFrame = window.requestAnimationFrame(() => {
+        fitFrame = undefined
         const tab = activeTab.value
         if (!props.visible || !tab?.fitAddon || !tab.terminal) return
         tab.fitAddon.fit()
@@ -1167,37 +1191,37 @@ function handleViewportResize() {
     })
 }
 
-// 页面可见性变化时自动重连
-function handleVisibilityChange() {
-    if (document.visibilityState === 'visible' && props.visible && props.instanceId) {
-        // 用户回来了，自动重连断开的连接
-        tabs.value.forEach(tab => {
-            if (tab.status === 'disconnected' || tab.status === 'error') {
-                console.log(`[Terminal Tab ${tab.id}] Page visible, auto reconnecting...`)
-                reconnectTab(tab.id)
-            }
-        })
-    }
+function cancelTerminalFit() {
+    if (fitFrame === undefined) return
+    window.cancelAnimationFrame(fitFrame)
+    fitFrame = undefined
 }
 </script>
 
 <template>
   <Teleport to="body">
     <div
+      ref="dialogRef"
       v-show="visible"
-      class="fixed inset-0 z-50 flex items-center justify-center"
-      :class="isMobileDevice || isFullscreen ? '' : 'p-4'"
-      :style="isMobileDevice ? { height: viewportHeight ? `${viewportHeight}px` : '100dvh', top: `${viewportTop}px` } : undefined"
+      class="fixed z-50 flex items-center justify-center outline-none"
+      :class="isMobileDevice ? 'top-0 left-0' : isFullscreen ? 'inset-0' : 'inset-0 p-4'"
+      :style="isMobileDevice ? {
+        height: viewportHeight ? `${viewportHeight}px` : '100dvh',
+        width: visualWidth ? `${visualWidth}px` : '100%',
+        top: `${viewportTop}px`,
+        left: `${viewportLeft}px`
+      } : undefined"
       role="dialog"
       aria-modal="true"
       :aria-label="t('terminal.title')"
+      tabindex="-1"
     >
       <!-- 背景遮罩 -->
       <div
         v-if="!isMobileDevice"
         class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
         :class="visible ? 'opacity-100' : 'opacity-0'"
-        @click="closeModal"
+        @click="dismissModal"
       />
 
       <!-- 终端容器 -->
@@ -1369,12 +1393,13 @@ function handleVisibilityChange() {
               {{ t('common.actions') }}
             </button>
             <button
-              v-else
+              v-if="allowMinimize"
               type="button"
               class="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
+              :class="isMobileDevice ? 'min-h-11 min-w-11 grid place-items-center' : ''"
               :title="t('terminal.minimize')"
               :aria-label="t('terminal.minimize')"
-              @click="minimizeModal"
+              @click="dismissModal"
             >
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path stroke-linecap="round" stroke-width="2" d="M5 12h14" />
@@ -1441,7 +1466,7 @@ function handleVisibilityChange() {
                   :placeholder="t('terminal.searchPlaceholder')"
                   @keydown.enter.exact="handleSearch"
                   @keydown.shift.enter.exact="handleSearchPrevious"
-                  @keydown.escape="closeSearch"
+                  @keydown.escape.stop="closeSearch"
                 >
                 <button class="p-1.5 text-neutral-400 hover:text-white rounded transition-colors" @click="handleSearchPrevious">
                   <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" /></svg>
