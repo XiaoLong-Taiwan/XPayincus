@@ -706,6 +706,8 @@ async function createPackageUnchecked(data: {
   return pkg.id
 }
 
+export class PackagePublishingForbiddenError extends Error {}
+
 /**
  * 更新套餐
  * @param hostIds 如果提供，将更新绑定的宿主机（必须至少一个）
@@ -755,7 +757,16 @@ export async function updatePackage(id: number, data: {
     requiredPackageId?: number | null
     // 实例操作权限
     allowInstanceDeletion?: boolean
-}, isAdmin?: boolean): Promise<void> {
+}, isAdmin?: boolean, currentGlobalShared = false): Promise<void> {
+  const willBeGlobalShared = data.globalShared ?? currentGlobalShared
+  const publishingGuard: Prisma.PackageWhereInput | undefined =
+    !isAdmin && (data.globalShared === true || (data.active === true && data.globalShared === undefined))
+    ? {
+        globalShared: willBeGlobalShared,
+        ...(willBeGlobalShared && data.active === true ? { active: true } : {})
+      }
+    : undefined
+
   if (data.requiredPackageId !== undefined) {
     await prisma.$transaction(async tx => {
       await acquirePackagePrerequisiteLock(tx)
@@ -778,10 +789,15 @@ export async function updatePackage(id: number, data: {
         throw new Error(`${prerequisiteValidation.code}: ${prerequisiteValidation.message}`)
       }
 
-      await updatePackageUnchecked(id, data, isAdmin, tx)
+      await updatePackageUnchecked(id, data, isAdmin, tx, publishingGuard)
     }, {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable
     })
+    return
+  }
+
+  if (publishingGuard) {
+    await prisma.$transaction(tx => updatePackageUnchecked(id, data, isAdmin, tx, publishingGuard))
     return
   }
 
@@ -826,7 +842,7 @@ async function updatePackageUnchecked(id: number, data: {
   globalMaxInstances?: number | null
   requiredPackageId?: number | null
   allowInstanceDeletion?: boolean
-}, isAdmin: boolean | undefined, client: Prisma.TransactionClient | typeof prisma): Promise<void> {
+}, isAdmin: boolean | undefined, client: Prisma.TransactionClient | typeof prisma, publishingGuard?: Prisma.PackageWhereInput): Promise<void> {
   const updateData: {
     name?: string
     description?: string | null
@@ -1007,10 +1023,14 @@ async function updatePackageUnchecked(id: number, data: {
   }
 
   if (Object.keys(updateData).length > 0) {
-    await client.package.update({
-      where: { id },
-      data: updateData
-    })
+    try {
+      await client.package.update({ where: { ...publishingGuard, id }, data: updateData })
+    } catch (error) {
+      if (publishingGuard && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new PackagePublishingForbiddenError()
+      }
+      throw error
+    }
   }
 }
 

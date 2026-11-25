@@ -26,7 +26,6 @@ export interface LoginResponse {
     avatarBadgeId?: string | null
     hasCreatedHostBefore?: boolean
     canAccessHostingFeature?: boolean
-    hostingApplicationStatus?: 'pending' | 'approved' | 'rejected' | null
   }
 }
 
@@ -50,7 +49,6 @@ export interface RegisterResponse {
     avatarBadgeId?: string | null
     hasCreatedHostBefore?: boolean
     canAccessHostingFeature?: boolean
-    hostingApplicationStatus?: 'pending' | 'approved' | 'rejected' | null
   }
 }
 

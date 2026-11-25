@@ -701,7 +701,7 @@ async function savePackage(): Promise<void> {
   }
 
   const globalMaxInstances = Number(form.value.globalMaxInstances)
-  if (form.value.globalShared && (!Number.isInteger(globalMaxInstances) || globalMaxInstances < 1 || globalMaxInstances > 5)) {
+  if (authStore.isAdmin && form.value.globalShared && (!Number.isInteger(globalMaxInstances) || globalMaxInstances < 1 || globalMaxInstances > 5)) {
     formError.value = t('packageForm.validation.globalMaxInstancesRange')
     return
   }
@@ -748,7 +748,7 @@ async function savePackage(): Promise<void> {
       instanceType: form.value.instanceType,
       privileged: form.value.privileged,
       nested: form.value.nested,
-      active: form.value.active,
+      active: authStore.isAdmin || !form.value.globalShared ? form.value.active : undefined,
       monthlyTrafficLimit: trafficLimitBytes,
       trafficResetPrice: trafficResetPriceYuan,
       // 实例配额
@@ -771,10 +771,11 @@ async function savePackage(): Promise<void> {
       bootAutostartPriority: form.value.bootAutostartPriority,
       bootAutostartDelay: form.value.bootAutostartDelay,
       bootHostShutdownTimeout: form.value.bootHostShutdownTimeout,
-      // Global sharing
-      globalShared: form.value.globalShared,
-      globalQuotaMultiplier: null,
-      globalMaxInstances: form.value.globalShared ? globalMaxInstances : null,
+      ...(authStore.isAdmin ? {
+        globalShared: form.value.globalShared,
+        globalQuotaMultiplier: null,
+        globalMaxInstances: form.value.globalShared ? globalMaxInstances : null
+      } : {}),
       requiredPackageId: form.value.requiredPackageId
     }
 
@@ -1196,7 +1197,7 @@ function goBack(): void {
               </div>
             </div>
           </div>
-          <div class="md:col-span-2 flex items-center gap-6">
+          <div v-if="authStore.isAdmin || !form.globalShared" class="md:col-span-2 flex items-center gap-6">
             <label class="flex items-center gap-2 cursor-pointer">
               <input v-model="form.active" type="checkbox" class="h-4 w-4 rounded border-themed text-primary-600 focus:ring-primary-500" />
               <span class="text-sm text-themed">{{ t('admin.packages.activeLabel') }}</span>
@@ -1500,7 +1501,7 @@ function goBack(): void {
       </section>
 
       <!-- Visibility Section -->
-      <section class="section-card card p-5 sm:p-6">
+      <section v-if="authStore.isAdmin" class="section-card card p-5 sm:p-6">
         <div class="mb-5 flex items-center gap-3">
           <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-themed-secondary">
             <svg class="h-5 w-5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">

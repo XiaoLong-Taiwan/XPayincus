@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, onActivated, onDeactivated, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
@@ -80,6 +80,11 @@ const tabs = ref<TerminalTab[]>([])
 const activeTabId = ref<string>('')
 const sourceInstanceId = ref<number | null>(null)
 const containerRefs = ref<Map<string, HTMLElement>>(new Map())
+const terminalAreaRef = ref<HTMLElement | null>(null)
+const terminalMaxHeight = ref<number>()
+let resizeFrame: number | undefined
+let viewActive = true
+let scrollContainer: HTMLElement | null = null
 
 // 实例选择器弹窗
 const showInstanceSelector = ref(false)
@@ -1055,10 +1060,49 @@ function getTouchDistance(touches: TouchList): number {
 
 // 窗口大小变化
 function handleResize() {
-    const tab = activeTab.value
-    if (tab?.fitAddon) {
+    if (!viewActive || resizeFrame !== undefined) return
+    resizeFrame = requestAnimationFrame(async () => {
+        resizeFrame = undefined
+        const viewport = isMobileDevice ? window.visualViewport : null
+        const area = terminalAreaRef.value
+        const wrapper = area?.parentElement
+        const resizedViewport = viewport && viewport.scale === 1 && viewport.height < window.innerHeight
+        if (resizedViewport && area && wrapper && activeTab.value) {
+            const { top, bottom } = area.getBoundingClientRect()
+            const spaceBelow = wrapper.getBoundingClientRect().bottom - bottom
+            terminalMaxHeight.value = Math.max(48, Math.floor(viewport.offsetTop + viewport.height - top - spaceBelow))
+        } else {
+            terminalMaxHeight.value = undefined
+        }
+
+        await nextTick()
+        const tab = activeTab.value
+        if (!viewActive || !tab?.container?.isConnected || !tab.container.offsetHeight || !tab.fitAddon || !tab.terminal) return
         tab.fitAddon.fit()
+        tab.terminal.refresh(0, tab.terminal.rows - 1)
+    })
+}
+
+function cancelResize() {
+    if (resizeFrame === undefined) return
+    cancelAnimationFrame(resizeFrame)
+    resizeFrame = undefined
+}
+
+function startResize() {
+    viewActive = true
+    if (isMobileDevice && !scrollContainer) {
+        scrollContainer = terminalAreaRef.value?.closest<HTMLElement>('main.kawaii-workspace') ?? null
+        scrollContainer?.addEventListener('scroll', handleResize, { passive: true })
     }
+    handleResize()
+}
+
+function stopResize() {
+    viewActive = false
+    scrollContainer?.removeEventListener('scroll', handleResize)
+    scrollContainer = null
+    cancelResize()
 }
 
 // 设置容器引用
@@ -1096,38 +1140,30 @@ onMounted(() => {
     window.addEventListener('resize', handleResize)
     window.addEventListener('keydown', handleKeydown)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    
-    // 移动端：监听 visualViewport 变化（软键盘弹出/收起）
-    if (isMobileDevice && window.visualViewport) {
-        window.visualViewport.addEventListener('resize', handleViewportResize)
+
+    if (isMobileDevice) {
+        window.visualViewport?.addEventListener('resize', handleResize)
+        window.visualViewport?.addEventListener('scroll', handleResize)
     }
+    startResize()
 })
 
+onActivated(startResize)
+onDeactivated(stopResize)
+
 onUnmounted(() => {
+    stopResize()
     window.removeEventListener('resize', handleResize)
     window.removeEventListener('keydown', handleKeydown)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
-    
-    // 移动端：移除 visualViewport 监听
-    if (isMobileDevice && window.visualViewport) {
-        window.visualViewport.removeEventListener('resize', handleViewportResize)
+
+    if (isMobileDevice) {
+        window.visualViewport?.removeEventListener('resize', handleResize)
+        window.visualViewport?.removeEventListener('scroll', handleResize)
     }
-    
+
     disconnectAll()
 })
-
-// 移动端 visualViewport 变化处理（软键盘弹出/收起）
-function handleViewportResize() {
-    // 延迟执行 fit，等待视口稳定
-    setTimeout(() => {
-        const tab = activeTab.value
-        if (tab?.fitAddon && tab.terminal) {
-            tab.fitAddon.fit()
-            // 刷新终端显示，确保光标正确渲染
-            tab.terminal.refresh(0, tab.terminal.rows - 1)
-        }
-    }, 100)
-}
 
 // 页面可见性变化时自动重连
 function handleVisibilityChange() {
@@ -1319,7 +1355,11 @@ function handleVisibilityChange() {
       </div>
 
       <!-- 终端区域 -->
-      <div class="terminal-area group/terminal-workspace relative flex overflow-hidden">
+      <div
+        ref="terminalAreaRef"
+        class="terminal-area group/terminal-workspace relative flex overflow-hidden"
+        :style="terminalMaxHeight === undefined ? undefined : { maxHeight: `${terminalMaxHeight}px`, minHeight: '0' }"
+      >
         <div class="relative min-w-0 flex-1 overflow-hidden">
           <!-- 空状态 -->
           <div

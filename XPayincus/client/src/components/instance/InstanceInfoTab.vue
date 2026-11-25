@@ -76,6 +76,13 @@ const mappedSshPort = computed(() => {
 const isRunning = computed(() => props.instance.status?.toLowerCase() === 'running')
 const hasLiveMonitoring = computed(() => isRunning.value && props.monitoringStatus === 'connected' && props.monitoringSample?.online === true)
 const monitoringMetrics = computed(() => hasLiveMonitoring.value ? props.monitoringSample?.metrics ?? {} : {})
+const monitoringDotClasses = {
+  connecting: 'bg-gray-400',
+  connected: 'bg-green-500',
+  reconnecting: 'bg-amber-500',
+  offline: 'bg-red-500',
+  error: 'bg-red-500'
+} as const
 const memoryUsageMb = computed(() => {
   const bytes = monitoringMetrics.value.memoryUsedBytes
   return typeof bytes === 'number' && Number.isFinite(bytes) ? bytes / 1024 / 1024 : null
@@ -406,10 +413,16 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
 
     <!-- Resource Usage -->
     <div class="card shadow-pop p-5 rounded-2xl border-2 border-themed">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-themed font-semibold text-sm">
-          {{ t('instance.detail.info.resourceUsage') }}
-        </h2>
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h2 class="text-themed font-semibold text-sm">
+            {{ t('instance.detail.info.resourceUsage') }}
+          </h2>
+          <span v-if="isRunning && monitoringStatus" class="inline-flex items-center gap-1.5 text-xs text-themed-muted" role="status">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="monitoringDotClasses[monitoringStatus]" aria-hidden="true"></span>
+            {{ t(`instance.monitoring.${monitoringStatus}`) }}
+          </span>
+        </div>
         <div class="flex items-center gap-2">
           <!-- 兑换按钮 -->
           <button
@@ -455,7 +468,12 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               </svg>
               {{ t('instance.detail.info.cpu') }}
             </span>
-            <span class="text-themed font-medium">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent, '%') }}<span v-if="typeof monitoringMetrics.cpuUsagePercent === 'number'"> ({{ Math.round(clampPercent(monitoringMetrics.cpuUsagePercent)) }}%)</span></span>
+            <span class="flex flex-wrap items-baseline justify-end gap-x-2 text-right tabular-nums">
+              <span class="text-themed font-medium">{{ formatMonitoringMetric(monitoringMetrics.cpuUsagePercent, '%') }}</span>
+              <span class="text-xs text-themed-muted">
+                {{ t('instance.detail.info.purchasedCpu', { percent: formatMonitoringMetric(instance.cpu, '%') }) }}
+              </span>
+            </span>
           </div>
           <div class="h-2 rounded-full overflow-hidden bg-themed/20">
             <div class="h-full rounded-full bg-green-500 transition-all duration-500" :style="{ width: clampPercent(monitoringMetrics.cpuUsagePercent) + '%' }"></div>
@@ -576,11 +594,6 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
               <div class="h-full rounded-full bg-sky-500 transition-all duration-500" :style="{ width: rateBarWidth(monitoringMetrics.txBytesPerSecond) + '%' }"></div>
             </div>
           </div>
-        </div>
-        <div class="border-t border-themed pt-3">
-          <p class="text-xs" :class="monitoringStatus === 'connected' ? 'text-green-600' : monitoringStatus === 'offline' || monitoringStatus === 'error' ? 'text-red-600' : 'text-amber-600'" role="status" aria-live="polite">
-            {{ t(`instance.monitoring.${monitoringStatus ?? 'connecting'}`) }}
-          </p>
         </div>
         <!-- Bandwidth Limits -->
         <div class="pt-2 border-t-2 border-themed">

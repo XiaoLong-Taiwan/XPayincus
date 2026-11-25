@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 const source = readFileSync(resolve(__dirname, '../src/routes/packages.ts'), 'utf8')
-const networkModesSource = readFileSync(resolve(__dirname, '../src/lib/network-modes.ts'), 'utf8')
+const networkModesSource = readFileSync(resolve(__dirname, '../src/lib/network-modes.ts'), 'utf8').replace(/\r\n/g, '\n')
 const packageFormSource = readFileSync(resolve(__dirname, '../../client/src/views/resources/PackageFormView.vue'), 'utf8')
 
 function includes(pattern: string, label: string): void {

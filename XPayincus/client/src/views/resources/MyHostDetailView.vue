@@ -37,8 +37,9 @@ const authStore = useAuthStore()
 
 // 是否是管理员
 const isAdmin = computed(() => authStore.user?.role === 'admin')
+const isAdminHostDetail = computed(() => route.name === 'admin-my-host-detail' && isAdmin.value)
 
-type TabType = 'info' | 'config' | 'images' | 'instances' | 'ports' | 'storage' | 'publicIpv4' | 'redeemCodes' | 'ops' | 'create'
+type TabType = 'info' | 'monitoringHistory' | 'config' | 'images' | 'instances' | 'ports' | 'storage' | 'publicIpv4' | 'redeemCodes' | 'ops' | 'create'
 const activeTab = ref<TabType>('info')
 
 interface Host {
@@ -170,10 +171,6 @@ async function loadHost() {
   try {
     const res = await api.hosts.get(hostId)
     host.value = (res as any).host || res
-    try {
-      await api.hosts.getAgentStatus(hostId)
-    } catch {
-    }
   } catch (err: any) {
     toast.error(t('admin.hosts.loadFailed') + ': ' + (err?.message || String(err)))
     router.replace(hostsPath())
@@ -358,6 +355,7 @@ function closeReinstallModal() {
 
 const tabs = [
   { key: 'info', labelKey: 'admin.hosts.tabInfo', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { key: 'monitoringHistory', labelKey: 'admin.hosts.tabMonitoringHistory', icon: 'M12 7v5l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z' },
   { key: 'config', labelKey: 'admin.hosts.tabConfig', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' },
   { key: 'images', labelKey: 'admin.hosts.tabImages', icon: 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z' },
   { key: 'storage', labelKey: 'admin.hosts.tabStorage', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
@@ -368,7 +366,7 @@ const tabs = [
   { key: 'ops', labelKey: 'admin.hosts.tabOps', icon: 'M5 13l4 4L19 7M12 6v6l4 2' },
   { key: 'create', labelKey: 'admin.hosts.tabCreate', icon: 'M12 4v16m8-8H4' }
 ]
-const visibleTabs = computed(() => tabs)
+const visibleTabs = computed(() => tabs.filter(tab => tab.key !== 'monitoringHistory' || isAdminHostDetail.value))
 </script>
 
 <template>
@@ -494,8 +492,9 @@ const visibleTabs = computed(() => tabs)
       <div>
         <template v-if="activeTab === 'info'">
           <HostInfoTab :host="host" @refresh="loadHost" />
-          <AgentMonitoringPanel :host-id="host.id" />
+          <AgentMonitoringPanel v-if="route.name === 'my-host-detail'" :host-id="host.id" />
         </template>
+        <AgentMonitoringPanel v-if="activeTab === 'monitoringHistory' && isAdminHostDetail" :host-id="host.id" show-agent-status />
         <MyHostConfigTab v-if="activeTab === 'config'" :host="host" @saved="onConfigSaved" />
         <HostImagesTab v-if="activeTab === 'images'" :host-id="host.id" :host-name="host.name" />
         <HostStorageTab v-if="activeTab === 'storage'" :host-id="host.id" />

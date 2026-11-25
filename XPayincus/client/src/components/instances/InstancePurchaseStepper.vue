@@ -60,7 +60,7 @@ function goToStep(step: Step): void {
 
     <slot />
 
-    <div v-if="!isCreating && !isComplete" class="purchase-stepper-footer mt-4 border-t border-themed pt-3 sm:pt-4">
+    <div v-if="!isCreating && !isComplete" class="purchase-stepper-footer border-t border-themed px-2 pb-3 pt-3 sm:px-4 sm:pt-4">
       <nav aria-label="購買步驟" class="grid grid-cols-4 gap-2 pb-3">
         <button
           v-for="step in props.steps"
@@ -76,7 +76,7 @@ function goToStep(step: Step): void {
           <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
         </button>
       </nav>
-      <div class="flex gap-2">
+      <div class="purchase-stepper-actions flex gap-2">
         <button v-if="props.activeStep > 1" type="button" class="btn btn-secondary" :disabled="isCreating" @click="emit('previous')">上一步</button>
         <span v-else />
         <button v-if="props.activeStep < props.steps.length" type="button" class="btn-primary" :disabled="!props.canContinue || isCreating" @click="emit('next')">下一步</button>
@@ -90,11 +90,7 @@ function goToStep(step: Step): void {
 
 <style scoped>
 .purchase-stepper-footer {
-  position: sticky;
-  bottom: 0;
-  z-index: 20;
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
-  background: var(--theme-surface, #fff);
+  background: var(--kawaii-surface);
 }
 
 .purchase-stepper-footer button.btn-primary {
@@ -102,7 +98,7 @@ function goToStep(step: Step): void {
 }
 
 @media (max-width: 639px) {
-  .purchase-stepper-footer > button {
+  .purchase-stepper-actions > button {
     min-height: 2.75rem;
     flex: 1;
     justify-content: center;

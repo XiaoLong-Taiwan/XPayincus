@@ -22,6 +22,10 @@ const KVM_UNSUPPORTED_NETWORK_MODES = new Set(['nat_ipv6_nat', 'ipv6_nat'])
 const MAX_PACKAGE_PLAN_NAME_LENGTH = 50
 const PUBLIC_PACKAGE_MAX_INSTANCES_MIN = 1
 const PUBLIC_PACKAGE_MAX_INSTANCES_MAX = 5
+const PACKAGE_PUBLISHING_FORBIDDEN = {
+  error: '仅管理员可以公开上架或重新启用公开套餐',
+  code: 'PACKAGE_PUBLISHING_FORBIDDEN'
+}
 const MAX_PACKAGE_PLAN_PRICE_CENTS = 99999999
 const MAX_TRAFFIC_RESET_PRICE_YUAN = 999999.99
 const POSITIVE_ROUTE_ID_PATTERN = /^[1-9]\d*$/
@@ -1724,6 +1728,10 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       globalShared, globalMaxInstances, hostStoragePools, hostTrafficMultipliers, requiredPackageId
     } = packageInput
 
+    if (request.user.role !== 'admin' && globalShared === true) {
+      return reply.code(403).send(PACKAGE_PUBLISHING_FORBIDDEN)
+    }
+
     // 验证必须至少绑定一个宿主机
     if (!hostIds || hostIds.length === 0) {
       return reply.code(400).send({ error: 'Package must bind at least one host', code: 'NO_HOSTS' })
@@ -1942,6 +1950,19 @@ export default async function packageRoutes(fastify: FastifyInstance) {
       globalShared, globalQuotaMultiplier, globalMaxInstances,
       requiredPackageId
     } = packageInput
+    const isAdmin = request.user.role === 'admin'
+    const currentGlobalShared = pkg.global_shared ?? false
+    const willBeGlobalShared = globalShared ?? currentGlobalShared
+    const isMakingPublic = globalShared === true && !currentGlobalShared
+    const isReactivatingPublic = willBeGlobalShared && packageInput.active === true && pkg.active !== 1
+    if (!isAdmin && (isMakingPublic || isReactivatingPublic)) {
+      return reply.code(403).send(PACKAGE_PUBLISHING_FORBIDDEN)
+    }
+    if (!isAdmin && !willBeGlobalShared && packageInput.active === true) {
+      const accessCheck = await checkHostingAccess(request.user.id)
+      if (!accessCheck.allowed) return reply.code(403).send({ error: accessCheck.reason, code: 'HOSTING_ACCESS_DENIED' })
+    }
+
     const updateData: Parameters<typeof db.updatePackage>[1] = {}
     if (packageInput.name !== undefined) updateData.name = packageInput.name
     if (packageInput.description !== undefined) updateData.description = packageInput.description
@@ -2023,11 +2044,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
     if (bootHostShutdownTimeout !== undefined) updateData.bootHostShutdownTimeout = bootHostShutdownTimeout
     
     // 验证全局共享配置的数值有效性（Fastify schema 已经验证，这里做额外检查以防万一）
-    const currentGlobalShared = (pkg as any).global_shared ?? false
-    if (request.user.role !== 'admin' && (globalShared === true || packageInput.active === true)) {
-      const accessCheck = await checkHostingAccess(request.user.id)
-      if (!accessCheck.allowed) return reply.code(403).send({ error: accessCheck.reason, code: 'HOSTING_ACCESS_DENIED' })
-    }
     if (globalShared !== undefined) {
       updateData.globalShared = globalShared
       // 如果 globalShared 被设置为 false，确保相关字段为 null
@@ -2039,7 +2055,6 @@ export default async function packageRoutes(fastify: FastifyInstance) {
     
     // 只有在 globalShared 不为 false 时才处理这两个字段
     // 如果 globalShared 未提供，但当前套餐是全局共享的，允许更新这两个字段
-    const willBeGlobalShared = globalShared !== undefined ? globalShared : currentGlobalShared
     if (willBeGlobalShared !== false) {
       updateData.globalQuotaMultiplier = null
       const nextMaxInstances = globalMaxInstances !== undefined
@@ -2074,7 +2089,7 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         hostIds,
         hostTrafficMultipliers
       })
-      await db.updatePackage(packageId, updateData, request.user.role === 'admin')  // 管理员可以绑定任何节点
+      await db.updatePackage(packageId, updateData, isAdmin, currentGlobalShared)  // 管理员可以绑定任何节点
       if (shouldSyncTrafficLimits) {
         const syncResult = await db.syncPackageTrafficLimitsToInstances(packageId)
         if (syncResult.instanceIds.length > 0) {
@@ -2087,6 +2102,9 @@ export default async function packageRoutes(fastify: FastifyInstance) {
         }
       }
     } catch (error) {
+      if (error instanceof db.PackagePublishingForbiddenError) {
+        return reply.code(403).send(PACKAGE_PUBLISHING_FORBIDDEN)
+      }
       const prerequisiteError = getPackagePrerequisiteError(error)
       if (prerequisiteError) {
         return reply.code(400).send({ error: prerequisiteError.message, code: prerequisiteError.code })

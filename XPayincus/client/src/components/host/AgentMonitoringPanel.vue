@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import api from '@/api'
 import { agentMonitoringApi, hostStatusMetrics, instanceMetrics, type ComponentEvents, type HostStatusMetric, type InstanceHistory, type InstanceMetric, type InstanceTop, type MonitoringCounterStats, type MonitoringHistory, type MonitoringQuery, type MonitoringStats } from '@/api/agent-monitoring'
+import type { HostAgentStatus } from '@/types/api'
 import { agentMonitoringCopy, type MonitoringCopyKey } from './agent-monitoring-copy'
+import { agentStatusIndicator, agentStatusRefreshSeconds } from './agent-status'
 
-const props = defineProps<{ hostId: number }>()
-const { locale } = useI18n()
+const props = defineProps<{ hostId: number; showAgentStatus?: boolean }>()
+const { t, locale } = useI18n()
 const copy = computed(() => agentMonitoringCopy[locale.value as keyof typeof agentMonitoringCopy] ?? agentMonitoringCopy.en)
 const windowSeconds = ref(86400)
 const resolutionSeconds = ref(3600)
@@ -18,6 +21,9 @@ const ranking = ref<InstanceTop | null>(null)
 const events = ref<ComponentEvents | null>(null)
 const loading = ref(false)
 const failed = ref(false)
+const agentSnapshot = ref<{ agent: HostAgentStatus | null; checkedAt: string } | null>(null)
+const agentStatusLoading = ref(false)
+const agentStatusFailed = ref(false)
 type InstanceIdentity = Pick<InstanceTop['items'][number], 'name' | 'incusId'>
 const selectedInstance = ref<InstanceIdentity | null>(null)
 const selectedInstanceKey = computed(() => selectedInstance.value ? instanceIdentityKey(selectedInstance.value) : null)
@@ -27,12 +33,15 @@ const instanceHistory = ref<InstanceHistory | null>(null)
 const activeQuery = ref<MonitoringQuery | null>(null)
 let controller: AbortController | null = null
 let instanceController: AbortController | null = null
+let agentStatusController: AbortController | null = null
+let agentStatusTimer: ReturnType<typeof setTimeout> | undefined
 const statsKeys = ['min', 'max', 'avg', 'count', 'coverage'] as const
 const counterKeys = ['first', 'last', 'delta', 'resetCount', 'count', 'coverage'] as const
 const hostMetricKeys = hostStatusMetrics
 const selectedSummary = computed(() => history.value?.summary[hostMetric.value])
 const selectedCounter = computed(() => history.value?.summaryCounters[hostMetric.value])
 const instanceSummary = computed(() => instanceHistory.value?.summary[metric.value])
+const agentIndicator = computed(() => agentStatusIndicator(agentSnapshot.value?.agent ?? null))
 
 function label(key: string): string {
   if (key.startsWith('psi.')) return `${copy.value.psi} · ${key.split('.').slice(1).map(label).join(' · ')}`
@@ -58,6 +67,48 @@ function time(value: string): string {
 
 function instanceIdentityKey({ name, incusId }: InstanceIdentity): string {
   return incusId ? `uuid:${incusId}` : `name:${name}`
+}
+
+async function loadAgentStatus() {
+  if (!props.showAgentStatus || document.visibilityState !== 'visible' || agentStatusLoading.value) return
+
+  clearTimeout(agentStatusTimer)
+  const current = new AbortController()
+  agentStatusController = current
+  agentStatusLoading.value = true
+  try {
+    const { agent } = await api.hosts.getAgentStatus(props.hostId, current.signal)
+    if (current.signal.aborted) return
+    agentSnapshot.value = { agent, checkedAt: new Date().toISOString() }
+    agentStatusFailed.value = false
+  } catch {
+    if (!current.signal.aborted) agentStatusFailed.value = true
+  } finally {
+    if (!current.signal.aborted) {
+      agentStatusLoading.value = false
+      agentStatusController = null
+      if (document.visibilityState === 'visible') {
+        agentStatusTimer = setTimeout(() => void loadAgentStatus(), agentStatusRefreshSeconds(agentSnapshot.value?.agent ?? null) * 1000)
+      }
+    }
+  }
+}
+
+function stopAgentStatusRefresh() {
+  clearTimeout(agentStatusTimer)
+  agentStatusController?.abort()
+  agentStatusController = null
+  agentStatusLoading.value = false
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') void loadAgentStatus()
+  else stopAgentStatusRefresh()
+}
+
+function refresh() {
+  void loadAgentStatus()
+  void load()
 }
 
 async function load() {
@@ -158,16 +209,45 @@ const eventRows = computed(() => {
 })
 
 watch(() => props.hostId, () => { selectedInstance.value = null; void load() }, { immediate: true })
+watch([() => props.hostId, () => props.showAgentStatus], () => {
+  stopAgentStatusRefresh()
+  agentSnapshot.value = null
+  agentStatusFailed.value = false
+  void loadAgentStatus()
+})
 watch([windowSeconds, resolutionSeconds, metric, orderBy, top], () => { void load() })
 watch(selectedInstanceKey, () => { void loadInstanceHistory() })
-onBeforeUnmount(() => { controller?.abort(); instanceController?.abort() })
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  void loadAgentStatus()
+})
+onBeforeUnmount(() => {
+  controller?.abort()
+  instanceController?.abort()
+  stopAgentStatusRefresh()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 </script>
 
 <template>
   <section class="card mt-4 space-y-5 p-5 text-themed" :aria-label="copy.title" :aria-busy="loading">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h2 class="text-sm font-semibold">{{ copy.title }}</h2>
-      <button type="button" class="btn btn-secondary text-xs" :disabled="loading" @click="load">{{ copy.refresh }}</button>
+      <button type="button" class="btn btn-secondary text-xs" :disabled="loading || agentStatusLoading" @click="refresh">{{ copy.refresh }}</button>
+    </div>
+    <div v-if="showAgentStatus" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-themed-muted" role="status">
+      <span v-if="agentStatusFailed" class="inline-flex items-center gap-1.5 text-rose-700 dark:text-rose-300">
+        <span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-rose-500" />{{ copy.statusUnavailable }}
+      </span>
+      <template v-else-if="agentSnapshot">
+        <span class="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full" :class="agentIndicator.dot" />
+          Agent · {{ t(agentIndicator.key) }}
+        </span>
+        <span>{{ copy.statusCheckedAt }} · {{ time(agentSnapshot.checkedAt) }}</span>
+        <span v-if="agentSnapshot.agent?.lastSeenAt">{{ t('admin.hosts.agentLastSeen') }} · {{ time(agentSnapshot.agent.lastSeenAt) }}</span>
+      </template>
+      <span v-else>{{ copy.statusLoading }}</span>
     </div>
     <div class="grid gap-3 sm:grid-cols-2">
       <label class="space-y-1 text-xs">{{ copy.window }}

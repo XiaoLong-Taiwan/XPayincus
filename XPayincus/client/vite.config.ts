@@ -305,7 +305,6 @@ function stripUserOnlyLocaleMessages(source: string): string {
     'oauth',
     'broadcast',
     'paymentProviders',
-    'billing',
     'withdrawals',
     'telegramSettings',
     'adminCreateInstance'

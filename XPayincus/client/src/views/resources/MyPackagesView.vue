@@ -283,9 +283,17 @@ function getPackageTrafficMultiplierTitle(pkg: Package & { host_ids?: number[] }
     .join(', ')
 }
 
-function isPackagePublic(pkg: Package): boolean {
+function isPackageGloballyShared(pkg: Package): boolean {
   const globalShared = (pkg as { global_shared?: unknown }).global_shared
-  return isPackageActive(pkg) && (globalShared === true || globalShared === 1 || pkg.isGlobalShared === true)
+  return globalShared === true || globalShared === 1 || pkg.isGlobalShared === true
+}
+
+function isPackagePublic(pkg: Package): boolean {
+  return isPackageActive(pkg) && isPackageGloballyShared(pkg)
+}
+
+function canTogglePackageActive(pkg: Package): boolean {
+  return isAdmin.value || isPackageActive(pkg) || !isPackageGloballyShared(pkg)
 }
 
 function isPackageActive(pkg: Package): boolean {
@@ -335,6 +343,7 @@ async function deletePackage(pkg: Package): Promise<void> {
 }
 
 async function togglePackageActive(pkg: Package): Promise<void> {
+  if (!canTogglePackageActive(pkg)) return
   const nextActive = !isPackageActive(pkg)
   const confirmKey = nextActive ? 'admin.packages.confirmActivate' : 'admin.packages.confirmDeactivate'
   if (!confirm(t(confirmKey, { name: pkg.name }))) return
@@ -905,6 +914,7 @@ function getBillingCycleLabel(months: number): string {
                 :class="isPackageActive(pkg)
                   ? (themeStore.isDark ? 'text-amber-300 hover:bg-amber-500/10' : 'text-amber-700 hover:bg-amber-50')
                   : (themeStore.isDark ? 'text-emerald-300 hover:bg-emerald-500/10' : 'text-emerald-700 hover:bg-emerald-50')"
+                v-if="canTogglePackageActive(pkg)"
                 :disabled="activeChangingId === pkg.id"
                 :title="isPackageActive(pkg) ? t('admin.packages.deactivate') : t('admin.packages.activate')"
                 @click="togglePackageActive(pkg)"
@@ -1052,6 +1062,7 @@ function getBillingCycleLabel(months: number): string {
                       :class="isPackageActive(pkg)
                         ? (themeStore.isDark ? 'text-amber-300 hover:bg-amber-500/10' : 'text-amber-700 hover:bg-amber-50')
                         : (themeStore.isDark ? 'text-emerald-300 hover:bg-emerald-500/10' : 'text-emerald-700 hover:bg-emerald-50')"
+                      v-if="canTogglePackageActive(pkg)"
                       :disabled="activeChangingId === pkg.id"
                       :title="isPackageActive(pkg) ? t('admin.packages.deactivate') : t('admin.packages.activate')"
                       @click="togglePackageActive(pkg)"
