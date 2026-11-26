@@ -1842,11 +1842,45 @@ function copyToClipboard(text: string) {
           </div>
         </div>
 
-        <div class="hidden overflow-hidden lg:block">
+        <div class="billing-instance-table hidden overflow-hidden lg:block">
           <table class="w-full table-fixed text-sm">
+            <colgroup v-if="showDateColumns">
+              <col style="width: 3%" />
+              <col style="width: 5%" />
+              <col style="width: 5%" />
+              <col style="width: 5%" />
+              <col style="width: 7%" />
+              <col style="width: 6%" />
+              <col style="width: 9%" />
+              <col style="width: 6%" />
+              <col style="width: 5%" />
+              <col style="width: 6%" />
+              <col style="width: 5%" />
+              <col style="width: 5%" />
+              <col style="width: 7%" />
+              <col style="width: 7%" />
+              <col style="width: 6%" />
+              <col style="width: 13%" />
+            </colgroup>
+            <colgroup v-else>
+              <col style="width: 3%" />
+              <col style="width: 6%" />
+              <col style="width: 6%" />
+              <col style="width: 6%" />
+              <col style="width: 8%" />
+              <col style="width: 7%" />
+              <col style="width: 10%" />
+              <col style="width: 7%" />
+              <col style="width: 6%" />
+              <col style="width: 7%" />
+              <col style="width: 6%" />
+              <col style="width: 6%" />
+              <col style="width: 7%" />
+              <col style="width: 15%" />
+            </colgroup>
             <thead class="bg-themed-secondary/80">
               <tr>
-                <th class="w-11 p-3 whitespace-nowrap">
+                <th class="py-2 text-center">
                   <input
                     type="checkbox"
                     class="checkbox"
@@ -1857,26 +1891,26 @@ function copyToClipboard(text: string) {
                     @change="toggleSelectAllCurrentPage"
                   />
                 </th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.hostingType') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.instanceType') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">ID</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.instanceName') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.instanceStatus') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.user') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.package') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.plan') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.host') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.price') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.cycle') }}</th>
-                <th v-if="showDateColumns" class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.purchaseDate') }}</th>
-                <th v-if="showDateColumns" class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.expiresAt') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.remainingDays') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('common.actions') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.hostingType') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.instanceType') }}</th>
+                <th class="p-2 text-left">ID</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.instanceName') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.instanceStatus') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.user') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.package') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.plan') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.host') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.price') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.cycle') }}</th>
+                <th v-if="showDateColumns" class="p-2 text-left">{{ $t('admin.billing.purchaseDate') }}</th>
+                <th v-if="showDateColumns" class="p-2 text-left">{{ $t('admin.billing.expiresAt') }}</th>
+                <th class="p-2 text-left">{{ $t('admin.billing.remainingDays') }}</th>
+                <th class="p-2 text-left">{{ $t('common.actions') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="inst in instances" :key="inst.id" class="border-t border-themed hover:bg-themed-secondary/50 transition-colors">
-                <td class="p-3 whitespace-nowrap">
+                <td class="py-2 text-center align-top">
                   <input
                     v-model="selectedInstanceIds"
                     type="checkbox"
@@ -1887,7 +1921,7 @@ function copyToClipboard(text: string) {
                   />
                 </td>
                 <!-- 托管类型 -->
-                <td class="p-3 whitespace-nowrap">
+                <td class="p-2 align-top">
                   <span 
                     class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
                     :class="inst.isHostedInstance 
@@ -1898,7 +1932,7 @@ function copyToClipboard(text: string) {
                   </span>
                 </td>
                 <!-- 实例类型图标 -->
-                <td class="p-3 whitespace-nowrap">
+                <td class="p-2 align-top">
                   <span 
                     class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium cursor-pointer"
                     :class="inst.instanceTypeLabel === 'PRIME' ? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'"
@@ -1914,7 +1948,7 @@ function copyToClipboard(text: string) {
                   </span>
                 </td>
                 <!-- ID -->
-                <td class="p-3 whitespace-nowrap">
+                <td class="p-2 align-top">
                   <div class="flex flex-col gap-0.5">
                     <span 
                       class="text-themed hover:text-themed-secondary cursor-pointer font-mono text-xs"
@@ -1924,7 +1958,7 @@ function copyToClipboard(text: string) {
                   </div>
                 </td>
                 <!-- 实例名 -->
-                <td class="p-3">
+                <td class="p-2 align-top">
                   <span 
                     class="block truncate text-themed font-medium hover:text-themed cursor-pointer"
                     :title="inst.name"
@@ -1932,17 +1966,17 @@ function copyToClipboard(text: string) {
                   >{{ inst.name }}</span>
                 </td>
                 <!-- 状态 -->
-                <td class="p-3 whitespace-nowrap">
-                  <span :class="['badge', getStatusBadge(inst.status)]">{{ $t('instance.status.' + inst.status) }}</span>
-                  <span v-if="inst.autoRenew" class="badge badge-info ml-1">{{ $t('admin.billing.autoRenew') }}</span>
+                <td class="p-2 align-top">
+                  <span :class="['badge max-w-full !whitespace-normal !px-1', getStatusBadge(inst.status)]">{{ $t('instance.status.' + inst.status) }}</span>
+                  <span v-if="inst.autoRenew" class="badge badge-info mt-1 max-w-full !whitespace-normal !px-1">{{ $t('admin.billing.autoRenew') }}</span>
                 </td>
                 <!-- 用户 -->
-                <td class="p-3 whitespace-nowrap">
-                  <div class="flex items-center gap-2">
-                    <UserAvatar :username="inst.user?.username || ''" :avatar-style="inst.user?.avatarStyle || 'bottts'" :badge-id="inst.user?.avatarBadgeId || null" :size="28" />
-                    <div class="flex flex-col">
+                <td class="p-2 align-top">
+                  <div class="flex flex-wrap items-center gap-1">
+                    <UserAvatar :username="inst.user?.username || ''" :avatar-style="inst.user?.avatarStyle || 'bottts'" :badge-id="inst.user?.avatarBadgeId || null" :size="28" class="shrink-0" />
+                    <div class="flex min-w-0 flex-auto flex-col">
                       <span class="truncate text-themed font-medium">{{ inst.user?.username || '-' }}</span>
-                      <div class="flex items-center gap-1 text-xs text-themed-muted">
+                      <div class="flex flex-wrap items-center gap-1 text-xs text-themed-muted">
                         <span>#{{ inst.user?.id }}</span>
                         <span v-if="inst.user?.email" class="truncate max-w-32" :title="inst.user.email">{{ inst.user.email }}</span>
                       </div>
@@ -1950,13 +1984,13 @@ function copyToClipboard(text: string) {
                   </div>
                 </td>
                 <!-- 套餐名 -->
-                <td class="p-3 truncate" :title="inst.package?.name">{{ inst.package?.name || '-' }}</td>
+                <td class="p-2 align-top truncate" :title="inst.package?.name">{{ inst.package?.name || '-' }}</td>
                 <!-- 方案名 -->
-                <td class="p-3 truncate" :title="inst.packagePlan?.name">{{ inst.packagePlan?.name || '-' }}</td>
+                <td class="p-2 align-top truncate" :title="inst.packagePlan?.name">{{ inst.packagePlan?.name || '-' }}</td>
                 <!-- 宿主机名 -->
-                <td class="p-3 truncate" :title="inst.host?.name">{{ inst.host?.name || '-' }}</td>
+                <td class="p-2 align-top truncate" :title="inst.host?.name">{{ inst.host?.name || '-' }}</td>
                 <!-- 价格（可点击修改） -->
-                <td class="p-3 whitespace-nowrap">
+                <td class="p-2 align-top">
                   <button
                     v-if="inst.billingPrice"
                     class="text-themed hover:text-themed-secondary hover:underline cursor-pointer font-medium"
@@ -1967,13 +2001,13 @@ function copyToClipboard(text: string) {
                   <span v-else>-</span>
                 </td>
                 <!-- 周期 -->
-                <td class="p-3 whitespace-nowrap">{{ inst.billingCycle ? $t('admin.billing.cycleMonths', { months: inst.billingCycle }) : '-' }}</td>
+                <td class="p-2 align-top">{{ inst.billingCycle ? $t('admin.billing.cycleMonths', { months: inst.billingCycle }) : '-' }}</td>
                 <!-- 购买日期 -->
-                <td v-if="showDateColumns" class="p-3 whitespace-nowrap text-themed-muted">{{ formatDate(inst.createdAt) }}</td>
+                <td v-if="showDateColumns" class="p-2 align-top text-themed-muted">{{ formatDate(inst.createdAt) }}</td>
                 <!-- 到期时间 -->
-                <td v-if="showDateColumns" class="p-3 whitespace-nowrap text-themed-muted">{{ formatDate(inst.expiresAt) }}</td>
+                <td v-if="showDateColumns" class="p-2 align-top text-themed-muted">{{ formatDate(inst.expiresAt) }}</td>
                 <!-- 剩余天数 -->
-                <td class="p-3 whitespace-nowrap">
+                <td class="p-2 align-top">
                   <span 
                     v-if="inst.remainingDays !== null"
                     :class="[
@@ -1987,33 +2021,33 @@ function copyToClipboard(text: string) {
                   <span v-else>-</span>
                 </td>
                 <!-- 操作 -->
-                <td class="p-3 whitespace-nowrap">
-                  <div class="flex flex-wrap items-center gap-1">
+                <td class="p-2 align-top">
+                  <div class="flex flex-wrap items-center gap-1 break-words">
                     <button
                       v-if="inst.status === 'suspended'"
-                      class="btn btn-xs btn-ghost"
+                      class="btn btn-xs btn-ghost max-w-full !whitespace-normal"
                       @click="openActionModal('unsuspend', inst)"
                     >
                       {{ $t('admin.billing.unsuspend') }}
                     </button>
-                    <button class="btn btn-xs btn-ghost" @click="openActionModal('extend', inst)">
+                    <button class="btn btn-xs btn-ghost max-w-full !whitespace-normal" @click="openActionModal('extend', inst)">
                       {{ $t('admin.billing.extend') }}
                     </button>
                     <button 
                       v-if="inst.remainingDays > 0" 
-                      class="btn btn-xs btn-ghost text-themed"
+                      class="btn btn-xs btn-ghost max-w-full !whitespace-normal text-themed"
                       @click="openUpgradeModal(inst)"
                     >
                       {{ $t('admin.billing.upgradePlan') }}
                     </button>
                     <button
                       v-if="!inst.hasAffBinding"
-                      class="btn btn-xs btn-ghost"
+                      class="btn btn-xs btn-ghost max-w-full !whitespace-normal"
                       @click="openActionModal('applyDiscount', inst)"
                     >
                       {{ $t('admin.billing.applyDiscount') }}
                     </button>
-                    <button class="btn btn-xs btn-ghost text-rose-500" @click="openActionModal('deleteRefund', inst)">
+                    <button class="btn btn-xs btn-ghost max-w-full !whitespace-normal text-rose-500" @click="openActionModal('deleteRefund', inst)">
                       {{ $t('admin.billing.deleteRefund') }}
                     </button>
                   </div>
@@ -2198,7 +2232,7 @@ function copyToClipboard(text: string) {
             <div class="mt-1 text-xs text-themed-muted">{{ $t('admin.billing.totalCount', { count: rechargeRecordsTotal }) }}</div>
           </div>
           <div class="flex items-center gap-3">
-            <select v-model="rechargeRecordsFilter" class="input w-44" @change="rechargeRecordsPage = 1; loadRechargeRecords()">
+            <select v-model="rechargeRecordsFilter" class="input recharge-records-select w-full min-w-0 sm:w-44" @change="rechargeRecordsPage = 1; loadRechargeRecords()">
               <option value="">{{ $t('admin.billing.allStatus') }}</option>
               <option value="pending">{{ $t('admin.billing.rechargeStatus.pending') }}</option>
               <option value="completed">{{ $t('admin.billing.rechargeStatus.completed') }}</option>
@@ -2217,18 +2251,18 @@ function copyToClipboard(text: string) {
             <div class="text-sm font-medium text-themed">{{ $t('admin.billing.tabs.rechargeRecords') }}</div>
             <div class="mt-1 text-xs text-themed-muted">{{ $t('admin.billing.totalCount', { count: rechargeRecordsTotal }) }}</div>
           </div>
-          <div class="hidden rounded-xl bg-themed-secondary px-3 py-2 text-xs text-themed-muted md:block">
+          <div class="hidden rounded-xl bg-themed-secondary px-3 py-2 text-xs text-themed-muted xl:block">
             {{ rechargeRecordsFilter ? $t(`admin.billing.rechargeStatus.${rechargeRecordsFilter}`) : $t('admin.billing.allStatus') }}
           </div>
         </div>
-        <div class="divide-y divide-themed md:hidden">
+        <div class="divide-y divide-themed xl:hidden">
           <div v-for="rec in rechargeRecords" :key="rec.id" class="space-y-3 px-5 py-4">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
-                <div class="truncate font-mono text-xs text-themed">
+                <div class="font-mono text-xs text-themed [overflow-wrap:anywhere]">
                   <span class="cursor-pointer hover:text-themed" @click="copyToClipboard(rec.orderNo)">{{ rec.orderNo }}</span>
                 </div>
-                <div class="mt-1 text-sm text-themed">{{ rec.user?.username || '-' }}</div>
+                <div class="mt-1 text-sm text-themed [overflow-wrap:anywhere]">{{ rec.user?.username || '-' }}</div>
                 <div class="mt-1 text-xs text-themed-muted">{{ formatDate(rec.createdAt) }}</div>
               </div>
               <span :class="['badge', getRechargeStatusBadge(rec.status)]">{{ $t(`admin.billing.rechargeStatus.${rec.status}`) }}</span>
@@ -2248,17 +2282,17 @@ function copyToClipboard(text: string) {
               </div>
             </div>
 
-            <div class="space-y-1 text-xs text-themed-muted">
+            <div class="space-y-1 text-xs text-themed-muted [overflow-wrap:anywhere]">
               <div>{{ $t('admin.billing.payChannel') }}: {{ getPayChannelDisplay(rec) }}</div>
               <div>{{ $t('admin.billing.paymentDetails') }}: {{ getRechargePaymentDetailsDisplay(rec) }}</div>
               <div v-if="getRechargeGatewayStatusText(rec)">{{ getRechargeGatewayStatusText(rec) }}</div>
-              <div v-if="rec.paymentUuid" class="truncate font-mono" :title="rec.paymentUuid">
+              <div v-if="rec.paymentUuid" class="font-mono" :title="rec.paymentUuid">
                 {{ $t('admin.billing.paymentUuid') }} {{ rec.paymentUuid }}
               </div>
-              <div v-if="rec.paymentTxid" class="truncate font-mono" :title="rec.paymentTxid">
+              <div v-if="rec.paymentTxid" class="font-mono" :title="rec.paymentTxid">
                 {{ $t('admin.billing.paymentTxid') }} {{ rec.paymentTxid }}
               </div>
-              <div v-if="rec.tradeNo" class="truncate font-mono" :title="rec.tradeNo">
+              <div v-if="rec.tradeNo" class="font-mono" :title="rec.tradeNo">
                 {{ $t('admin.billing.tradeNo') }} {{ rec.tradeNo }}
               </div>
             </div>
@@ -2276,70 +2310,68 @@ function copyToClipboard(text: string) {
           </div>
         </div>
 
-        <div class="hidden overflow-hidden md:block">
+        <div class="hidden overflow-hidden xl:block">
           <table class="w-full table-fixed text-sm">
             <thead class="bg-themed-secondary/80">
               <tr>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.rechargeOrderNo') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.user') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.amount') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.creditAmount') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.payChannel') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.paymentDetails') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.rechargeStatusLabel') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.tradeNo') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('admin.billing.time') }}</th>
-                <th class="text-left p-3 whitespace-nowrap">{{ $t('common.actions') }}</th>
+                <th class="w-[12%] p-2 text-left">{{ $t('admin.billing.rechargeOrderNo') }}</th>
+                <th class="w-[9%] p-2 text-left">{{ $t('admin.billing.user') }}</th>
+                <th class="w-[10%] p-2 text-left">{{ $t('admin.billing.amount') }}</th>
+                <th class="w-[10%] p-2 text-left">{{ $t('admin.billing.creditAmount') }}</th>
+                <th class="w-[9%] p-2 text-left">{{ $t('admin.billing.payChannel') }}</th>
+                <th class="w-[15%] p-2 text-left">{{ $t('admin.billing.paymentDetails') }}</th>
+                <th class="w-[10%] p-2 text-left">{{ $t('admin.billing.rechargeStatusLabel') }}</th>
+                <th class="w-[7%] p-2 text-left">{{ $t('admin.billing.tradeNo') }}</th>
+                <th class="w-[9%] p-2 text-left">{{ $t('admin.billing.time') }}</th>
+                <th class="w-[9%] p-2 text-left">{{ $t('common.actions') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="rec in rechargeRecords" :key="rec.id" class="border-t border-themed hover:bg-themed-secondary/40 transition-colors">
-                <td class="p-3 font-mono text-xs whitespace-nowrap">
+                <td class="p-2 font-mono text-xs [overflow-wrap:anywhere]">
                   <span class="cursor-pointer hover:text-themed" @click="copyToClipboard(rec.orderNo)">{{ rec.orderNo }}</span>
                 </td>
-                <td class="p-3 whitespace-nowrap">{{ rec.user?.username || '-' }}</td>
-                <td class="p-3 whitespace-nowrap">{{ formatMoney(rec.amount) }}</td>
-                <td class="p-3 whitespace-nowrap">
-                  <div>{{ rec.actualAmount !== null ? formatMoney(rec.actualAmount) : '-' }}</div>
+                <td class="p-2 [overflow-wrap:anywhere]">{{ rec.user?.username || '-' }}</td>
+                <td class="p-2 text-xs">{{ formatMoney(rec.amount) }}</td>
+                <td class="p-2">
+                  <div class="text-xs">{{ rec.actualAmount !== null ? formatMoney(rec.actualAmount) : '-' }}</div>
                   <div v-if="rec.actualAmount !== null" class="mt-1 text-xs text-themed-muted">
                     {{ $t(getRechargeCreditLabelKey(rec.status)) }}
                   </div>
                 </td>
-                <td class="p-3 whitespace-nowrap">{{ getPayChannelDisplay(rec) }}</td>
-                <td class="p-3 text-xs text-themed-muted max-w-[220px]">
+                <td class="p-2 [overflow-wrap:anywhere]">{{ getPayChannelDisplay(rec) }}</td>
+                <td class="p-2 text-xs text-themed-muted [overflow-wrap:anywhere]">
                   <div>{{ getRechargePaymentDetailsDisplay(rec) }}</div>
                   <div v-if="getRechargeGatewayStatusText(rec)" class="mt-1">{{ getRechargeGatewayStatusText(rec) }}</div>
-                  <div v-if="rec.paymentUuid" class="mt-1 truncate font-mono" :title="rec.paymentUuid">
+                  <div v-if="rec.paymentUuid" class="mt-1 font-mono" :title="rec.paymentUuid">
                     {{ $t('admin.billing.paymentUuid') }} {{ rec.paymentUuid }}
                   </div>
-                  <div v-if="rec.paymentTxid" class="mt-1 truncate font-mono" :title="rec.paymentTxid">
+                  <div v-if="rec.paymentTxid" class="mt-1 font-mono" :title="rec.paymentTxid">
                     {{ $t('admin.billing.paymentTxid') }} {{ rec.paymentTxid }}
                   </div>
                 </td>
-                <td class="p-3 whitespace-nowrap">
-                  <span :class="['badge', getRechargeStatusBadge(rec.status)]">{{ $t(`admin.billing.rechargeStatus.${rec.status}`) }}</span>
+                <td class="p-2">
+                  <span :class="['badge max-w-full !whitespace-normal text-center', getRechargeStatusBadge(rec.status)]">{{ $t(`admin.billing.rechargeStatus.${rec.status}`) }}</span>
                 </td>
-                <td class="p-3 font-mono text-xs whitespace-nowrap text-themed-muted max-w-[150px] truncate" :title="rec.tradeNo || ''">
-                  <span 
-                    v-if="rec.tradeNo" 
+                <td class="p-2 font-mono text-xs text-themed-muted [overflow-wrap:anywhere]" :title="rec.tradeNo || ''">
+                  <span
+                    v-if="rec.tradeNo"
                     class="cursor-pointer hover:text-themed"
                     @click="copyToClipboard(rec.tradeNo)"
                   >{{ rec.tradeNo }}</span>
                   <span v-else>-</span>
                 </td>
-                <td class="p-3 text-themed-muted whitespace-nowrap">{{ formatDate(rec.createdAt) }}</td>
-                <td class="p-3 whitespace-nowrap">
-                  <div class="flex items-center gap-2">
+                <td class="p-2 text-themed-muted">{{ formatDate(rec.createdAt) }}</td>
+                <td class="p-2">
                   <button
                     v-if="rec.status === 'pending'"
-                    class="btn btn-sm btn-ghost text-themed"
+                    class="btn btn-sm btn-ghost max-w-full !whitespace-normal !px-1 text-themed"
                     :disabled="syncingRecordId === rec.id"
                     @click="syncRechargeRecord(rec)"
                   >
                     {{ syncingRecordId === rec.id ? $t('common.syncing') : $t('admin.billing.sync') }}
                   </button>
-                  <span v-if="rec.status !== 'pending'" class="text-themed-muted">-</span>
-                  </div>
+                  <span v-else class="text-themed-muted">-</span>
                 </td>
               </tr>
             </tbody>
@@ -2362,7 +2394,7 @@ function copyToClipboard(text: string) {
           <span>{{ $t('admin.billing.perPage') }}</span>
           <select
             :value="rechargeRecordsPageSize"
-            class="input w-20 py-1"
+            class="input recharge-records-select w-20 shrink-0 py-1"
             @change="rechargeRecordsPageSize = Number(($event.target as HTMLSelectElement).value); rechargeRecordsPage = 1; loadRechargeRecords()"
           >
             <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
@@ -3118,6 +3150,20 @@ function copyToClipboard(text: string) {
 </template>
 
 <style scoped>
+/* The shell's background shorthand resets the shared select chevron. */
+select.input.recharge-records-select {
+  appearance: auto;
+  padding-inline-end: 0.75rem;
+}
+
+.dark .recharge-records-select {
+  color-scheme: dark;
+}
+
+.billing-instance-table :is(th, td:not(.truncate)) {
+  overflow-wrap: anywhere;
+}
+
 /* Nimbus console: mono, uppercased column headers on the locked billing data tables */
 thead th {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;

@@ -460,7 +460,7 @@ onActivated(() => {
           :key="host.id"
           role="button"
           tabindex="0"
-          class="nimbus-card w-full rounded-xl border border-themed bg-themed-surface p-4 text-left transition-all hover:bg-themed-hover"
+          class="nimbus-card w-full min-w-0 rounded-xl border border-themed bg-themed-surface p-4 text-left transition-all hover:bg-themed-hover"
           @click="goToDetail(host)"
           @keydown.enter.prevent="goToDetail(host)"
           @keydown.space.prevent="goToDetail(host)"
@@ -512,7 +512,7 @@ onActivated(() => {
             </div>
           </div>
 
-          <div v-if="scope === 'mine' || (isAdmin && scope === 'hosted')" class="mt-4 flex items-center justify-end gap-2 border-t border-themed pt-3" @click.stop>
+          <div v-if="scope === 'mine' || (isAdmin && scope === 'hosted')" class="mt-4 flex items-center justify-end gap-2 border-t border-themed pt-3" @click.stop @keydown.enter.stop @keydown.space.stop>
             <template v-if="scope === 'mine'">
               <button type="button" class="btn-ghost btn-sm" @click.stop="testHost(host)">{{ t('admin.hosts.test') }}</button>
               <button type="button" class="btn-ghost btn-sm text-error" @click.stop="deleteHost(host)">{{ t('admin.hosts.delete') }}</button>

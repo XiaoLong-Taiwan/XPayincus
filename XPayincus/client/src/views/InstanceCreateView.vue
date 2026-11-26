@@ -1191,6 +1191,7 @@ async function loadAvailableImages(instanceType?: 'container' | 'vm', memory?: n
 }
 
 async function handleSubmit(): Promise<void> {
+  if (activeStep.value !== 4) return
   if (!canSubmit.value) return
   if (isPaidPackage.value && (!purchaseReviewed.value || purchaseBalance.value === null || purchaseShortfall.value > 0)) return
   if (selectedPackage.value?.soldOut || selectedPlan.value?.isSoldOut) return
@@ -1275,31 +1276,32 @@ async function handleSubmit(): Promise<void> {
 
 <template>
   <div class="kawaii-page animate-fade-in flex h-full min-w-0 flex-col">
-    <header class="mb-3 flex shrink-0 flex-col gap-3 border-b border-themed pb-3 sm:mb-4 sm:flex-row sm:items-end sm:justify-between sm:gap-4 sm:pb-4 lg:mb-3">
+    <header class="mb-2 flex shrink-0 items-center justify-between gap-2 border-b border-themed pb-2 sm:mb-4 sm:items-end sm:gap-4 sm:pb-4 lg:mb-3">
       <div class="min-w-0">
-        <h1 class="text-xl font-semibold tracking-tight text-themed sm:text-2xl">{{ $t('instance.createPage.title') }}</h1>
-        <p class="mt-1.5 text-sm text-themed-muted">{{ $t('instance.createPage.description') }}</p>
+        <h1 class="text-xl font-semibold text-themed sm:text-2xl sm:tracking-tight">{{ $t('instance.createPage.title') }}</h1>
+        <p class="mt-1.5 hidden text-sm text-themed-muted sm:block">{{ $t('instance.createPage.description') }}</p>
       </div>
-      <RouterLink :to="instancesPath()" class="btn btn-secondary w-full shrink-0 justify-center gap-1.5 sm:w-auto">
+      <RouterLink :to="instancesPath()" class="btn btn-secondary purchase-back shrink-0 justify-center gap-1.5">
         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         {{ $t('common.back') }}
       </RouterLink>
     </header>
 
-    <div v-if="!loading" class="mb-4 flex shrink-0 flex-wrap items-center gap-2 border-b border-themed pb-4 lg:mb-3">
+    <div v-if="!loading" class="mb-4 hidden shrink-0 flex-wrap items-center gap-2 border-b border-themed pb-4 sm:flex lg:mb-3">
       <span class="text-xs font-semibold uppercase tracking-[0.16em] text-themed-muted">{{ t('instance.createPage.flowLabel') }}</span>
       <span class="text-sm text-themed-muted">{{ t('instance.createPage.flowHint') }}</span>
     </div>
-    <div v-if="!loading" class="mb-4 flex shrink-0 justify-center lg:mb-3">
+    <div v-if="!loading" class="mb-2 flex shrink-0 justify-start sm:mb-4 sm:justify-center lg:mb-3">
       <div
-        class="nimbus-segmented inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-themed bg-themed-surface p-1 scrollbar-hide"
+        class="nimbus-segmented inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-themed bg-themed-surface p-0.5 scrollbar-hide sm:p-1"
       >
         <button
           v-for="source in sourceTabs"
           :key="source.key"
           type="button"
           :disabled="sourceLoading"
-          class="nimbus-seg-pill relative shrink-0 rounded-md px-4 py-2 text-sm font-medium transition-all duration-200"
+          class="nimbus-seg-pill relative inline-flex shrink-0 items-center rounded-md px-3 py-1 text-sm font-medium transition-all duration-200 max-sm:min-h-11 max-sm:min-w-11 sm:px-4 sm:py-2"
+          :aria-pressed="packageSource === source.key"
           :class="[
             packageSource === source.key ? 'active' : '',
             sourceLoading ? 'cursor-not-allowed opacity-50' : ''
@@ -1352,14 +1354,14 @@ async function handleSubmit(): Promise<void> {
 
     <form v-else ref="rightPanelScrollRef" class="min-h-0 space-y-4 overflow-y-auto flex-1 overscroll-y-contain" @submit.prevent="handleSubmit">
       <div class="mx-auto w-full max-w-5xl space-y-5 pb-5">
-        <div class="nimbus-pane space-y-5 p-4 sm:p-6">
-          <section v-if="activeStep === 1" class="create-step-heading">
+        <div class="nimbus-pane p-4 sm:space-y-5 sm:p-6" :class="activeStep === 1 ? 'purchase-catalog' : 'space-y-5'">
+          <section v-if="activeStep === 1" class="create-step-heading purchase-source-heading">
             <span class="create-step-number">1</span>
             <div><h2>{{ getCreatePageText('sourceTitle') }}</h2><p>{{ getCreatePageText('sourceHint') }}</p></div>
           </section>
           <div
             v-if="activeStep === 1 && selectedHostingZone"
-            class="flex items-center gap-3 rounded-xl border border-themed bg-themed-tertiary px-5 py-3"
+            class="flex items-center gap-2 rounded-xl border border-themed bg-themed-tertiary px-3 py-2 sm:gap-3 sm:px-5 sm:py-3"
           >
             <svg class="h-5 w-5 shrink-0 text-primary-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
             <p class="text-sm font-medium leading-6 text-themed-secondary">
@@ -1368,6 +1370,7 @@ async function handleSubmit(): Promise<void> {
           </div>
           <RegionSelector
             v-if="activeStep === 1 && regions.length > 0"
+            class="purchase-regions"
             :regions="regions"
             :selected-region="selectedRegion"
             :loading="regionsLoading"
@@ -1881,6 +1884,60 @@ async function handleSubmit(): Promise<void> {
 @keyframes nimbus-rise {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 639px) {
+  .purchase-back {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+  }
+
+  .purchase-catalog {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0;
+  }
+
+  .purchase-catalog > .purchase-source-heading,
+  .purchase-catalog > .nimbus-pane:empty {
+    display: none;
+  }
+
+  .purchase-catalog :deep(> .card) {
+    min-width: 0;
+    padding: 0.5rem;
+  }
+
+  .purchase-catalog :deep(> .card > .mb-4) {
+    margin-bottom: 0.375rem;
+  }
+
+  .purchase-regions :deep(.grid-cols-2) {
+    gap: 0.25rem;
+  }
+
+  .purchase-regions :deep(.grid-cols-2 > button) {
+    min-height: 2.75rem;
+  }
+}
+
+@media (max-width: 359px) {
+  .purchase-regions :deep(.grid-cols-2) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .purchase-regions :deep(.grid-cols-2 > button) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0 0.25rem;
+    padding: 0.125rem 0.25rem;
+    text-align: left;
+  }
+
+  .purchase-regions :deep(.grid-cols-2 > button > span:last-child) {
+    grid-column: 2;
+    padding-block: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

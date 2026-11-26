@@ -60,13 +60,13 @@ function goToStep(step: Step): void {
 
     <slot />
 
-    <div v-if="!isCreating && !isComplete" class="purchase-stepper-footer border-t border-themed px-2 pb-3 pt-3 sm:px-4 sm:pt-4">
-      <nav aria-label="購買步驟" class="grid grid-cols-4 gap-2 pb-3">
+    <div v-if="!isCreating && !isComplete" class="purchase-stepper-footer border-t border-themed px-2 py-1 sm:px-4 sm:pb-3 sm:pt-4" :class="{ 'purchase-stepper-start': props.activeStep === 1 && props.steps.length === 4 }">
+      <nav aria-label="購買步驟" class="grid grid-cols-4 gap-1 pb-1 sm:gap-2 sm:pb-3">
         <button
           v-for="step in props.steps"
           :key="step.id"
           type="button"
-          class="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 border-b-2 px-1 py-2 text-center text-xs transition-colors sm:flex-row sm:justify-start sm:px-2 sm:text-left sm:text-sm"
+          class="flex min-h-11 min-w-11 items-center justify-center gap-1 border-b-2 px-1 py-1 text-center text-xs transition-colors sm:justify-start sm:px-2 sm:py-2 sm:text-left sm:text-sm"
           :class="step.id === props.activeStep ? 'border-themed font-semibold text-themed' : step.id < props.activeStep ? 'border-themed text-themed-secondary' : 'border-transparent text-themed-muted'"
           :disabled="isCreating || step.id > props.activeStep"
           :aria-current="step.id === props.activeStep ? 'step' : undefined"
@@ -76,9 +76,8 @@ function goToStep(step: Step): void {
           <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-themed font-mono text-[10px]">{{ step.id < props.activeStep ? '✓' : step.id }}</span>{{ step.label }}
         </button>
       </nav>
-      <div class="purchase-stepper-actions flex gap-2">
+      <div class="purchase-stepper-actions flex justify-between gap-2">
         <button v-if="props.activeStep > 1" type="button" class="btn btn-secondary" :disabled="isCreating" @click="emit('previous')">上一步</button>
-        <span v-else />
         <button v-if="props.activeStep < props.steps.length" type="button" class="btn-primary" :disabled="!props.canContinue || isCreating" @click="emit('next')">下一步</button>
         <button v-else type="button" class="btn-primary" data-action="submit" :disabled="!props.canSubmit || isCreating" @click="emit('submit')">
           {{ props.submitting ? '建立中…' : '確認付款並建立' }}
@@ -100,8 +99,31 @@ function goToStep(step: Step): void {
 @media (max-width: 639px) {
   .purchase-stepper-actions > button {
     min-height: 2.75rem;
-    flex: 1;
+    min-width: 2.75rem;
     justify-content: center;
+  }
+}
+
+@media (min-width: 320px) and (max-width: 359px) {
+  .purchase-stepper-start {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .purchase-stepper-start > nav {
+    flex: 1;
+    gap: 0;
+    padding-bottom: 0;
+  }
+
+  .purchase-stepper-start > nav > button {
+    gap: 0.125rem;
+    padding-inline: 0;
+  }
+
+  .purchase-stepper-start > nav > button > span {
+    width: 1rem;
+    height: 1rem;
   }
 }
 </style>

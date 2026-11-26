@@ -126,7 +126,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <AppLayout v-if="showLayout">
+  <AppLayout v-if="showLayout" class="admin-shell">
     <RouteErrorBoundary>
       <RouterView v-slot="{ Component, route: currentRoute }">
         <template v-if="Component">
@@ -151,3 +151,12 @@ onUnmounted(() => {
   </RouterView>
   <ToastContainer />
 </template>
+
+<style scoped>
+@media (width < 768px) {
+  /* The workspace scrolls vertically; horizontal scrollers belong to individual widgets. */
+  .admin-shell :deep(.kawaii-workspace) {
+    overflow-x: hidden;
+  }
+}
+</style>

@@ -8,6 +8,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { onClickOutside } from '@vueuse/core'
+import { Check, ChevronDown, Pencil, Power, RefreshCw, RotateCcw, Send, Trash2 } from 'lucide-vue-next'
 import api from '@/api'
 const adminApi = () => import('@/api/admin')
 import { useAuthStore } from '@/stores/auth'
@@ -328,9 +329,11 @@ function closeInstanceActions(restoreFocus = false): void {
 }
 
 function handleInstanceActionsFocusOut(event: FocusEvent): void {
-  if (event.relatedTarget instanceof Node && !instanceActionsGroup.value?.contains(event.relatedTarget)) {
-    closeInstanceActions()
-  }
+  const nextTarget = event.relatedTarget
+  if (!(nextTarget instanceof Node) || instanceActionsGroup.value?.contains(nextTarget)) return
+  // 讓外部點擊先送達，避免手機面板收合時移走正在點擊的控制項。
+  if (!isAdminEntry && nextTarget instanceof Element && nextTarget.matches(':active')) return
+  closeInstanceActions()
 }
 
 const terminalConnected = ref<boolean>(false)
@@ -2389,7 +2392,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
     <template v-else-if="instance">
       <!-- Header -->
       <div class="page-header flex-col lg:flex-row gap-4 lg:gap-0">
-        <div class="flex items-center gap-3 sm:gap-4 min-w-0">
+        <div class="flex items-center gap-3 sm:gap-4 min-w-0 max-w-full">
           <RouterLink
             :to="getReturnPath()"
             class="nimbus-back flex h-11 w-11 sm:h-12 sm:w-12 flex-shrink-0 items-center justify-center rounded-xl border border-themed bg-themed-surface text-themed-muted shadow-sm transition-all duration-200 hover:text-themed hover:bg-themed-hover"
@@ -2447,11 +2450,14 @@ function formatShortDate(dateStr: string | null | undefined): string {
                 {{ powerStatus.label }}
               </span>
             </div>
-            <p class="page-description mt-0.5 font-mono tabular-nums">{{ formatImageName(instance.image, (instance as any).imageName) }} · <span class="uppercase">{{ (instance as any).host?.name || (instance as any).host || '-' }}</span></p>
+            <p class="page-description mt-0.5 font-mono tabular-nums [overflow-wrap:anywhere]">{{ formatImageName(instance.image, (instance as any).imageName) }} · <span class="uppercase">{{ (instance as any).host?.name || (instance as any).host || '-' }}</span></p>
           </div>
         </div>
 
-        <div class="instance-detail-actions relative flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto lg:justify-end">
+        <div
+          class="instance-detail-actions relative flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto lg:justify-end"
+          :class="{ 'instance-user-actions': !isAdminEntry }"
+        >
           <!-- Active Task Indicator -->
           <div
             v-if="activeTask"
@@ -2528,6 +2534,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
               </svg>
+              <Check v-else-if="!isAdminEntry" class="h-4 w-4 sm:hidden" aria-hidden="true" />
               <span class="sm:hidden">{{ $t('instance.detail.cloudInit.manualShort') }}</span>
               <span class="hidden sm:inline">{{ $t('instance.detail.cloudInit.manualComplete') }}</span>
             </button>
@@ -2546,20 +2553,24 @@ function formatShortDate(dateStr: string | null | undefined): string {
             </svg>
             <span>{{ $t('terminal.title') }}</span>
           </button>
-          <select
-            v-model="powerAction"
-            class="btn-secondary btn-sm sm:btn"
-            :aria-label="$t('instance.detail.actions.powerMenu')"
-            :disabled="isOperationDisabled || (!isRunning && !isStopped)"
-            @change="handlePowerAction"
-          >
-            <option value="" disabled>{{ $t('instance.detail.actions.powerMenu') }}</option>
-            <option value="start" :disabled="!isStopped">{{ $t('instance.actions.start') }}</option>
-            <option v-if="canUsePowerOperations" value="stop" :disabled="!isRunning">{{ $t('instance.actions.stop') }}</option>
-            <option v-if="canUsePowerOperations" value="restart" :disabled="!isRunning">{{ $t('instance.actions.restart') }}</option>
-            <option v-if="canUsePowerOperations" value="forceStop" :disabled="!isRunning">{{ $t('instance.detail.actions.forceStop') }}</option>
-            <option v-if="canUsePowerOperations" value="forceRestart" :disabled="!isRunning">{{ $t('instance.detail.actions.forceRestart') }}</option>
-          </select>
+          <div class="instance-power-control contents">
+            <Power v-if="!isAdminEntry" class="instance-power-icon hidden" aria-hidden="true" />
+            <select
+              v-model="powerAction"
+              class="btn-secondary btn-sm sm:btn"
+              :aria-label="$t('instance.detail.actions.powerMenu')"
+              :disabled="isOperationDisabled || (!isRunning && !isStopped)"
+              @change="handlePowerAction"
+            >
+              <option value="" disabled>{{ $t('instance.detail.actions.powerMenu') }}</option>
+              <option value="start" :disabled="!isStopped">{{ $t('instance.actions.start') }}</option>
+              <option v-if="canUsePowerOperations" value="stop" :disabled="!isRunning">{{ $t('instance.actions.stop') }}</option>
+              <option v-if="canUsePowerOperations" value="restart" :disabled="!isRunning">{{ $t('instance.actions.restart') }}</option>
+              <option v-if="canUsePowerOperations" value="forceStop" :disabled="!isRunning">{{ $t('instance.detail.actions.forceStop') }}</option>
+              <option v-if="canUsePowerOperations" value="forceRestart" :disabled="!isRunning">{{ $t('instance.detail.actions.forceRestart') }}</option>
+            </select>
+            <ChevronDown v-if="!isAdminEntry" class="instance-power-chevron hidden" aria-hidden="true" />
+          </div>
           <div
             ref="instanceActionsGroup"
             class="instance-more-actions ms-auto sm:contents"
@@ -2580,6 +2591,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
                 <circle cx="12" cy="12" r="1.5" />
                 <circle cx="19" cy="12" r="1.5" />
               </svg>
+              <span v-if="!isAdminEntry">{{ $te('instance.card.moreActions') ? $t('instance.card.moreActions') : $t('common.actions') }}</span>
             </button>
             <div
               id="instance-secondary-actions"
@@ -2592,7 +2604,8 @@ function formatShortDate(dateStr: string | null | undefined): string {
             class="btn-secondary btn-sm sm:btn"
             @click="openRenameModal"
           >
-            {{ $t('instance.actions.rename') }}
+            <Pencil v-if="!isAdminEntry" class="h-4 w-4 sm:hidden" aria-hidden="true" />
+            <span>{{ $t('instance.actions.rename') }}</span>
           </button>
           <!-- 复制按钮（特殊颜色标记，只在停机时可用） -->
           <button
@@ -2633,7 +2646,8 @@ function formatShortDate(dateStr: string | null | undefined): string {
             :title="$t('instance.detail.rebuild.title')"
             @click="handleRebuildClick"
           >
-            {{ $t('instance.detail.rebuild.title') }}
+            <RotateCcw v-if="!isAdminEntry" class="h-4 w-4 sm:hidden" aria-hidden="true" />
+            <span>{{ $t('instance.detail.rebuild.title') }}</span>
           </button>
           <!-- 同步状态按钮 -->
           <button
@@ -2647,6 +2661,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
+            <RefreshCw v-else-if="!isAdminEntry" class="h-4 w-4 sm:hidden" aria-hidden="true" />
             <span>{{ $t('instance.detail.actions.syncStatus') }}</span>
           </button>
           <button
@@ -2656,7 +2671,8 @@ function formatShortDate(dateStr: string | null | undefined): string {
             :title="$t('transfer.actions.transfer')"
             @click="handleTransferBtnClick"
           >
-            {{ $t('transfer.actions.transfer') }}
+            <Send class="h-4 w-4 sm:hidden" aria-hidden="true" />
+            <span>{{ $t('transfer.actions.transfer') }}</span>
           </button>
           <!-- 封停按钮（仅宿主机所有者可见，实例未封停时） -->
           <button
@@ -2699,7 +2715,10 @@ function formatShortDate(dateStr: string | null | undefined): string {
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
-            <span v-else>{{ $t('common.delete') }}</span>
+            <template v-else>
+              <Trash2 v-if="!isAdminEntry" class="h-4 w-4 sm:hidden" aria-hidden="true" />
+              <span>{{ $t('common.delete') }}</span>
+            </template>
           </button>
             </div>
           </div>
@@ -2707,7 +2726,10 @@ function formatShortDate(dateStr: string | null | undefined): string {
       </div>
 
       <!-- Tab Navigation -->
-      <div class="nimbus-tabs -mt-1 overflow-x-auto border-b border-themed">
+      <div
+        class="nimbus-tabs -mt-1 overflow-x-auto border-b border-themed"
+        :class="{ 'instance-user-tabs': !isAdminEntry }"
+      >
         <div class="flex min-w-max gap-1 sm:gap-2">
           <button
             v-for="tab in visibleTabs"
@@ -2724,7 +2746,7 @@ function formatShortDate(dateStr: string | null | undefined): string {
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" :d="tab.icon" />
             </svg>
-            <span :class="{ 'sr-only sm:not-sr-only': tab.key !== 'monitoring' }">{{ $t(tab.labelKey) }}</span>
+            <span :class="{ 'sr-only sm:not-sr-only': isAdminEntry && tab.key !== 'monitoring' }">{{ $t(tab.labelKey) }}</span>
           </button>
         </div>
       </div>
@@ -3858,7 +3880,8 @@ function formatShortDate(dateStr: string | null | undefined): string {
   }
 }
 
-.instance-detail-actions > :is(button, select),
+.instance-detail-actions > button,
+.instance-power-control > select,
 .instance-more-actions > button,
 .instance-secondary-actions > button,
 .instance-cloud-init-actions > button {
@@ -3868,12 +3891,13 @@ function formatShortDate(dateStr: string | null | undefined): string {
   font-size: 0.75rem;
 }
 
-.instance-detail-actions > select {
+.instance-power-control > select {
   padding-inline-end: 1.5rem;
 }
 
 @media (max-width: 639px) {
-  .instance-detail-actions > :is(button, select),
+  .instance-detail-actions > button,
+  .instance-power-control > select,
   .instance-more-actions > button,
   .instance-cloud-init-actions > button {
     min-height: 2.75rem;
@@ -3907,6 +3931,101 @@ function formatShortDate(dateStr: string | null | undefined): string {
     min-height: 2.5rem;
     justify-content: flex-start;
     text-align: start;
+  }
+
+  .instance-user-actions {
+    align-items: stretch;
+  }
+
+  .instance-user-actions :is(.instance-power-control, button) {
+    max-width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .instance-user-actions .instance-more-actions {
+    display: contents;
+  }
+
+  .instance-user-actions .instance-secondary-actions {
+    position: static;
+    z-index: auto;
+    width: 100%;
+  }
+
+  .instance-user-actions .instance-power-control {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .instance-user-actions .instance-power-control > select {
+    align-self: stretch;
+    width: 100%;
+    appearance: none;
+    padding-inline: 2rem;
+    text-align: center;
+  }
+
+  .instance-user-actions .instance-power-control > svg {
+    position: absolute;
+    display: block;
+    width: 1rem;
+    height: 1rem;
+    pointer-events: none;
+  }
+
+  .instance-user-actions .instance-power-icon {
+    inset-inline-start: 0.625rem;
+  }
+
+  .instance-user-actions .instance-power-chevron {
+    inset-inline-end: 0.625rem;
+  }
+
+  .instance-user-actions .instance-power-control:has(select:disabled) > svg {
+    opacity: 0.5;
+  }
+
+  .instance-user-actions button {
+    gap: 0.375rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .instance-user-actions button > svg {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+  }
+
+  .instance-user-actions .instance-secondary-actions > button {
+    min-height: 2.75rem;
+  }
+
+  .instance-user-actions .instance-secondary-actions > button > span {
+    margin-inline-start: 0;
+  }
+
+  .instance-user-tabs {
+    overflow: visible;
+  }
+
+  .instance-user-tabs > div {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  }
+
+  .instance-user-tabs .nimbus-tab {
+    min-height: 2.75rem;
+    min-width: 0;
+    margin-bottom: 0;
+    justify-content: center;
+    padding-inline: 0.5rem;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 
