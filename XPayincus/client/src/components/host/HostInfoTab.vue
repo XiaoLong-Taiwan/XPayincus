@@ -496,9 +496,9 @@ const xAxisLabels = computed(() => {
             {{ host.instanceType === 'container' ? t('admin.hosts.typeContainer') : host.instanceType === 'vm' ? t('admin.hosts.typeVm') : t('admin.hosts.typeBoth') }}
           </dd>
         </div>
-        <div class="flex justify-between items-center">
-          <dt class="text-gray-500">{{ t('admin.hosts.apiUrl') }}</dt>
-          <dd class="font-mono text-xs truncate max-w-[200px]" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'" :title="host.url">
+        <div class="flex items-start justify-between gap-3">
+          <dt class="shrink-0 text-gray-500">{{ t('admin.hosts.apiUrl') }}</dt>
+          <dd class="min-w-0 text-right font-mono text-xs [overflow-wrap:anywhere]" :class="themeStore.isDark ? 'text-gray-400' : 'text-gray-600'">
             {{ host.url }}
           </dd>
         </div>

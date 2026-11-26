@@ -1,6 +1,6 @@
 {
   "name": "client",
-  "version": "1.0.40",
+  "version": "1.0.41",
   "description": "XPayincus frontend client",
   "type": "module",
   "scripts": {
@@ -15,7 +15,8 @@
     "lint:check": "eslint src",
     "type-check": "vue-tsc --noEmit",
     "test:host-install-ui-guards": "node scripts/test-host-install-ui-guards.mjs",
-    "test:instance-monitoring-guards": "node src/scripts/test-instance-monitoring-guards.mjs"
+    "test:instance-monitoring-guards": "node src/scripts/test-instance-monitoring-guards.mjs",
+    "test:instance-purchase-flow-guards": "node src/scripts/test-instance-purchase-flow-guards.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

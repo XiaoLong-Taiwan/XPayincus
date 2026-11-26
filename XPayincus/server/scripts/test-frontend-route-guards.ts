@@ -921,6 +921,10 @@ assert.ok(
   'MyHostsView must use mobile host cards and a fixed desktop table without PC horizontal overflow'
 )
 assert.ok(
+  myHostsViewSource.includes('@click.stop @keydown.enter.stop @keydown.space.stop'),
+  'host action buttons must handle keyboard activation without opening the parent card'
+)
+assert.ok(
   hostPublicIpv4TabSource.includes('class="w-full table-fixed text-sm"') &&
     hostPublicIpv4TabSource.includes('@click="addAddresses(pool.id)"') &&
     hostPublicIpv4TabSource.includes('@click="toggleAddress(address)"') &&

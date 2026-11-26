@@ -123,6 +123,7 @@ jobs:
         run: pnpm --filter server test:host-port-management-guards
       - run: pnpm --filter server test:hosting-legacy-access-guards
       - run: pnpm --filter client test:instance-monitoring-guards
+      - run: pnpm --filter client test:instance-purchase-flow-guards
       - run: pnpm --filter server test:agent-monitoring-stream-guards
       - run: pnpm --filter server test:admin-route-guards
       - run: pnpm --filter server test:split-deploy-config

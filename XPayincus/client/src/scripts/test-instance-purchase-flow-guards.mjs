@@ -15,6 +15,7 @@ const assertions = [
   ['idempotency is retained', view.includes('createIntentIdempotencyKey')],
   ['Turnstile is retained', view.includes('getCreateTurnstileToken')],
   ['active submit is disabled', stepper.includes('!props.canSubmit || isCreating')],
+  ['submission requires the final step', /async function handleSubmit\(\): Promise<void> \{\s*if \(activeStep\.value !== 4\) return/.test(view)],
   ['creating state exists', stepper.includes('data-state="creating"')],
   ['success state exists', stepper.includes('data-state="success"')],
   ['failure state exists', stepper.includes('data-state="failure"')],

@@ -378,7 +378,7 @@ const visibleTabs = computed(() => tabs.filter(tab => tab.key !== 'monitoringHis
     <template v-else-if="host">
       <!-- Header -->
       <div class="page-header flex-col sm:flex-row gap-4">
-        <div class="flex items-center gap-3 min-w-0">
+        <div class="flex min-w-0 max-w-full items-center gap-3">
           <RouterLink
             :to="hostsPath()"
             class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-themed bg-themed-surface text-themed-muted transition-colors hover:bg-themed-hover hover:text-themed"
@@ -396,7 +396,7 @@ const visibleTabs = computed(() => tabs.filter(tab => tab.key !== 'monitoringHis
                 {{ statusInfo.label }}
               </span>
             </div>
-            <p class="page-description mt-1 truncate font-mono text-themed-muted">{{ host.location || host.url }}</p>
+            <p class="page-description mt-1 font-mono text-themed-muted [overflow-wrap:anywhere]">{{ host.location || host.url }}</p>
           </div>
         </div>
 

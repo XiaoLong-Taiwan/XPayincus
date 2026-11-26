@@ -251,10 +251,10 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
         {{ t('instance.detail.info.title') }}
       </h2>
       <dl class="space-y-3 text-sm">
-        <div class="flex justify-between items-center">
-          <dt class="text-themed-muted">{{ t('instance.detail.info.instanceId') }}</dt>
-          <dd class="flex items-center gap-2">
-            <span class="font-mono text-xs text-themed-muted">
+        <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <dt class="shrink-0 whitespace-nowrap text-themed-muted">{{ t('instance.detail.info.instanceId') }}</dt>
+          <dd class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:justify-end">
+            <span class="min-w-0 select-text font-mono text-xs text-themed-muted [overflow-wrap:anywhere] sm:text-right">
               {{ instance.id }}
               <template v-if="instance.incus_id">
                 <span class="text-themed-secondary">/</span>
@@ -264,16 +264,18 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             <!-- 托管UID：仅托管节点实例显示 -->
             <button
               v-if="instance.hostOwnerInfo"
-              class="text-xs px-1.5 py-0.5 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 hover:shadow-glow-sakura transition-all border border-gray-200 dark:border-gray-700"
+              class="shrink-0 select-text whitespace-nowrap text-xs px-1.5 py-0.5 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 hover:shadow-glow-sakura transition-all border border-gray-200 dark:border-gray-700"
               @click="showHostOwnerModal = true"
             >
               {{ t('instance.detail.info.hostUid') }}:{{ instance.hostOwnerInfo.id }}
             </button>
           </dd>
         </div>
-        <div class="flex justify-between">
-          <dt class="text-themed-muted">{{ t('instance.detail.info.image') }}</dt>
-          <dd class="text-themed font-medium">{{ formatImageName(instance.image, (instance as any).imageName) }}</dd>
+        <div class="flex items-start justify-between gap-3">
+          <dt class="shrink-0 text-themed-muted">{{ t('instance.detail.info.image') }}</dt>
+          <dd class="min-w-0 text-right text-themed font-medium [overflow-wrap:anywhere]">
+            {{ formatImageName(instance.image, (instance as any).imageName) }}
+          </dd>
         </div>
         <div class="flex justify-between items-center">
           <dt class="text-themed-muted">{{ t('instance.detail.info.instanceMode') }}</dt>
@@ -366,11 +368,11 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
           </dd>
         </div>
         <!-- 节点 - 移到创建/到期时间上面 -->
-        <div class="flex justify-between">
-          <dt class="text-themed-muted">{{ t('instance.detail.info.host') }}</dt>
-          <dd class="flex items-center gap-2 text-themed font-medium">
-            <FlagIcon v-if="(instance as any).host?.country_code || (instance as any).hostCountryCode" :code="(instance as any).host?.country_code || (instance as any).hostCountryCode || 'us'" size="sm" />
-            <span class="uppercase">{{ (instance as any).host?.name || (instance as any).host || '-' }}</span>
+        <div class="flex items-start justify-between gap-3">
+          <dt class="shrink-0 text-themed-muted">{{ t('instance.detail.info.host') }}</dt>
+          <dd class="flex min-w-0 items-center gap-2 text-themed font-medium">
+            <FlagIcon v-if="(instance as any).host?.country_code || (instance as any).hostCountryCode" :code="(instance as any).host?.country_code || (instance as any).hostCountryCode || 'us'" class="shrink-0" size="sm" />
+            <span class="min-w-0 uppercase [overflow-wrap:anywhere]">{{ (instance as any).host?.name || (instance as any).host || '-' }}</span>
           </dd>
         </div>
         <div class="flex justify-between">
@@ -674,22 +676,23 @@ function formatBandwidth(bandwidth: string | null | undefined): string {
             </div>
             <div class="modal-body">
               <!-- 用户头像区域 -->
-              <div class="flex items-center gap-4 mb-6">
+              <div class="mb-6 grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-2 sm:flex sm:items-center sm:gap-4">
                 <UserAvatar
                   :username="instance.hostOwnerInfo.username"
                   :email="instance.hostOwnerInfo.email"
                   :avatar-style="instance.hostOwnerInfo.avatarStyle"
                   :badge-id="instance.hostOwnerInfo.avatarBadgeId"
                   :size="56"
+                  class="shrink-0"
                 />
-                <div class="flex-1">
+                <div class="min-w-0 flex-1 [overflow-wrap:anywhere]">
                   <p class="font-medium text-themed">{{ instance.hostOwnerInfo.username }}</p>
-                  <p class="text-sm text-themed-muted">UID: {{ instance.hostOwnerInfo.id }}</p>
+                  <p class="select-text text-sm text-themed-muted">UID: {{ instance.hostOwnerInfo.id }}</p>
                 </div>
                 <!-- VIP徽章 -->
-                <div 
+                <div
                   v-if="instance.hostOwnerInfo.vipLevel > 0"
-                  class="px-3 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                  class="col-start-2 flex shrink-0 items-center justify-self-start gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold shadow-sm"
                   :style="getVipBadgeInlineStyle(normalizeVipBadgeStyle(instance.hostOwnerInfo.vipBadgeStyle, instance.hostOwnerInfo.vipLevel))"
                 >
                   <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
